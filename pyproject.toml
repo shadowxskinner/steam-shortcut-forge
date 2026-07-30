@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "steam-shortcut-forge"
+version = "1.0.0"
+description = "Assign custom icons to Steam games in your Linux app launcher"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Shadow Skinner" },
+]
+keywords = ["steam", "linux", "kde", "gnome", "desktop", "icons", "launcher"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: X11 Applications",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Games/Entertainment",
+]
+dependencies = [
+    "customtkinter>=6.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/shadowxskinner/steam-shortcut-forge"
+Repository = "https://github.com/shadowxskinner/steam-shortcut-forge"
+Issues = "https://github.com/shadowxskinner/steam-shortcut-forge/issues"
+
+[project.gui-scripts]
+steam-shortcut-forge = "steam_shortcut_forge:main"
+
+[tool.setuptools]
+py-modules = ["steam_shortcut_forge"]

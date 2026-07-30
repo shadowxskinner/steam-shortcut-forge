@@ -42,7 +42,13 @@ or picked manually from your own files.
 
 ## Installation
 
-### Requirements
+### Arch Linux (AUR)
+
+```bash
+yay -S steam-shortcut-forge
+```
+
+### Requirements (manual install)
 
 - Python 3.10+
 - Tk (`sudo pacman -S tk` on Arch, `sudo apt install python3-tk` on
@@ -52,7 +58,7 @@ or picked manually from your own files.
 ### Setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/steam-shortcut-forge.git
+git clone https://github.com/shadowxskinner/steam-shortcut-forge.git
 cd steam-shortcut-forge
 python -m venv .venv
 source .venv/bin/activate

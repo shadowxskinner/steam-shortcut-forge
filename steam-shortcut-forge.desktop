@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Steam Shortcut Forge
+Comment=Assign custom icons to Steam games in your app launcher
+Exec=steam-shortcut-forge
+Icon=applications-games
+Categories=Game;Utility;
+Terminal=false
+StartupNotify=true
