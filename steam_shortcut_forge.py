@@ -1207,12 +1207,13 @@ class SteamShortcutForge(ctk.CTk):
 
         def dl():
             try:
-                ext = ".png" if ".png" in icon.url.lower() else (
-                    ".ico" if ".ico" in icon.url.lower() else ".png")
+                ext = Path(urllib.parse.urlparse(icon.url).path).suffix.lower()
+                if ext not in VALID_ICON_EXTS:
+                    ext = ".png"
                 dest = ICON_STORE / f"{game.appid}_{icon.icon_id}{ext}"
                 client = SteamGridDBClient(self.config_data["steamgriddb_api_key"])
                 client.download_icon(icon.url, dest)
-                self.after(0, lambda: self._apply_icon(dest))
+                self.after(0, lambda: self._apply_icon(game, dest))
             except Exception as exc:
                 msg = f"Download failed: {exc}"
                 self.after(0, lambda: self.main_sub.configure(text=msg))
@@ -1225,17 +1226,20 @@ class SteamShortcutForge(ctk.CTk):
         SettingsDialog(self, self.config_data)
         self.config_data = load_config()
 
-    def _apply_icon(self, path: Path):
-        if not self.selected_item:
+    def _apply_icon(self, game: SteamGame, path: Path):
+        if not self._still_showing(game):
+            return
+        item = self.selected_item
+        if item is None:
             return
         try:
-            create_shortcut(self.selected_item.game, path)
+            create_shortcut(game, path)
         except Exception as e:
             from tkinter import messagebox
             messagebox.showerror("Error", str(e))
             return
-        self.selected_item.refresh()
-        self.main_sub.configure(text=f"App ID: {self.selected_item.game.appid}  ·  Shortcut created!")
+        item.refresh()
+        self.main_sub.configure(text=f"App ID: {game.appid}  ·  Shortcut created!")
         self.status.configure(
             text=f"{len(self.games)} games  ·  "
                  f"{sum(1 for g in self.games if g.has_shortcut)} with shortcuts")
@@ -1248,7 +1252,7 @@ class SteamShortcutForge(ctk.CTk):
             filetypes=[("Icon images", "*.ico *.png *.svg *.xpm"), ("All", "*.*")],
         )
         if path:
-            self._apply_icon(Path(path))
+            self._apply_icon(self.selected_item.game, Path(path))
 
     def _on_remove(self):
         if not self.selected_item or not self.selected_item.game.has_shortcut:
