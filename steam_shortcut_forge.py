@@ -1000,6 +1000,10 @@ def revert_system_override(app: SteamGame) -> None:
         raise ValueError("Refusing to revert: local .desktop file is not managed by Shortcut Forge")
     target.unlink()
     app.has_shortcut = False
+    if app.desktop_source:
+        parser = _parse_desktop(app.desktop_source)
+        icon_value = parser.get("Desktop Entry", "Icon", fallback="") if parser else ""
+        app.icon_path = resolve_icon_path(icon_value)
     app.desktop_local = target
     _refresh_db()
 
@@ -1267,6 +1271,8 @@ class SteamShortcutForge(ctk.CTk):
         self.minsize(1040, 620)
 
         self.config_data = load_config()
+        self.steam_games: list[SteamGame] = []
+        self.system_apps: list[SteamGame] = []
         self.games: list[SteamGame] = []
         self.items: list[GameItem] = []
         self.selected_item: GameItem | None = None
@@ -1274,6 +1280,7 @@ class SteamShortcutForge(ctk.CTk):
         self._grid_cols = 0
         self._resize_job = None
         self._filter_mode = "all"
+        self.app_tab_var = ctk.StringVar(value="Steam")
         self.icon_source_var = ctk.StringVar(value="SteamGridDB")
         self.iconify_search_var = ctk.StringVar()
         self._iconify_search_job = None
@@ -1293,19 +1300,33 @@ class SteamShortcutForge(ctk.CTk):
         sidebar = ctk.CTkFrame(self, fg_color=C_SIDEBAR, corner_radius=0, width=380)
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
-        sidebar.grid_rowconfigure(3, weight=1)
+        sidebar.grid_rowconfigure(4, weight=1)
         sidebar.grid_columnconfigure(0, weight=1)
 
         # Header — title on the left, live count pill on the right
         logo_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
         logo_frame.grid(row=0, column=0, sticky="ew", padx=16, pady=(18, 6))
-        ctk.CTkLabel(logo_frame, text="Games", font=F_LOGO,
+        ctk.CTkLabel(logo_frame, text="Apps", font=F_LOGO,
                      text_color=C_TEXT).pack(side="left")
         self.count_pill = ctk.CTkLabel(
             logo_frame, text="0", font=F_SMALL, text_color=C_TEXT2,
             fg_color=C_ROW, corner_radius=11, width=40, height=22,
         )
         self.count_pill.pack(side="right")
+
+        self.app_tab_selector = ctk.CTkSegmentedButton(
+            sidebar,
+            values=["Steam", "System"],
+            variable=self.app_tab_var,
+            command=self._on_app_tab_changed,
+            selected_color=C_ACCENT_DIM,
+            selected_hover_color=C_CARD_HOVER,
+            unselected_color=C_CARD,
+            unselected_hover_color=C_CARD_HOVER,
+            text_color=C_TEXT,
+            height=30,
+        )
+        self.app_tab_selector.grid(row=1, column=0, sticky="ew", padx=16, pady=(6, 8))
 
         # Search
         self.search_var = ctk.StringVar()
@@ -1314,11 +1335,11 @@ class SteamShortcutForge(ctk.CTk):
             sidebar, textvariable=self.search_var, height=40, corner_radius=20,
             placeholder_text="Search…", font=F_BODY,
             border_width=1, border_color=C_BORDER,
-        ).grid(row=1, column=0, sticky="ew", padx=16, pady=(12, 8))
+        ).grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
 
         # Filter chips
         chip_row = ctk.CTkFrame(sidebar, fg_color="transparent")
-        chip_row.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
+        chip_row.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 8))
 
         self.chip_all = ctk.CTkButton(
             chip_row, text="All", width=52, height=30, corner_radius=15,
@@ -1353,13 +1374,13 @@ class SteamShortcutForge(ctk.CTk):
             scrollbar_fg_color="transparent",
             scrollbar_button_color=C_CARD, scrollbar_button_hover_color=C_TEXT3,
         )
-        self.game_list.grid(row=3, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.game_list.grid(row=4, column=0, sticky="nsew", padx=8, pady=(0, 8))
         self.game_list._scrollbar.configure(width=8, corner_radius=4, border_spacing=3)
         self.game_list.grid_columnconfigure(0, weight=1)
 
         # Sidebar bottom buttons
         sb_bottom = ctk.CTkFrame(sidebar, fg_color="transparent")
-        sb_bottom.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 16))
+        sb_bottom.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 16))
 
         ctk.CTkButton(
             sb_bottom, text="⚙  Settings", height=36, corner_radius=18,
@@ -1487,15 +1508,46 @@ class SteamShortcutForge(ctk.CTk):
         self.status.configure(text="Scanning…")
         self.update_idletasks()
         try:
-            self.games = scan_games()
+            self.steam_games = scan_games()
+            self.system_apps = scan_system_apps()
         except Exception as e:
             from tkinter import messagebox
             messagebox.showerror("Scan failed", str(e))
-            self.games = []
+            self.steam_games = []
+            self.system_apps = []
+        self._set_active_games()
         self._filter()
-        n = sum(1 for g in self.games if g.has_shortcut)
-        self.status.configure(text=f"{len(self.games)} games  ·  {n} with shortcuts")
+        self._update_status_summary()
         self.count_pill.configure(text=str(len(self.games)))
+
+    def _set_active_games(self):
+        self.games = self.system_apps if self.app_tab_var.get() == "System" else self.steam_games
+
+    def _tab_noun(self) -> str:
+        return "apps" if self.app_tab_var.get() == "System" else "games"
+
+    def _update_status_summary(self):
+        count = sum(1 for g in self.games if g.has_shortcut)
+        self.status.configure(text=f"{len(self.games)} {self._tab_noun()}  ·  {count} customized")
+        self.count_pill.configure(text=str(len(self.games)))
+
+    def _clear_icon_grid(self):
+        for w in self.icon_area.winfo_children():
+            w.destroy()
+        self._tiles.clear()
+        self._grid_cols = 0
+
+    def _on_app_tab_changed(self, _value=None):
+        self._set_active_games()
+        self.search_var.set("")
+        self.selected_item = None
+        self._set_actions(False)
+        self._clear_icon_grid()
+        self.main_header.configure(text="Select an app" if self.app_tab_var.get() == "System" else "Select a game")
+        self.main_sub.configure(text="Choose an app from the sidebar to browse icons")
+        self._update_source_options()
+        self._filter()
+        self._update_status_summary()
 
     def _set_filter(self, mode: str):
         self._filter_mode = mode
@@ -1538,8 +1590,10 @@ class SteamShortcutForge(ctk.CTk):
         self._set_actions(True)
 
         # Update header
+        label = "Desktop" if item.game.kind == "system" else "App ID"
         self.main_header.configure(text=item.game.name)
-        self.main_sub.configure(text=f"App ID: {item.game.appid}  ·  Loading icons…")
+        self.main_sub.configure(text=f"{label}: {item.game.appid}  ·  Loading icons…")
+        self._update_source_options()
         self._update_iconify_search_visibility()
         if self.icon_source_var.get() == "Iconify":
             self.iconify_search_var.set("")
@@ -1550,15 +1604,33 @@ class SteamShortcutForge(ctk.CTk):
     def _set_actions(self, on: bool):
         s = "normal" if on else "disabled"
         self.browse_btn.configure(state=s)
-        self.remove_btn.configure(state=s)
+        self.remove_btn.configure(
+            state=s,
+            text="Revert to default" if self.app_tab_var.get() == "System" else "Remove shortcut",
+        )
+        if self.app_tab_var.get() == "System":
+            self.bulk_btn.pack_forget()
+        else:
+            if not self.bulk_btn.winfo_ismapped():
+                self.bulk_btn.pack(side="right")
 
     # -- Icon loading ---------------------------------------------------
+
+    def _update_source_options(self):
+        if self.app_tab_var.get() == "System":
+            self.source_selector.configure(values=["Iconify"])
+            self.icon_source_var.set("Iconify")
+        else:
+            self.source_selector.configure(values=["SteamGridDB", "Iconify"])
+            if self.icon_source_var.get() not in {"SteamGridDB", "Iconify"}:
+                self.icon_source_var.set("SteamGridDB")
 
     def _on_source_changed(self, _value=None):
         self._update_iconify_search_visibility()
         if self.selected_item:
+            label = "Desktop" if self.selected_item.game.kind == "system" else "App ID"
             self.main_sub.configure(
-                text=f"App ID: {self.selected_item.game.appid}  ·  Loading icons…")
+                text=f"{label}: {self.selected_item.game.appid}  ·  Loading icons…")
             if self.icon_source_var.get() == "Iconify":
                 self.iconify_search_var.set("")
             self._load_icons(self.selected_item.game)
@@ -1619,6 +1691,9 @@ class SteamShortcutForge(ctk.CTk):
         self.after_idle(self._scroll_icons_to_top)
 
         source = self.icon_source_var.get()
+        if game.kind == "system" and source == "SteamGridDB":
+            source = "Iconify"
+            self.icon_source_var.set("Iconify")
         if source == "SteamGridDB":
             key = self.config_data.get("steamgriddb_api_key")
             if not key:
@@ -1653,7 +1728,8 @@ class SteamShortcutForge(ctk.CTk):
                         self.after(0, lambda q=query: self.main_sub.configure(
                             text=f"No icons match '{q}'"))
                         return
-                    status = f"App ID: {game.appid}  ·  {len(icons)} Iconify icons for '{query}'"
+                    label = "Desktop" if game.kind == "system" else "App ID"
+                    status = f"{label}: {game.appid}  ·  {len(icons)} Iconify icons for '{query}'"
 
                 self.after(0, lambda: self.main_sub.configure(text=status))
 
@@ -1785,7 +1861,10 @@ class SteamShortcutForge(ctk.CTk):
 
     def _apply_icon(self, game: SteamGame, path: Path):
         try:
-            create_shortcut(game, path)
+            if game.kind == "system":
+                create_system_override(game, path)
+            else:
+                create_shortcut(game, path)
         except Exception as e:
             from tkinter import messagebox
             messagebox.showerror("Error", str(e))
@@ -1797,12 +1876,13 @@ class SteamShortcutForge(ctk.CTk):
                 break
 
         count = sum(1 for g in self.games if g.has_shortcut)
-        summary = f"{len(self.games)} games  ·  {count} with shortcuts"
+        summary = f"{len(self.games)} {self._tab_noun()}  ·  {count} customized"
+        label = "Desktop" if game.kind == "system" else "App ID"
         if self._still_showing(game):
-            self.main_sub.configure(text=f"App ID: {game.appid}  ·  Shortcut created!")
+            self.main_sub.configure(text=f"{label}: {game.appid}  ·  Icon applied!")
             self.status.configure(text=summary)
         else:
-            self.status.configure(text=f"Shortcut created for {game.name}  ·  {summary}")
+            self.status.configure(text=f"Icon applied for {game.name}  ·  {summary}")
 
     def _on_browse(self):
         if not self.selected_item:
@@ -1818,15 +1898,29 @@ class SteamShortcutForge(ctk.CTk):
         if not self.selected_item or not self.selected_item.game.has_shortcut:
             return
         from tkinter import messagebox
-        if messagebox.askyesno("Remove", f"Remove shortcut for {self.selected_item.game.name}?"):
-            remove_shortcut(self.selected_item.game)
+        game = self.selected_item.game
+        if game.kind == "system":
+            if not messagebox.askyesno("Revert", f"Revert {game.name} to its default icon?"):
+                return
+            try:
+                revert_system_override(game)
+            except Exception as e:
+                messagebox.showerror("Revert refused", str(e))
+                return
             self.selected_item.refresh()
-            self.main_sub.configure(text=f"App ID: {self.selected_item.game.appid}  ·  Shortcut removed")
-            self.status.configure(
-                text=f"{len(self.games)} games  ·  "
-                     f"{sum(1 for g in self.games if g.has_shortcut)} with shortcuts")
+            self.main_sub.configure(text=f"Desktop: {game.appid}  ·  Reverted to default")
+        else:
+            if not messagebox.askyesno("Remove", f"Remove shortcut for {game.name}?"):
+                return
+            remove_shortcut(game)
+            self.selected_item.refresh()
+            self.main_sub.configure(text=f"App ID: {game.appid}  ·  Shortcut removed")
+        self._update_status_summary()
 
     def _on_bulk(self):
+        if self.app_tab_var.get() == "System":
+            self.status.configure(text="Auto-assign is only available for Steam games.")
+            return
         key = self.config_data.get("steamgriddb_api_key")
         if not key:
             from tkinter import messagebox
