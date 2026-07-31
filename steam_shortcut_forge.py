@@ -1010,13 +1010,14 @@ class SteamShortcutForge(ctk.CTk):
                     client.download_icon(best.url, dest)
                     create_shortcut(game, dest, skip_refresh=True)
                     done += 1
-                    time.sleep(0.3)
                 except Exception as exc:
                     fail += 1
                     failures.append(f"{game.name}: {exc}")
                     msg = str(exc)
                     self.after(0, lambda g=game, m=msg: self.status.configure(
                         text=f"Skipped {g.name}: {m}"))
+                finally:
+                    time.sleep(0.3)
             _refresh_db()
             summary = f"Done — {done} assigned, {fail} skipped"
             def finish():
