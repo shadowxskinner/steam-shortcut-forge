@@ -973,6 +973,8 @@ class SteamShortcutForge(ctk.CTk):
         self._resize_job = None
         self._filter_mode = "all"
         self.icon_source_var = ctk.StringVar(value="SteamGridDB")
+        self.iconify_search_var = ctk.StringVar()
+        self._iconify_search_job = None
         self._svg_hint_shown = False
 
         self._build()
@@ -1072,7 +1074,7 @@ class SteamShortcutForge(ctk.CTk):
         # ── MAIN PANEL ────────────────────────────────────────────────
         main = ctk.CTkFrame(self, fg_color=C_BG, corner_radius=0)
         main.grid(row=0, column=1, sticky="nsew")
-        main.grid_rowconfigure(3, weight=1)
+        main.grid_rowconfigure(4, weight=1)
         main.grid_columnconfigure(0, weight=1)
 
         # Header area
@@ -1105,13 +1107,32 @@ class SteamShortcutForge(ctk.CTk):
         )
         self.source_selector.pack(side="left")
 
+        self.iconify_search_frame = ctk.CTkFrame(main, fg_color="transparent")
+        self.iconify_search_frame.grid(row=3, column=0, sticky="ew", padx=28, pady=(0, 10))
+        ctk.CTkLabel(self.iconify_search_frame, text="Iconify search", font=F_TINY,
+                     text_color=C_TEXT3).pack(side="left", padx=(0, 10))
+        self.iconify_search_entry = ctk.CTkEntry(
+            self.iconify_search_frame,
+            textvariable=self.iconify_search_var,
+            height=34,
+            corner_radius=17,
+            placeholder_text="gamepad, steam, rocket…",
+            font=F_BODY,
+            border_width=1,
+            border_color=C_BORDER,
+        )
+        self.iconify_search_entry.pack(side="left", fill="x", expand=True)
+        self.iconify_search_entry.bind("<KeyRelease>", self._schedule_iconify_search)
+        self.iconify_search_entry.bind("<Return>", self._run_iconify_search_now)
+        self.iconify_search_frame.grid_remove()
+
         # Icon grid area
         self.icon_area = ctk.CTkScrollableFrame(
             main, fg_color=C_PANEL, corner_radius=R_CARD,
             scrollbar_fg_color="transparent",
             scrollbar_button_color=C_CARD, scrollbar_button_hover_color=C_TEXT3,
         )
-        self.icon_area.grid(row=3, column=0, sticky="nsew", padx=24, pady=(0, 8))
+        self.icon_area.grid(row=4, column=0, sticky="nsew", padx=24, pady=(0, 8))
         self.icon_area._scrollbar.configure(width=8, corner_radius=4, border_spacing=3)
         # add="+" is essential: CTkScrollableFrame binds <Configure> on itself to
         # recompute the canvas scrollregion. Replacing that binding leaves the
@@ -1121,7 +1142,7 @@ class SteamShortcutForge(ctk.CTk):
 
         # Action bar at bottom
         action_bar = ctk.CTkFrame(main, fg_color="transparent")
-        action_bar.grid(row=4, column=0, sticky="ew", padx=28, pady=(8, 16))
+        action_bar.grid(row=5, column=0, sticky="ew", padx=28, pady=(8, 16))
 
         self.browse_btn = ctk.CTkButton(
             action_bar, text="📁  Browse local file", height=42, corner_radius=21,
@@ -1148,7 +1169,7 @@ class SteamShortcutForge(ctk.CTk):
         self.status = ctk.CTkLabel(
             main, text="", font=F_TINY, text_color=C_TEXT3,
         )
-        self.status.grid(row=5, column=0, sticky="w", padx=28, pady=(0, 12))
+        self.status.grid(row=6, column=0, sticky="w", padx=28, pady=(0, 12))
 
     # -- Data -----------------------------------------------------------
 
@@ -1217,6 +1238,9 @@ class SteamShortcutForge(ctk.CTk):
         # Update header
         self.main_header.configure(text=item.game.name)
         self.main_sub.configure(text=f"App ID: {item.game.appid}  ·  Loading icons…")
+        self._update_iconify_search_visibility()
+        if self.icon_source_var.get() == "Iconify":
+            self._seed_iconify_search(item.game)
 
         # Auto-fetch icons
         self._load_icons(item.game)
@@ -1229,9 +1253,47 @@ class SteamShortcutForge(ctk.CTk):
     # -- Icon loading ---------------------------------------------------
 
     def _on_source_changed(self, _value=None):
+        self._update_iconify_search_visibility()
         if self.selected_item:
             self.main_sub.configure(
                 text=f"App ID: {self.selected_item.game.appid}  ·  Loading icons…")
+            if self.icon_source_var.get() == "Iconify":
+                self._seed_iconify_search(self.selected_item.game)
+            self._load_icons(self.selected_item.game)
+
+    def _update_iconify_search_visibility(self):
+        if self.icon_source_var.get() == "Iconify":
+            self.iconify_search_frame.grid()
+        else:
+            self.iconify_search_frame.grid_remove()
+            if self._iconify_search_job is not None:
+                self.after_cancel(self._iconify_search_job)
+                self._iconify_search_job = None
+
+    def _seed_iconify_search(self, game: SteamGame):
+        match = re.search(r"[\w+-]+", game.name)
+        self.iconify_search_var.set(match.group(0).lower() if match else "")
+
+    def _schedule_iconify_search(self, event=None):
+        if event is not None and getattr(event, "keysym", "") == "Return":
+            return None
+        if self.icon_source_var.get() != "Iconify" or not self.selected_item:
+            return None
+        if self._iconify_search_job is not None:
+            self.after_cancel(self._iconify_search_job)
+        self._iconify_search_job = self.after(400, self._run_iconify_search)
+        return None
+
+    def _run_iconify_search_now(self, _event=None):
+        if self._iconify_search_job is not None:
+            self.after_cancel(self._iconify_search_job)
+            self._iconify_search_job = None
+        self._run_iconify_search()
+        return "break"
+
+    def _run_iconify_search(self):
+        self._iconify_search_job = None
+        if self.icon_source_var.get() == "Iconify" and self.selected_item:
             self._load_icons(self.selected_item.game)
 
     def _svg_missing_hint(self):
@@ -1283,12 +1345,17 @@ class SteamShortcutForge(ctk.CTk):
                         return
                     status = f"App ID: {game.appid}  ·  {len(icons)} icons  ·  Most popular first"
                 else:
-                    icons = client.search(game.name)
-                    if not icons:
+                    query = self.iconify_search_var.get().strip()
+                    if not query:
                         self.after(0, lambda: self.main_sub.configure(
-                            text=f"App ID: {game.appid}  ·  No Iconify results"))
+                            text="Search 275,000 icons — try 'gamepad', 'steam', 'rocket'"))
                         return
-                    status = f"App ID: {game.appid}  ·  {len(icons)} Iconify icons"
+                    icons = client.search(query)
+                    if not icons:
+                        self.after(0, lambda q=query: self.main_sub.configure(
+                            text=f"No icons match '{q}'"))
+                        return
+                    status = f"App ID: {game.appid}  ·  {len(icons)} Iconify icons for '{query}'"
 
                 self.after(0, lambda: self.main_sub.configure(text=status))
 
