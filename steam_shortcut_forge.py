@@ -501,21 +501,23 @@ def _desktop_path(appid: str) -> Path:
     return APPLICATIONS_DIR / f"{DESKTOP_PREFIX}{appid}.desktop"
 
 
+def _desktop_icon(path: Path) -> Path | None:
+    try:
+        for line in path.read_text(errors="ignore").splitlines():
+            if line.startswith("Icon="):
+                return Path(line.split("=", 1)[1].strip())
+    except OSError:
+        pass
+    return None
+
+
 def _existing_shortcuts() -> dict[str, Path | None]:
     out: dict[str, Path | None] = {}
     if not APPLICATIONS_DIR.is_dir():
         return out
     for f in APPLICATIONS_DIR.glob(f"{DESKTOP_PREFIX}*.desktop"):
         appid = f.stem[len(DESKTOP_PREFIX):]
-        icon = None
-        try:
-            for line in f.read_text(errors="ignore").splitlines():
-                if line.startswith("Icon="):
-                    icon = Path(line.split("=", 1)[1].strip())
-                    break
-        except OSError:
-            pass
-        out[appid] = icon
+        out[appid] = _desktop_icon(f)
     return out
 
 
@@ -533,7 +535,10 @@ def create_shortcut(game: SteamGame, icon_src: Path, skip_refresh: bool = False)
         stored = ICON_STORE / f"{game.appid}_{digest}{icon_src.suffix.lower()}"
         shutil.copyfile(icon_src, stored)
 
-    _desktop_path(game.appid).write_text(
+    desktop_path = _desktop_path(game.appid)
+    previous_icon = _desktop_icon(desktop_path)
+
+    desktop_path.write_text(
         "[Desktop Entry]\n"
         "Type=Application\n"
         f"Name={game.name.replace(chr(10), ' ').strip()}\n"
@@ -546,6 +551,16 @@ def create_shortcut(game: SteamGame, icon_src: Path, skip_refresh: bool = False)
     )
     game.has_shortcut = True
     game.icon_path = stored
+    if previous_icon:
+        try:
+            icon_store = ICON_STORE.resolve()
+            previous_resolved = previous_icon.resolve()
+            stored_resolved = stored.resolve()
+            if (previous_resolved != stored_resolved
+                    and previous_resolved.is_relative_to(icon_store)):
+                previous_icon.unlink(missing_ok=True)
+        except OSError:
+            pass
     if not skip_refresh:
         _refresh_db()
 
