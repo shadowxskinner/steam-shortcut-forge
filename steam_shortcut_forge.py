@@ -156,11 +156,18 @@ def _scaled_photo(size: int, *, path: Path | None = None, data: bytes | None = N
     return photo.zoom(z, z) if z > 1 else photo
 
 
-def _ctk_icon(size: int, path: Path):
-    """CTkImage for CustomTkinter widgets — respects HiDPI widget scaling."""
+def _ctk_icon(size: int, *, path: Path | None = None, data: bytes | None = None):
+    """CTkImage for CustomTkinter widgets — respects HiDPI widget scaling.
+
+    A raw PhotoImage handed to a CTk widget bypasses widget scaling, so it
+    renders at a different effective size than everything around it once
+    UI_SCALE is not 1.0. Returns None when Pillow is unavailable so callers
+    can fall back to _scaled_photo.
+    """
     if Image is None:
         return None
-    with Image.open(path) as img:
+    src = str(path) if path is not None else io.BytesIO(data)
+    with Image.open(src) as img:
         fitted = _fit(img.convert("RGBA"), size)
         return ctk.CTkImage(light_image=fitted, dark_image=fitted, size=fitted.size)
 
@@ -654,7 +661,7 @@ class GameItem(ctk.CTkFrame):
             return
         inner = self.THUMB - 16
         try:
-            photo = _ctk_icon(inner, self.game.icon_path)
+            photo = _ctk_icon(inner, path=self.game.icon_path)
             if photo is None:
                 photo = _scaled_photo(inner, path=self.game.icon_path)
             self._photo = photo
@@ -740,7 +747,9 @@ class IconTile(ctk.CTkFrame):
     def set_image(self, data: bytes) -> None:
         """Swap the placeholder for real artwork once it has downloaded."""
         try:
-            photo = _scaled_photo(TILE_SIZE - 24, data=data)
+            photo = _ctk_icon(TILE_SIZE - 24, data=data)
+            if photo is None:
+                photo = _scaled_photo(TILE_SIZE - 24, data=data)
         except (tk.TclError, OSError, ValueError):
             self.img_holder.configure(text="?", font=F_HEADING, text_color=C_TEXT3)
             return
