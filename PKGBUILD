@@ -19,7 +19,7 @@ makedepends=(
     'python-wheel'
 )
 source=("$pkgname-$pkgver.tar.gz::https://github.com/shadowxskinner/steam-shortcut-forge/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('503265fa9c819b93857ea281a82d3e93b671c53586d13a201ab6e351271f98cc')
+sha256sums=('4e50da4151b21c81eb78a56c56ef6919487147e746e4aa1ca737b7effb757ecd')
 
 build() {
     cd "$pkgname-$pkgver"
