@@ -883,6 +883,127 @@ def remove_shortcut(game: SteamGame) -> None:
     _refresh_db()
 
 
+def _line_ending(text: str) -> str:
+    return "\r\n" if "\r\n" in text else "\n"
+
+
+def _split_key(line: str) -> tuple[str, str] | None:
+    stripped = line.lstrip()
+    if not stripped or stripped.startswith(("#", ";", "[")) or "=" not in stripped:
+        return None
+    key, value = stripped.split("=", 1)
+    return key.strip(), value.rstrip("\r\n")
+
+
+def _rewrite_desktop_entry_icon(text: str, icon_value: str, original_icon: str) -> str:
+    newline = _line_ending(text)
+    lines = text.splitlines(keepends=True)
+    out: list[str] = []
+    in_entry = False
+    saw_entry = False
+    icon_done = False
+    managed_done = False
+    original_done = False
+
+    def pending_marker_lines() -> list[str]:
+        pending: list[str] = []
+        if not icon_done:
+            pending.append(f"Icon={icon_value}{newline}")
+        if not managed_done:
+            pending.append(f"{MANAGED_KEY}=true{newline}")
+        if not original_done:
+            pending.append(f"{ORIGINAL_ICON_KEY}={original_icon}{newline}")
+        return pending
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if in_entry:
+                out.extend(pending_marker_lines())
+                in_entry = False
+            if stripped == "[Desktop Entry]":
+                in_entry = True
+                saw_entry = True
+            out.append(line)
+            continue
+
+        if in_entry:
+            pair = _split_key(line)
+            if pair:
+                key, _value = pair
+                if key == "Icon":
+                    if not icon_done:
+                        out.append(f"Icon={icon_value}{newline}")
+                        icon_done = True
+                    continue
+                if key == MANAGED_KEY:
+                    if not managed_done:
+                        out.append(f"{MANAGED_KEY}=true{newline}")
+                        managed_done = True
+                    continue
+                if key == ORIGINAL_ICON_KEY:
+                    if not original_done:
+                        out.append(f"{ORIGINAL_ICON_KEY}={original_icon}{newline}")
+                        original_done = True
+                    continue
+        out.append(line)
+
+    if in_entry:
+        out.extend(pending_marker_lines())
+    elif not saw_entry:
+        out.append(f"[Desktop Entry]{newline}")
+        out.append(f"Icon={icon_value}{newline}")
+        out.append(f"{MANAGED_KEY}=true{newline}")
+        out.append(f"{ORIGINAL_ICON_KEY}={original_icon}{newline}")
+    return "".join(out)
+
+
+def create_system_override(app: SteamGame, icon_src: Path) -> None:
+    if app.kind != "system":
+        raise ValueError("System override requested for a Steam entry")
+    if icon_src.suffix.lower() not in VALID_ICON_EXTS:
+        raise ValueError(f"Unsupported icon type: {icon_src.suffix}")
+    if app.desktop_source is None:
+        raise ValueError("Missing source .desktop file")
+
+    source = app.desktop_source
+    target = app.desktop_local or (APPLICATIONS_DIR / source.name)
+    if target.parent.resolve() != APPLICATIONS_DIR.resolve():
+        raise ValueError("System overrides must be written under ~/.local/share/applications")
+    if target.exists() and not _is_managed_desktop(target):
+        raise ValueError("Refusing to overwrite a local .desktop file not managed by Shortcut Forge")
+
+    source_text = source.read_text(encoding="utf-8", errors="surrogateescape")
+    parser = _desktop_parser()
+    parser.read_string(source_text)
+    entry = parser["Desktop Entry"]
+    existing_original = entry.get(ORIGINAL_ICON_KEY, "").strip()
+    original_icon = existing_original or entry.get("Icon", "").strip()
+
+    APPLICATIONS_DIR.mkdir(parents=True, exist_ok=True)
+    rewritten = _rewrite_desktop_entry_icon(source_text, str(icon_src), original_icon)
+    target.write_text(rewritten, encoding="utf-8", errors="surrogateescape")
+    app.has_shortcut = True
+    app.icon_path = icon_src
+    app.desktop_local = target
+    _refresh_db()
+
+
+def revert_system_override(app: SteamGame) -> None:
+    target = app.desktop_local or (APPLICATIONS_DIR / app.appid)
+    if target.parent.resolve() != APPLICATIONS_DIR.resolve():
+        raise ValueError("Refusing to touch a .desktop file outside ~/.local/share/applications")
+    if not target.exists():
+        app.has_shortcut = False
+        return
+    if not _is_managed_desktop(target):
+        raise ValueError("Refusing to revert: local .desktop file is not managed by Shortcut Forge")
+    target.unlink()
+    app.has_shortcut = False
+    app.desktop_local = target
+    _refresh_db()
+
+
 def _refresh_db() -> None:
     u = shutil.which("update-desktop-database")
     if u:
