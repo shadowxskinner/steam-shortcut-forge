@@ -57,7 +57,8 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 APP_NAME = "steam-shortcut-forge"
-USER_AGENT = "SteamShortcutForge/1.0"
+APP_VERSION = "1.1.0"
+USER_AGENT = f"SteamShortcutForge/{APP_VERSION}"
 CONFIG_DIR = Path.home() / ".config" / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CACHE_DIR = CONFIG_DIR / "cache"
@@ -837,7 +838,6 @@ class SteamShortcutForge(ctk.CTk):
         self.games: list[SteamGame] = []
         self.items: list[GameItem] = []
         self.selected_item: GameItem | None = None
-        self._icon_photos: list = []
         self._tiles: list = []
         self._grid_cols = 0
         self._resize_job = None
@@ -1093,7 +1093,6 @@ class SteamShortcutForge(ctk.CTk):
         # Clear existing
         for w in self.icon_area.winfo_children():
             w.destroy()
-        self._icon_photos.clear()
         self._tiles.clear()
         self._scroll_icons_to_top()
         self.after_idle(self._scroll_icons_to_top)
