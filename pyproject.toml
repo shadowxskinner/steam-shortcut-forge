@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "steam-shortcut-forge"
-version = "1.0.1"
+version = "1.1.0"
 description = "Assign custom icons to Steam games in your Linux app launcher"
 readme = "README.md"
 license = "MIT"
