@@ -1249,22 +1249,25 @@ class SteamShortcutForge(ctk.CTk):
         self.config_data = load_config()
 
     def _apply_icon(self, game: SteamGame, path: Path):
-        if not self._still_showing(game):
-            return
-        item = self.selected_item
-        if item is None:
-            return
         try:
             create_shortcut(game, path)
         except Exception as e:
             from tkinter import messagebox
             messagebox.showerror("Error", str(e))
             return
-        item.refresh()
-        self.main_sub.configure(text=f"App ID: {game.appid}  ·  Shortcut created!")
-        self.status.configure(
-            text=f"{len(self.games)} games  ·  "
-                 f"{sum(1 for g in self.games if g.has_shortcut)} with shortcuts")
+
+        for item in self.items:
+            if item.game.appid == game.appid:
+                item.refresh()
+                break
+
+        count = sum(1 for g in self.games if g.has_shortcut)
+        summary = f"{len(self.games)} games  ·  {count} with shortcuts"
+        if self._still_showing(game):
+            self.main_sub.configure(text=f"App ID: {game.appid}  ·  Shortcut created!")
+            self.status.configure(text=summary)
+        else:
+            self.status.configure(text=f"Shortcut created for {game.name}  ·  {summary}")
 
     def _on_browse(self):
         if not self.selected_item:
