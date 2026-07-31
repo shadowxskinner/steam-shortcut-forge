@@ -16,9 +16,11 @@ License: MIT
 
 from __future__ import annotations
 
+import configparser
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -77,6 +79,15 @@ ICONIFY_HOSTS = (
     "https://api.simplesvg.com",
     "https://api.unisvg.com",
 )
+MANAGED_KEY = "X-ShortcutForge-Managed"
+ORIGINAL_ICON_KEY = "X-ShortcutForge-OriginalIcon"
+SYSTEM_APPLICATION_DIRS = [
+    Path("/usr/share/applications"),
+    Path("/usr/local/share/applications"),
+    Path("/var/lib/flatpak/exports/share/applications"),
+    Path.home() / ".local" / "share" / "flatpak" / "exports" / "share" / "applications",
+    APPLICATIONS_DIR,
+]
 
 # ---------------------------------------------------------------------------
 # Appearance
@@ -513,6 +524,9 @@ class SteamGame:
     library_root: Path
     has_shortcut: bool = False
     icon_path: Path | None = None
+    kind: str = "steam"
+    desktop_source: Path | None = None
+    desktop_local: Path | None = None
 
 
 _RE_APPID = re.compile(r'"appid"\s+"(\d+)"')
@@ -584,6 +598,173 @@ def scan_games() -> list[SteamGame]:
             g.has_shortcut = True
             g.icon_path = existing[aid]
     return sorted(games.values(), key=lambda g: g.name.lower())
+
+
+# ---------------------------------------------------------------------------
+# System application scanning
+# ---------------------------------------------------------------------------
+
+def _desktop_parser() -> configparser.RawConfigParser:
+    parser = configparser.RawConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str
+    return parser
+
+
+def _parse_desktop(path: Path) -> configparser.RawConfigParser | None:
+    parser = _desktop_parser()
+    try:
+        parser.read(path, encoding="utf-8")
+    except (configparser.Error, UnicodeDecodeError, OSError):
+        return None
+    if not parser.has_section("Desktop Entry"):
+        return None
+    return parser
+
+
+def _desktop_bool(entry, key: str) -> bool:
+    try:
+        return entry.getboolean(key, fallback=False)
+    except ValueError:
+        return False
+
+
+def _current_desktops() -> set[str]:
+    raw = os.environ.get("XDG_CURRENT_DESKTOP") or os.environ.get("DESKTOP_SESSION") or ""
+    return {part.strip().lower() for part in re.split(r"[:;]", raw) if part.strip()}
+
+
+def _only_show_in_matches(value: str) -> bool:
+    allowed = {part.strip().lower() for part in value.split(";") if part.strip()}
+    current = _current_desktops()
+    return not allowed or not current or bool(allowed & current)
+
+
+def _is_managed_desktop(path: Path) -> bool:
+    parser = _parse_desktop(path)
+    if parser is None:
+        return False
+    return parser.getboolean("Desktop Entry", MANAGED_KEY, fallback=False)
+
+
+def _theme_names() -> list[str]:
+    names: list[str] = []
+    kdeglobals = Path.home() / ".config" / "kdeglobals"
+    parser = _desktop_parser()
+    try:
+        parser.read(kdeglobals, encoding="utf-8")
+        theme = parser.get("Icons", "Theme", fallback="").strip()
+        if theme:
+            names.append(theme)
+    except (configparser.Error, OSError):
+        pass
+    names.append("hicolor")
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(name)
+    return out
+
+
+def _icon_roots() -> list[Path]:
+    roots: list[Path] = []
+    for raw in (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":"):
+        if raw:
+            roots.append(Path(raw) / "icons")
+    return roots
+
+
+def resolve_icon_path(icon_value: str) -> Path | None:
+    icon_value = icon_value.strip()
+    if not icon_value:
+        return None
+    path = Path(icon_value).expanduser()
+    if path.is_absolute():
+        return path if path.is_file() else None
+
+    exts = (".svg", ".png", ".xpm")
+    names = [icon_value]
+    if Path(icon_value).suffix.lower() in exts:
+        names.append(Path(icon_value).stem)
+    names = list(dict.fromkeys(names))
+
+    roots = [r for r in _icon_roots() if r.is_dir()]
+    theme_names = _theme_names()
+    candidates: list[Path] = []
+    for root in roots:
+        for theme in theme_names:
+            theme_dir = root / theme
+            if not theme_dir.is_dir():
+                continue
+            for name in names:
+                for ext in exts:
+                    candidates.extend(theme_dir.glob(f"*/apps/{name}{ext}"))
+                    candidates.extend(theme_dir.glob(f"*/categories/{name}{ext}"))
+                    candidates.extend(theme_dir.glob(f"*/devices/{name}{ext}"))
+                    candidates.extend(theme_dir.glob(f"*/mimetypes/{name}{ext}"))
+                    direct = theme_dir / f"{name}{ext}"
+                    if direct.is_file():
+                        candidates.append(direct)
+    for root in roots:
+        for theme_dir in root.iterdir() if root.is_dir() else []:
+            if not theme_dir.is_dir() or theme_dir.name in theme_names:
+                continue
+            for name in names:
+                for ext in exts:
+                    candidates.extend(theme_dir.glob(f"*/apps/{name}{ext}"))
+
+    for name in names:
+        for ext in exts:
+            pix = Path("/usr/share/pixmaps") / f"{name}{ext}"
+            if pix.is_file():
+                candidates.append(pix)
+
+    existing = [p for p in candidates if p.is_file()]
+    if not existing:
+        return None
+    existing.sort(key=lambda p: (p.suffix.lower() != ".svg", len(str(p))))
+    return existing[0]
+
+
+def scan_system_apps() -> list[SteamGame]:
+    entries: dict[str, SteamGame] = {}
+    for directory in SYSTEM_APPLICATION_DIRS:
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("*.desktop")):
+            basename = path.name
+            if basename.startswith(DESKTOP_PREFIX):
+                continue
+            parser = _parse_desktop(path)
+            if parser is None:
+                continue
+            entry = parser["Desktop Entry"]
+            if entry.get("Type", "Application") != "Application":
+                continue
+            if _desktop_bool(entry, "NoDisplay") or _desktop_bool(entry, "Hidden"):
+                continue
+            only_show_in = entry.get("OnlyShowIn", "").strip()
+            if only_show_in and not _only_show_in_matches(only_show_in):
+                continue
+            name = entry.get("Name", "").strip()
+            if not name:
+                continue
+            local_path = APPLICATIONS_DIR / basename
+            managed = local_path.is_file() and _is_managed_desktop(local_path)
+            icon_value = entry.get("Icon", "").strip()
+            entries[basename] = SteamGame(
+                appid=basename,
+                name=name,
+                library_root=directory,
+                has_shortcut=managed,
+                icon_path=resolve_icon_path(icon_value),
+                kind="system",
+                desktop_source=path,
+                desktop_local=local_path,
+            )
+    return sorted(entries.values(), key=lambda g: g.name.lower())
 
 
 # ---------------------------------------------------------------------------
