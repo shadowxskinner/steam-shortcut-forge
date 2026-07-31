@@ -380,7 +380,8 @@ def create_shortcut(game: SteamGame, icon_src: Path) -> None:
     if icon_src.parent.resolve() == ICON_STORE.resolve():
         stored = icon_src
     else:
-        stored = ICON_STORE / f"{game.appid}_{hash(icon_src.name)}{icon_src.suffix.lower()}"
+        digest = hashlib.md5(icon_src.name.encode()).hexdigest()[:8]
+        stored = ICON_STORE / f"{game.appid}_{digest}{icon_src.suffix.lower()}"
         shutil.copyfile(icon_src, stored)
 
     _desktop_path(game.appid).write_text(
