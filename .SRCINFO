@@ -1,0 +1,19 @@
+pkgbase = steam-shortcut-forge
+	pkgdesc = Assign custom icons to Steam games in your Linux app launcher
+	pkgver = 1.1.0
+	pkgrel = 1
+	url = https://github.com/shadowxskinner/steam-shortcut-forge
+	arch = any
+	license = MIT
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-setuptools
+	makedepends = python-wheel
+	depends = python>=3.10
+	depends = tk
+	depends = python-customtkinter
+	depends = python-pillow
+	source = steam-shortcut-forge-1.1.0.tar.gz::https://github.com/shadowxskinner/steam-shortcut-forge/archive/refs/tags/v1.1.0.tar.gz
+	sha256sums = 503265fa9c819b93857ea281a82d3e93b671c53586d13a201ab6e351271f98cc
+
+pkgname = steam-shortcut-forge
