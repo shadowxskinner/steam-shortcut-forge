@@ -1,6 +1,6 @@
 # Maintainer: Shadow Skinner <shadowxskinner@gmail.com>
 pkgname=steam-shortcut-forge
-pkgver=1.1.0
+pkgver=1.1.1
 pkgrel=1
 pkgdesc="Assign custom icons to Steam games in your Linux app launcher"
 arch=('any')
