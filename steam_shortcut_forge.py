@@ -17,6 +17,7 @@ License: MIT
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
 import shutil
@@ -33,6 +34,23 @@ from pathlib import Path
 from tkinter import filedialog
 
 import customtkinter as ctk
+
+# CustomTkinter draws rounded corners from a bundled OTF on Linux, but its
+# FontManager.load_font() only copies the file into ~/.fonts and returns True
+# without checking Tk can actually use it — so corners silently render square.
+# polygon_shapes draws them with canvas polygons instead (what macOS uses).
+try:
+    from customtkinter.windows.widgets.core_rendering import DrawEngine
+    DrawEngine.preferred_drawing_method = "polygon_shapes"
+except ImportError:
+    pass
+
+try:
+    from PIL import Image, ImageTk
+    _LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
+except ImportError:
+    Image = ImageTk = None
+    _LANCZOS = None
 
 # ---------------------------------------------------------------------------
 # Paths & constants
@@ -55,6 +73,9 @@ SGDB_BASE = "https://www.steamgriddb.com/api/v2"
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+# Global size multiplier for every widget — raise for a chunkier UI.
+UI_SCALE = 1.1
+ctk.set_widget_scaling(UI_SCALE)
 
 # Fonts
 F_LOGO = ("Inter", 20, "bold")
@@ -65,28 +86,82 @@ F_BODY_B = ("Inter", 13, "bold")
 F_SMALL = ("Inter", 11)
 F_TINY = ("Inter", 10)
 F_BUTTON = ("Inter", 12, "bold")
-F_GAME = ("Inter", 13, "bold")
-F_GAME_SUB = ("Inter", 10)
+F_GAME = ("Inter", 15, "bold")
+F_GAME_SUB = ("Inter", 12)
 
-# Colors
-C_BG = "#0d0d0d"
-C_SIDEBAR = "#141414"
-C_PANEL = "#1a1a1a"
-C_CARD = "#222222"
-C_CARD_HOVER = "#2a2a2a"
-C_CARD_SELECTED = "#1e1e3a"
-C_BORDER = "#2a2a2a"
-C_BORDER_ACCENT = "#6c63ff"
-C_TEXT = "#f0f0f0"
-C_TEXT2 = "#aaaaaa"
-C_TEXT3 = "#666666"
-C_ACCENT = "#6c63ff"
-C_ACCENT_HOVER = "#7f78ff"
-C_ACCENT_DIM = "#2a2a45"
-C_SUCCESS = "#22c55e"
-C_DANGER = "#ef4444"
-C_DANGER_BG = "#2a1515"
-C_BLUE = "#4f7df5"
+# Colors — iOS dark system palette
+C_BG = "#000000"
+C_SIDEBAR = "#000000"
+C_ROW = "#1c1c1e"
+C_PANEL = "#1c1c1e"
+C_CARD = "#2c2c2e"
+C_CARD_HOVER = "#3a3a3c"
+C_CARD_SELECTED = "#0A84FF"
+C_BORDER = "#38383a"
+C_BORDER_ACCENT = "#0A84FF"
+C_TEXT = "#ffffff"
+C_TEXT2 = "#aeaeb2"
+C_TEXT3 = "#8e8e93"
+C_ACCENT = "#0A84FF"
+C_ACCENT_HOVER = "#409cff"
+C_ACCENT_DIM = "#0a2540"
+C_SUCCESS = "#30D158"
+C_DANGER = "#FF453A"
+C_DANGER_BG = "#2c1c1c"
+C_BLUE = "#0A84FF"
+
+# Geometry — bubbly / iOS
+R_CARD = 18
+R_WELL = 14
+R_PILL = 999
+THUMB_SIZE = 64
+TILE_SIZE = 152
+ROW_HEIGHT = 84
+
+
+# Small source icons get enlarged to fill their slot, but only so far —
+# past this multiple an upscale is more mush than detail, so it stops.
+MAX_UPSCALE = 3.0
+
+
+def _fit(img, size: int):
+    """Scale an image to fill a size×size box, enlarging small art as well.
+
+    Image.thumbnail() only ever shrinks, so a 64px icon dropped into a 152px
+    tile stays 64px and reads as a speck. This scales in both directions,
+    preserving aspect ratio and capping how far a low-res source is stretched.
+    """
+    w, h = img.size
+    if not w or not h:
+        return img
+    factor = min(size / w, size / h)
+    factor = min(factor, MAX_UPSCALE) if factor > 1 else factor
+    if abs(factor - 1.0) < 0.01:
+        return img
+    return img.resize((max(1, round(w * factor)), max(1, round(h * factor))), _LANCZOS)
+
+
+def _scaled_photo(size: int, *, path: Path | None = None, data: bytes | None = None):
+    """Return a PhotoImage fitted to size×size, smoothly resampled when Pillow is present."""
+    if ImageTk is not None:
+        src = str(path) if path is not None else io.BytesIO(data)
+        with Image.open(src) as img:
+            return ImageTk.PhotoImage(_fit(img.convert("RGBA"), size))
+    photo = tk.PhotoImage(file=str(path)) if path is not None else tk.PhotoImage(data=data)
+    s = max(photo.width() // size, photo.height() // size, 1)
+    if s > 1:
+        return photo.subsample(s, s)
+    z = max(1, min(int(size // max(photo.width(), photo.height(), 1)), int(MAX_UPSCALE)))
+    return photo.zoom(z, z) if z > 1 else photo
+
+
+def _ctk_icon(size: int, path: Path):
+    """CTkImage for CustomTkinter widgets — respects HiDPI widget scaling."""
+    if Image is None:
+        return None
+    with Image.open(path) as img:
+        fitted = _fit(img.convert("RGBA"), size)
+        return ctk.CTkImage(light_image=fitted, dark_image=fitted, size=fitted.size)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +197,31 @@ class SGDBIcon:
     style: str
     upvotes: int = 0
     downvotes: int = 0
+    source: str = "icon"
+
+
+# A launcher slot is square. Anything wider than this letterboxes into a
+# sliver once scaled down, so it is not worth offering as a shortcut icon.
+LOGO_MAX_ASPECT = 2.0
+
+
+def _ellipsize(text: str, limit: int) -> str:
+    """Trim a title to `limit` characters with a trailing ellipsis.
+
+    Tk labels clip mid-glyph with no indication that text was cut, so a long
+    title just looks broken. An explicit ellipsis reads as intentional.
+    """
+    text = text.strip()
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def _fits_as_icon(asset: SGDBIcon) -> bool:
+    """True if the artwork is square enough to read as a launcher icon."""
+    if not asset.width or not asset.height:
+        return True  # dimensions unknown — let the user judge from the tile
+    long_side = max(asset.width, asset.height)
+    short_side = min(asset.width, asset.height)
+    return long_side / short_side <= LOGO_MAX_ASPECT
 
 
 class SteamGridDBClient:
@@ -170,8 +270,9 @@ class SteamGridDBClient:
             pass
         return gid
 
-    def get_icons(self, game_id: int) -> list[SGDBIcon]:
-        cache = CACHE_DIR / f"icons_{game_id}.json"
+    def _fetch_assets(self, endpoint: str, game_id: int, source: str) -> list[SGDBIcon]:
+        """Page through one SteamGridDB asset endpoint and normalise the results."""
+        cache = CACHE_DIR / f"{source}s_{game_id}.json"
         if cache.is_file():
             try:
                 if time.time() - cache.stat().st_mtime < 86400:
@@ -183,7 +284,7 @@ class SteamGridDBClient:
         page = 0
         while True:
             resp = self._api_get(
-                f"/icons/game/{game_id}?types=static&nsfw=false&page={page}")
+                f"/{endpoint}/game/{game_id}?types=static&nsfw=false&page={page}")
             batch = resp.get("data") or []
             if not batch:
                 break
@@ -202,22 +303,49 @@ class SteamGridDBClient:
                     mime=item.get("mime", ""), style=item.get("style", ""),
                     upvotes=item.get("upvotes", 0),
                     downvotes=item.get("downvotes", 0),
+                    source=source,
                 ))
             except (KeyError, TypeError):
                 continue
-        # Sort by popularity: upvotes - downvotes, then by resolution
-        icons.sort(key=lambda ic: (ic.upvotes - ic.downvotes, ic.width * ic.height), reverse=True)
 
         try:
             cache.write_text(json.dumps([
                 {"icon_id": i.icon_id, "url": i.url, "thumb": i.thumb,
                  "width": i.width, "height": i.height, "mime": i.mime,
-                 "style": i.style, "upvotes": i.upvotes, "downvotes": i.downvotes}
+                 "style": i.style, "upvotes": i.upvotes, "downvotes": i.downvotes,
+                 "source": i.source}
                 for i in icons
             ]))
         except OSError:
             pass
         return icons
+
+    def get_icons(self, game_id: int) -> list[SGDBIcon]:
+        """Icons first, then logos square enough to pass as launcher icons.
+
+        SteamGridDB serves icons and logos from separate endpoints. Icons alone
+        are often only a handful per game, so logos supply the rest — but a
+        desktop launcher renders a square, and a 4:1 wordmark letterboxes into
+        an unreadable sliver. Only logos within LOGO_MAX_ASPECT survive, and
+        icons always outrank them so auto-assign never picks a logo while a
+        real icon exists. Within each group, most popular first.
+        """
+        assets = self._fetch_assets("icons", game_id, "icon")
+        try:
+            logos = self._fetch_assets("logos", game_id, "logo")
+            assets += [lg for lg in logos if _fits_as_icon(lg)]
+        except RuntimeError:
+            pass  # logos are a bonus — never fail the whole lookup over them
+
+        assets.sort(
+            key=lambda ic: (
+                ic.source == "icon",              # icons before logos
+                ic.upvotes - ic.downvotes,        # then net votes
+                ic.width * ic.height,             # then resolution
+            ),
+            reverse=True,
+        )
+        return assets
 
     def download_icon(self, url: str, dest: Path) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -229,6 +357,26 @@ class SteamGridDBClient:
         if cache.is_file():
             return cache.read_bytes()
         data = self._cdn_get(thumb_url, timeout=15)
+        try:
+            cache.write_bytes(data)
+        except OSError:
+            pass
+        return data
+
+    def download_preview(self, icon: SGDBIcon) -> bytes:
+        """Bytes for the grid tile — full-resolution art, cached on disk.
+
+        The `thumb` URL is small enough to look soft in a large tile, so prefer
+        the real asset and fall back to the thumbnail if it won't fetch.
+        """
+        h = hashlib.md5(icon.url.encode()).hexdigest()
+        cache = CACHE_DIR / f"preview_{h}"
+        if cache.is_file():
+            return cache.read_bytes()
+        try:
+            data = self._cdn_get(icon.url, timeout=20)
+        except Exception:
+            return self.download_thumbnail(icon.thumb)
         try:
             cache.write_bytes(data)
         except OSError:
@@ -427,11 +575,11 @@ def _refresh_db() -> None:
 # ---------------------------------------------------------------------------
 
 class GameItem(ctk.CTkFrame):
-    THUMB = 36
+    THUMB = THUMB_SIZE
 
     def __init__(self, master, game: SteamGame, on_click, **kw):
-        super().__init__(master, corner_radius=10, fg_color="transparent",
-                         height=52, **kw)
+        super().__init__(master, corner_radius=R_CARD, fg_color=C_ROW,
+                         height=ROW_HEIGHT, **kw)
         self.game = game
         self._on_click = on_click
         self._selected = False
@@ -440,16 +588,26 @@ class GameItem(ctk.CTkFrame):
         self.configure(cursor="hand2")
         self.grid_columnconfigure(2, weight=1)
 
-        # Icon thumbnail
-        self.thumb_label = ctk.CTkLabel(self, text="", width=self.THUMB, height=self.THUMB)
-        self.thumb_label.grid(row=0, column=0, rowspan=2, padx=(10, 0), pady=8)
+        # Icon well — rounded square that keeps every icon the same footprint
+        self.well = ctk.CTkFrame(
+            self, width=self.THUMB, height=self.THUMB,
+            corner_radius=R_WELL, fg_color=C_CARD,
+        )
+        self.well.grid(row=0, column=0, rowspan=2, padx=(10, 0), pady=10)
+        self.well.grid_propagate(False)
+        self.well.grid_rowconfigure(0, weight=1)
+        self.well.grid_columnconfigure(0, weight=1)
+
+        self.thumb_label = ctk.CTkLabel(self.well, text="", width=1, height=1)
+        self.thumb_label.grid(row=0, column=0)
         self._load_thumb()
 
         # Game name
         self.name_lbl = ctk.CTkLabel(
-            self, text=game.name, anchor="w", font=F_GAME, text_color=C_TEXT,
+            self, text=_ellipsize(game.name, 22), anchor="w", font=F_GAME,
+            text_color=C_TEXT,
         )
-        self.name_lbl.grid(row=0, column=2, sticky="sw", padx=(10, 10), pady=(8, 0))
+        self.name_lbl.grid(row=0, column=2, sticky="sw", padx=(14, 12), pady=(12, 0))
 
         # Subtitle
         sub = f"{game.appid}"
@@ -459,27 +617,26 @@ class GameItem(ctk.CTkFrame):
             self, text=sub, anchor="w", font=F_GAME_SUB,
             text_color=C_SUCCESS if game.has_shortcut else C_TEXT3,
         )
-        self.sub_lbl.grid(row=1, column=2, sticky="nw", padx=(10, 10), pady=(0, 8))
+        self.sub_lbl.grid(row=1, column=2, sticky="nw", padx=(14, 12), pady=(2, 12))
 
-        for w in [self, self.thumb_label, self.name_lbl, self.sub_lbl]:
+        for w in [self, self.well, self.thumb_label, self.name_lbl, self.sub_lbl]:
             w.bind("<Button-1>", lambda _: self._on_click(self))
             w.bind("<Enter>", self._enter)
             w.bind("<Leave>", self._leave)
 
     def _load_thumb(self):
         if not self.game.icon_path or not self.game.icon_path.exists():
-            self.thumb_label.configure(text="🎮", font=("Inter", 18), text_color=C_TEXT3)
+            self.thumb_label.configure(text="🎮", font=("Inter", 26), text_color=C_TEXT3)
             return
+        inner = self.THUMB - 16
         try:
-            photo = tk.PhotoImage(file=str(self.game.icon_path))
-            w, h = photo.width(), photo.height()
-            s = max(w // self.THUMB, h // self.THUMB, 1)
-            if s > 1:
-                photo = photo.subsample(s, s)
+            photo = _ctk_icon(inner, self.game.icon_path)
+            if photo is None:
+                photo = _scaled_photo(inner, path=self.game.icon_path)
             self._photo = photo
             self.thumb_label.configure(image=photo, text="")
-        except tk.TclError:
-            self.thumb_label.configure(text="🎮", font=("Inter", 18), text_color=C_SUCCESS)
+        except (tk.TclError, OSError, ValueError):
+            self.thumb_label.configure(text="🎮", font=("Inter", 24), text_color=C_SUCCESS)
 
     def _enter(self, _=None):
         if not self._selected:
@@ -487,11 +644,15 @@ class GameItem(ctk.CTkFrame):
 
     def _leave(self, _=None):
         if not self._selected:
-            self.configure(fg_color="transparent")
+            self.configure(fg_color=C_ROW)
 
     def set_selected(self, sel: bool):
         self._selected = sel
-        self.configure(fg_color=C_CARD_SELECTED if sel else "transparent")
+        self.configure(fg_color=C_CARD_SELECTED if sel else C_ROW)
+        self.well.configure(fg_color=C_ROW if sel else C_CARD)
+        self.name_lbl.configure(text_color=C_TEXT)
+        if not self.game.has_shortcut:
+            self.sub_lbl.configure(text_color="#cfe6ff" if sel else C_TEXT3)
 
     def refresh(self):
         sub = f"{self.game.appid}"
@@ -509,52 +670,89 @@ class GameItem(ctk.CTkFrame):
 # ---------------------------------------------------------------------------
 
 class IconTile(ctk.CTkFrame):
-    def __init__(self, master, icon: SGDBIcon, thumb_data: bytes, on_pick, **kw):
-        super().__init__(master, corner_radius=12, fg_color=C_CARD,
-                         border_width=1, border_color=C_BORDER, **kw)
+    def __init__(self, master, icon: SGDBIcon, on_pick, **kw):
+        super().__init__(master, corner_radius=R_CARD, fg_color=C_ROW,
+                         border_width=2, border_color=C_ROW, **kw)
         self.icon = icon
         self._on_pick = on_pick
         self._photo = None
 
         self.configure(cursor="hand2")
 
-        # Thumbnail
-        try:
-            photo = tk.PhotoImage(data=thumb_data)
-            w, h = photo.width(), photo.height()
-            s = max(w // 72, h // 72, 1)
-            if s > 1:
-                photo = photo.subsample(s, s)
-            self._photo = photo
-            img_btn = tk.Button(
-                self, image=photo, relief="flat", cursor="hand2",
-                bg=C_CARD, activebackground=C_CARD_HOVER, bd=0,
-                highlightthickness=0,
-                command=lambda: self._on_pick(self.icon),
-            )
-            img_btn.pack(padx=10, pady=(10, 4))
-        except tk.TclError:
-            ctk.CTkButton(
-                self, text="Icon", fg_color=C_ACCENT, corner_radius=8,
-                width=72, height=56, font=F_SMALL,
-                command=lambda: self._on_pick(self.icon),
-            ).pack(padx=10, pady=(10, 4))
+        # Icon well — uniform rounded square behind every thumbnail
+        self.well = ctk.CTkFrame(self, width=TILE_SIZE, height=TILE_SIZE,
+                                 corner_radius=R_WELL, fg_color=C_CARD)
+        self.well.pack(padx=10, pady=(10, 8))
+        self.well.pack_propagate(False)
+
+        # Placeholder until the artwork arrives — the tile occupies its final
+        # footprint immediately so the grid never reflows as images stream in.
+        self.img_holder = ctk.CTkLabel(
+            self.well, text="", width=TILE_SIZE - 24, height=TILE_SIZE - 24,
+        )
+        self.img_holder.place(relx=0.5, rely=0.5, anchor="center")
+        self.img_holder.bind("<Button-1>", lambda _: self._on_pick(self.icon))
 
         # Info line
         size = f"{icon.width}×{icon.height}" if icon.width else "—"
         votes = f"▲{icon.upvotes}" if icon.upvotes else ""
-        info = f"{size}  {votes}".strip()
-        ctk.CTkLabel(self, text=info, font=F_TINY, text_color=C_TEXT3).pack(pady=(0, 4))
+        ctk.CTkLabel(self, text=f"{size}  {votes}".strip(), font=F_TINY,
+                     text_color=C_TEXT3).pack(pady=(0, 4))
 
-        # Style tag
+        # Style pill — accent for official artwork, neutral for everything else
+        label = icon.style or "custom"
+        if icon.source == "logo":
+            label = f"{label} logo"
+        official = (icon.style or "").lower() == "official"
         ctk.CTkLabel(
-            self, text=icon.style or "custom", font=F_TINY, text_color=C_TEXT3,
-            fg_color=C_ACCENT_DIM, corner_radius=4, width=60, height=18,
-        ).pack(pady=(0, 10))
+            self, text=label, font=F_TINY,
+            text_color=C_ACCENT if official else C_TEXT2,
+            fg_color=C_ACCENT_DIM if official else C_CARD,
+            corner_radius=10, height=20,
+        ).pack(padx=12, pady=(0, 12), fill="x")
 
-        # Hover
-        self.bind("<Enter>", lambda _: self.configure(border_color=C_ACCENT))
-        self.bind("<Leave>", lambda _: self.configure(border_color=C_BORDER))
+        self._bind_hover()
+
+    def set_image(self, data: bytes) -> None:
+        """Swap the placeholder for real artwork once it has downloaded."""
+        try:
+            photo = _scaled_photo(TILE_SIZE - 24, data=data)
+        except (tk.TclError, OSError, ValueError):
+            self.img_holder.configure(text="?", font=F_HEADING, text_color=C_TEXT3)
+            return
+        self._photo = photo
+        self.img_holder.configure(image=photo, text="")
+        self._bind_hover()
+
+    def _bind_hover(self):
+        """Highlight the border for the whole tile.
+
+        Binding only the outer frame breaks as soon as the pointer reaches a
+        child widget: Tk delivers <Leave> to the parent and the border drops
+        out while the cursor is still visibly over the tile. Binding every
+        descendant keeps the highlight stable, and clicking anywhere picks.
+        """
+        def walk(widget):
+            yield widget
+            for child in widget.winfo_children():
+                yield from walk(child)
+
+        for w in walk(self):
+            w.bind("<Enter>", lambda _: self.configure(border_color=C_ACCENT), add="+")
+            w.bind("<Leave>", lambda _: self._maybe_unhighlight(), add="+")
+            if w is not self:
+                w.bind("<Button-1>", lambda _: self._on_pick(self.icon), add="+")
+
+    def _maybe_unhighlight(self):
+        """Only clear the border once the pointer has actually left the tile."""
+        try:
+            x, y = self.winfo_pointerxy()
+            inside = (self.winfo_rootx() <= x < self.winfo_rootx() + self.winfo_width()
+                      and self.winfo_rooty() <= y < self.winfo_rooty() + self.winfo_height())
+            if not inside:
+                self.configure(border_color=C_ROW)
+        except tk.TclError:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -574,7 +772,7 @@ class SettingsDialog(ctk.CTkToplevel):
         ctk.CTkLabel(self, text="Settings", font=F_HEADING, text_color=C_TEXT,
                       ).pack(padx=24, pady=(24, 16), anchor="w")
 
-        box = ctk.CTkFrame(self, fg_color=C_PANEL, corner_radius=12)
+        box = ctk.CTkFrame(self, fg_color=C_PANEL, corner_radius=R_CARD)
         box.pack(fill="x", padx=24, pady=(0, 16))
 
         ctk.CTkLabel(box, text="SteamGridDB API Key", font=F_BODY_B,
@@ -583,7 +781,7 @@ class SettingsDialog(ctk.CTkToplevel):
                       font=F_TINY, text_color=C_TEXT3).pack(padx=16, pady=(0, 8), anchor="w")
 
         self.key_entry = ctk.CTkEntry(box, placeholder_text="Paste API key",
-                                       font=F_BODY, corner_radius=8, height=38)
+                                       font=F_BODY, corner_radius=19, height=38)
         self.key_entry.pack(fill="x", padx=16, pady=(0, 16))
         if config.get("steamgriddb_api_key"):
             self.key_entry.insert(0, config["steamgriddb_api_key"])
@@ -591,10 +789,10 @@ class SettingsDialog(ctk.CTkToplevel):
         row = ctk.CTkFrame(self, fg_color="transparent")
         row.pack(fill="x", padx=24, pady=(0, 24))
         ctk.CTkButton(row, text="Cancel", height=34, fg_color=C_CARD,
-                       hover_color=C_CARD_HOVER, text_color=C_TEXT, corner_radius=8,
+                       hover_color=C_CARD_HOVER, text_color=C_TEXT, corner_radius=17,
                        font=F_BUTTON, command=self.destroy).pack(side="right")
         ctk.CTkButton(row, text="Save", height=34, fg_color=C_ACCENT,
-                       hover_color=C_ACCENT_HOVER, corner_radius=8, font=F_BUTTON,
+                       hover_color=C_ACCENT_HOVER, corner_radius=17, font=F_BUTTON,
                        command=self._save).pack(side="right", padx=(0, 8))
 
     def _save(self):
@@ -612,19 +810,22 @@ class SettingsDialog(ctk.CTkToplevel):
 # ---------------------------------------------------------------------------
 
 class SteamShortcutForge(ctk.CTk):
-    ICON_COLS = 4
+    ICON_COLS = 3
 
     def __init__(self):
         super().__init__(fg_color=C_BG)
         self.title("Steam Shortcut Forge")
-        self.geometry("1100x700")
-        self.minsize(900, 550)
+        self.geometry("1320x860")
+        self.minsize(1040, 620)
 
         self.config_data = load_config()
         self.games: list[SteamGame] = []
         self.items: list[GameItem] = []
         self.selected_item: GameItem | None = None
         self._icon_photos: list = []
+        self._tiles: list = []
+        self._grid_cols = 0
+        self._resize_job = None
         self._filter_mode = "all"
 
         self._build()
@@ -633,30 +834,33 @@ class SteamShortcutForge(ctk.CTk):
 
     def _build(self):
         # ── Root grid: sidebar | main ──────────────────────────────────
-        self.grid_columnconfigure(0, weight=0, minsize=300)
+        self.grid_columnconfigure(0, weight=0, minsize=380)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
         # ── SIDEBAR ───────────────────────────────────────────────────
-        sidebar = ctk.CTkFrame(self, fg_color=C_SIDEBAR, corner_radius=0, width=300)
+        sidebar = ctk.CTkFrame(self, fg_color=C_SIDEBAR, corner_radius=0, width=380)
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
         sidebar.grid_rowconfigure(3, weight=1)
         sidebar.grid_columnconfigure(0, weight=1)
 
-        # Logo area
+        # Header — title on the left, live count pill on the right
         logo_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        logo_frame.grid(row=0, column=0, sticky="ew", padx=16, pady=(20, 4))
-        ctk.CTkLabel(logo_frame, text="⚒", font=("Inter", 26),
-                      text_color=C_ACCENT).pack(side="left")
-        ctk.CTkLabel(logo_frame, text=" Shortcut Forge", font=F_LOGO,
-                      text_color=C_TEXT).pack(side="left")
+        logo_frame.grid(row=0, column=0, sticky="ew", padx=16, pady=(18, 6))
+        ctk.CTkLabel(logo_frame, text="Games", font=F_LOGO,
+                     text_color=C_TEXT).pack(side="left")
+        self.count_pill = ctk.CTkLabel(
+            logo_frame, text="0", font=F_SMALL, text_color=C_TEXT2,
+            fg_color=C_ROW, corner_radius=11, width=40, height=22,
+        )
+        self.count_pill.pack(side="right")
 
         # Search
         self.search_var = ctk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._filter())
         ctk.CTkEntry(
-            sidebar, textvariable=self.search_var, height=36, corner_radius=8,
+            sidebar, textvariable=self.search_var, height=40, corner_radius=20,
             placeholder_text="Search…", font=F_BODY,
             border_width=1, border_color=C_BORDER,
         ).grid(row=1, column=0, sticky="ew", padx=16, pady=(12, 8))
@@ -666,7 +870,7 @@ class SteamShortcutForge(ctk.CTk):
         chip_row.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
 
         self.chip_all = ctk.CTkButton(
-            chip_row, text="All", width=46, height=28, corner_radius=14,
+            chip_row, text="All", width=52, height=30, corner_radius=15,
             fg_color=C_ACCENT_DIM, hover_color=C_CARD_HOVER,
             text_color=C_TEXT, font=F_TINY, border_width=1,
             border_color=C_BORDER_ACCENT,
@@ -675,7 +879,7 @@ class SteamShortcutForge(ctk.CTk):
         self.chip_all.pack(side="left", padx=(0, 4))
 
         self.chip_has = ctk.CTkButton(
-            chip_row, text="● Active", width=62, height=28, corner_radius=14,
+            chip_row, text="● Active", width=70, height=30, corner_radius=15,
             fg_color="transparent", hover_color=C_CARD_HOVER,
             text_color=C_TEXT3, font=F_TINY, border_width=1,
             border_color=C_BORDER,
@@ -684,7 +888,7 @@ class SteamShortcutForge(ctk.CTk):
         self.chip_has.pack(side="left", padx=(0, 4))
 
         self.chip_none = ctk.CTkButton(
-            chip_row, text="○ None", width=58, height=28, corner_radius=14,
+            chip_row, text="○ None", width=66, height=30, corner_radius=15,
             fg_color="transparent", hover_color=C_CARD_HOVER,
             text_color=C_TEXT3, font=F_TINY, border_width=1,
             border_color=C_BORDER,
@@ -695,9 +899,11 @@ class SteamShortcutForge(ctk.CTk):
         # Game list
         self.game_list = ctk.CTkScrollableFrame(
             sidebar, fg_color="transparent", corner_radius=0,
-            scrollbar_button_color=C_BORDER, scrollbar_button_hover_color=C_TEXT3,
+            scrollbar_fg_color="transparent",
+            scrollbar_button_color=C_CARD, scrollbar_button_hover_color=C_TEXT3,
         )
         self.game_list.grid(row=3, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.game_list._scrollbar.configure(width=8, corner_radius=4, border_spacing=3)
         self.game_list.grid_columnconfigure(0, weight=1)
 
         # Sidebar bottom buttons
@@ -705,13 +911,13 @@ class SteamShortcutForge(ctk.CTk):
         sb_bottom.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 16))
 
         ctk.CTkButton(
-            sb_bottom, text="⚙  Settings", height=34, corner_radius=8,
+            sb_bottom, text="⚙  Settings", height=36, corner_radius=18,
             fg_color=C_CARD, hover_color=C_CARD_HOVER, text_color=C_TEXT2,
             font=F_BUTTON, anchor="w", command=self._settings,
         ).pack(fill="x", pady=(0, 6))
 
         ctk.CTkButton(
-            sb_bottom, text="↻  Rescan", height=34, corner_radius=8,
+            sb_bottom, text="↻  Rescan", height=36, corner_radius=18,
             fg_color=C_CARD, hover_color=C_CARD_HOVER, text_color=C_TEXT2,
             font=F_BUTTON, anchor="w", command=self._scan,
         ).pack(fill="x")
@@ -736,31 +942,38 @@ class SteamShortcutForge(ctk.CTk):
 
         # Icon grid area
         self.icon_area = ctk.CTkScrollableFrame(
-            main, fg_color=C_PANEL, corner_radius=14,
-            scrollbar_button_color=C_BORDER, scrollbar_button_hover_color=C_TEXT3,
+            main, fg_color=C_PANEL, corner_radius=R_CARD,
+            scrollbar_fg_color="transparent",
+            scrollbar_button_color=C_CARD, scrollbar_button_hover_color=C_TEXT3,
         )
         self.icon_area.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 8))
+        self.icon_area._scrollbar.configure(width=8, corner_radius=4, border_spacing=3)
+        # add="+" is essential: CTkScrollableFrame binds <Configure> on itself to
+        # recompute the canvas scrollregion. Replacing that binding leaves the
+        # region stale, the canvas believes everything fits, and the mouse wheel
+        # silently stops working.
+        self.icon_area.bind("<Configure>", self._on_icon_area_resize, add="+")
 
         # Action bar at bottom
         action_bar = ctk.CTkFrame(main, fg_color="transparent")
         action_bar.grid(row=3, column=0, sticky="ew", padx=28, pady=(8, 16))
 
         self.browse_btn = ctk.CTkButton(
-            action_bar, text="📁  Browse local file", height=38, corner_radius=10,
+            action_bar, text="📁  Browse local file", height=42, corner_radius=21,
             fg_color=C_CARD, hover_color=C_CARD_HOVER, text_color=C_TEXT,
             font=F_BUTTON, command=self._on_browse, state="disabled",
         )
         self.browse_btn.pack(side="left", padx=(0, 8))
 
         self.remove_btn = ctk.CTkButton(
-            action_bar, text="Remove shortcut", height=38, corner_radius=10,
+            action_bar, text="Remove shortcut", height=42, corner_radius=21,
             fg_color=C_DANGER_BG, hover_color="#3a2020", text_color=C_DANGER,
             font=F_BUTTON, command=self._on_remove, state="disabled",
         )
         self.remove_btn.pack(side="left", padx=(0, 8))
 
         self.bulk_btn = ctk.CTkButton(
-            action_bar, text="⬇  Auto-assign all", height=38, corner_radius=10,
+            action_bar, text="⬇  Auto-assign all", height=42, corner_radius=21,
             fg_color=C_ACCENT_DIM, hover_color=C_CARD_HOVER, text_color=C_ACCENT,
             font=F_BUTTON, command=self._on_bulk,
         )
@@ -794,6 +1007,7 @@ class SteamShortcutForge(ctk.CTk):
         self._filter()
         n = sum(1 for g in self.games if g.has_shortcut)
         self.status.configure(text=f"{len(self.games)} games  ·  {n} with shortcuts")
+        self.count_pill.configure(text=str(len(self.games)))
 
     def _set_filter(self, mode: str):
         self._filter_mode = mode
@@ -825,7 +1039,7 @@ class SteamShortcutForge(ctk.CTk):
 
         for i, game in enumerate(filtered):
             item = GameItem(self.game_list, game, on_click=self._select_game)
-            item.grid(row=i, column=0, sticky="ew", pady=2)
+            item.grid(row=i, column=0, sticky="ew", padx=4, pady=4)
             self.items.append(item)
 
     def _select_game(self, item: GameItem):
@@ -849,11 +1063,25 @@ class SteamShortcutForge(ctk.CTk):
 
     # -- Icon loading ---------------------------------------------------
 
+    def _scroll_icons_to_top(self):
+        """Reset the icon grid viewport. Destroying tiles leaves the canvas
+        scrolled where the previous game's longer list was, so a shorter list
+        renders above the visible area and the panel looks empty."""
+        try:
+            canvas = self.icon_area._parent_canvas
+            canvas.update_idletasks()
+            canvas.yview_moveto(0.0)
+        except (AttributeError, tk.TclError):
+            pass
+
     def _load_icons(self, game: SteamGame):
         # Clear existing
         for w in self.icon_area.winfo_children():
             w.destroy()
         self._icon_photos.clear()
+        self._tiles.clear()
+        self._scroll_icons_to_top()
+        self.after_idle(self._scroll_icons_to_top)
 
         key = self.config_data.get("steamgriddb_api_key")
         if not key:
@@ -878,10 +1106,14 @@ class SteamShortcutForge(ctk.CTk):
                 self.after(0, lambda: self.main_sub.configure(
                     text=f"App ID: {game.appid}  ·  {len(icons)} icons  ·  Most popular first"))
 
+                # Lay the full grid out first so it settles into its final
+                # shape immediately, then stream artwork into the placeholders.
+                self.after(0, self._build_tiles, icons, game)
+
                 for i, icon in enumerate(icons):
                     try:
-                        data = client.download_thumbnail(icon.thumb)
-                        self.after(0, self._add_tile, i, icon, data, game)
+                        data = client.download_preview(icon)
+                        self.after(0, self._fill_tile, i, data, game)
                     except Exception:
                         continue
 
@@ -894,14 +1126,77 @@ class SteamShortcutForge(ctk.CTk):
 
         threading.Thread(target=fetch, daemon=True).start()
 
-    def _add_tile(self, idx: int, icon: SGDBIcon, thumb_data: bytes, game: SteamGame):
-        # Only add if this game is still selected
-        if not self.selected_item or self.selected_item.game.appid != game.appid:
-            return
+    def _still_showing(self, game: SteamGame) -> bool:
+        return bool(self.selected_item) and self.selected_item.game.appid == game.appid
 
-        row, col = divmod(idx, self.ICON_COLS)
-        tile = IconTile(self.icon_area, icon, thumb_data, on_pick=self._pick_icon)
-        tile.grid(row=row, column=col, padx=6, pady=6)
+    GRID_GUTTER = 12   # grid padx=6 on each side
+
+    def _fit_columns(self) -> int:
+        """How many tiles fit across the icon panel at its current width.
+
+        Measures a real tile once one exists — an estimate was landing at
+        ~3.97 columns on a panel that comfortably holds 4, and floor() threw
+        the extra column away. Falls back to an estimate for the first build.
+        """
+        try:
+            avail = self.icon_area.winfo_width()
+        except tk.TclError:
+            return self.ICON_COLS
+        if avail <= 1:                       # not laid out yet
+            return self.ICON_COLS
+
+        if self._tiles:
+            try:
+                cell = self._tiles[0].winfo_reqwidth() + self.GRID_GUTTER
+            except tk.TclError:
+                cell = (TILE_SIZE + 36) * UI_SCALE
+        else:
+            cell = (TILE_SIZE + 36) * UI_SCALE
+
+        # Tolerate a couple of pixels of slop so a near-exact fit still counts.
+        return max(1, int((avail + 4) // cell))
+
+    def _regrid_tiles(self, cols: int | None = None):
+        """Re-flow the existing tiles into `cols` columns."""
+        cols = cols or self._fit_columns()
+        if cols == self._grid_cols or not self._tiles:
+            return
+        self._grid_cols = cols
+        for idx, tile in enumerate(self._tiles):
+            row, col = divmod(idx, cols)
+            tile.grid_configure(row=row, column=col)
+
+    def _on_icon_area_resize(self, _event=None):
+        """Debounced re-flow — Configure fires continuously while dragging."""
+        if self._resize_job is not None:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(120, self._regrid_tiles)
+
+    def _build_tiles(self, icons: list[SGDBIcon], game: SteamGame):
+        """Place every tile as an empty placeholder before any art downloads."""
+        if not self._still_showing(game):
+            return
+        self._tiles = []
+        cols = self._fit_columns()
+        self._grid_cols = cols
+        for idx, icon in enumerate(icons):
+            row, col = divmod(idx, cols)
+            tile = IconTile(self.icon_area, icon, on_pick=self._pick_icon)
+            tile.grid(row=row, column=col, padx=6, pady=6, sticky='n')
+            self._tiles.append(tile)
+        self.after_idle(self._scroll_icons_to_top)
+        # Width is often still stale on first layout — re-check once settled.
+        self.after_idle(lambda: self._regrid_tiles(self._fit_columns()))
+
+    def _fill_tile(self, idx: int, data: bytes, game: SteamGame):
+        """Drop artwork into an already-placed tile."""
+        if not self._still_showing(game):
+            return
+        if idx < len(self._tiles):
+            try:
+                self._tiles[idx].set_image(data)
+            except tk.TclError:
+                pass
 
     def _pick_icon(self, icon: SGDBIcon):
         if not self.selected_item:

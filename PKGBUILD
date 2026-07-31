@@ -10,6 +10,7 @@ depends=(
     'python>=3.10'
     'tk'
     'python-customtkinter'
+    'python-pillow'
 )
 makedepends=(
     'python-build'
