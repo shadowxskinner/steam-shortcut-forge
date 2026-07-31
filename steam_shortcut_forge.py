@@ -371,7 +371,7 @@ def _existing_shortcuts() -> dict[str, Path | None]:
     return out
 
 
-def create_shortcut(game: SteamGame, icon_src: Path) -> None:
+def create_shortcut(game: SteamGame, icon_src: Path, skip_refresh: bool = False) -> None:
     if icon_src.suffix.lower() not in VALID_ICON_EXTS:
         raise ValueError(f"Unsupported icon type: {icon_src.suffix}")
 
@@ -398,7 +398,8 @@ def create_shortcut(game: SteamGame, icon_src: Path) -> None:
     )
     game.has_shortcut = True
     game.icon_path = stored
-    _refresh_db()
+    if not skip_refresh:
+        _refresh_db()
 
 
 def remove_shortcut(game: SteamGame) -> None:
@@ -1007,7 +1008,7 @@ class SteamShortcutForge(ctk.CTk):
                         ext = ".png"
                     dest = ICON_STORE / f"{game.appid}_{best.icon_id}{ext}"
                     client.download_icon(best.url, dest)
-                    create_shortcut(game, dest)
+                    create_shortcut(game, dest, skip_refresh=True)
                     done += 1
                     time.sleep(0.3)
                 except Exception as exc:
@@ -1016,6 +1017,7 @@ class SteamShortcutForge(ctk.CTk):
                     msg = str(exc)
                     self.after(0, lambda g=game, m=msg: self.status.configure(
                         text=f"Skipped {g.name}: {m}"))
+            _refresh_db()
             summary = f"Done — {done} assigned, {fail} skipped"
             if failures:
                 summary += f" · Last: {failures[-1]}"
