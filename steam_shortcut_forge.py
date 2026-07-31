@@ -1019,13 +1019,17 @@ class SteamShortcutForge(ctk.CTk):
                         text=f"Skipped {g.name}: {m}"))
             _refresh_db()
             summary = f"Done — {done} assigned, {fail} skipped"
-            if failures:
-                summary += f" · Last: {failures[-1]}"
-            self.after(0, lambda: (
-                self.bulk_btn.configure(state="normal", text="⬇  Auto-assign all"),
-                self.status.configure(text=summary),
-                self._filter(),
-            ))
+            def finish():
+                self.bulk_btn.configure(state="normal", text="⬇  Auto-assign all")
+                self.status.configure(text=summary)
+                self._filter()
+                if failures:
+                    from tkinter import messagebox
+                    messagebox.showwarning(
+                        "Auto-assign skipped games",
+                        "Some games could not be assigned:\n\n" + "\n".join(failures),
+                    )
+            self.after(0, finish)
 
         threading.Thread(target=worker, daemon=True).start()
 
