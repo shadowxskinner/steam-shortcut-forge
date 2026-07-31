@@ -502,6 +502,14 @@ def _desktop_path(appid: str) -> Path:
     return APPLICATIONS_DIR / f"{DESKTOP_PREFIX}{appid}.desktop"
 
 
+def _desktop_escape(value: str) -> str:
+    return (value
+            .replace("\\", "\\\\")
+            .replace("\n", "\\n")
+            .replace("\t", "\\t")
+            .replace("\r", "\\r"))
+
+
 def _desktop_icon(path: Path) -> Path | None:
     try:
         for line in path.read_text(errors="ignore").splitlines():
@@ -542,7 +550,7 @@ def create_shortcut(game: SteamGame, icon_src: Path, skip_refresh: bool = False)
     desktop_path.write_text(
         "[Desktop Entry]\n"
         "Type=Application\n"
-        f"Name={game.name.replace(chr(10), ' ').strip()}\n"
+        f"Name={_desktop_escape(game.name.strip())}\n"
         f"Exec={steam_cmd(game.appid)}\n"
         f"Icon={stored}\n"
         "Categories=Game;\n"
