@@ -26,6 +26,7 @@ import threading
 import time
 import tkinter as tk
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -985,28 +986,42 @@ class SteamShortcutForge(ctk.CTk):
         def worker():
             client = SteamGridDBClient(key)
             done, fail = 0, 0
+            failures: list[str] = []
             for i, game in enumerate(todo):
                 self.after(0, lambda g=game, n=i: self.status.configure(
                     text=f"({n+1}/{len(todo)}) {g.name}…"))
                 try:
                     gid = client.get_game_id(game.appid)
                     if not gid:
-                        fail += 1; continue
+                        fail += 1
+                        failures.append(f"{game.name}: not found on SteamGridDB")
+                        continue
                     icons = client.get_icons(gid)
                     if not icons:
-                        fail += 1; continue
+                        fail += 1
+                        failures.append(f"{game.name}: no icons available")
+                        continue
                     best = icons[0]
-                    ext = ".png" if ".png" in best.url.lower() else ".ico"
+                    ext = Path(urllib.parse.urlparse(best.url).path).suffix.lower()
+                    if ext not in VALID_ICON_EXTS:
+                        ext = ".png"
                     dest = ICON_STORE / f"{game.appid}_{best.icon_id}{ext}"
                     client.download_icon(best.url, dest)
-                    self.after(0, lambda g=game, d=dest: create_shortcut(g, d))
+                    create_shortcut(game, dest)
                     done += 1
                     time.sleep(0.3)
-                except Exception:
+                except Exception as exc:
                     fail += 1
+                    failures.append(f"{game.name}: {exc}")
+                    msg = str(exc)
+                    self.after(0, lambda g=game, m=msg: self.status.configure(
+                        text=f"Skipped {g.name}: {m}"))
+            summary = f"Done — {done} assigned, {fail} skipped"
+            if failures:
+                summary += f" · Last: {failures[-1]}"
             self.after(0, lambda: (
                 self.bulk_btn.configure(state="normal", text="⬇  Auto-assign all"),
-                self.status.configure(text=f"Done — {done} assigned, {fail} skipped"),
+                self.status.configure(text=summary),
                 self._filter(),
             ))
 
