@@ -11,6 +11,7 @@ depends=(
     'tk'
     'python-customtkinter'
     'python-pillow'
+    'python-cairosvg'
 )
 makedepends=(
     'python-build'

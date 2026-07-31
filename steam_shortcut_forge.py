@@ -52,6 +52,11 @@ except ImportError:
     Image = ImageTk = None
     _LANCZOS = None
 
+try:
+    import cairosvg
+except ImportError:
+    cairosvg = None
+
 # ---------------------------------------------------------------------------
 # Paths & constants
 # ---------------------------------------------------------------------------
@@ -67,6 +72,11 @@ APPLICATIONS_DIR = Path.home() / ".local" / "share" / "applications"
 DESKTOP_PREFIX = "steam-shortcut-forge-"
 VALID_ICON_EXTS = {".ico", ".png", ".svg", ".xpm"}
 SGDB_BASE = "https://www.steamgriddb.com/api/v2"
+ICONIFY_HOSTS = (
+    "https://api.iconify.design",
+    "https://api.simplesvg.com",
+    "https://api.unisvg.com",
+)
 
 # ---------------------------------------------------------------------------
 # Appearance
@@ -125,6 +135,17 @@ ROW_HEIGHT = 84
 MAX_UPSCALE = 3.0
 
 
+def _looks_svg(data: bytes) -> bool:
+    head = data[:200].lstrip().lower()
+    return head.startswith((b"<svg", b"<?xml"))
+
+
+def _rasterize_svg(data: bytes, size: int) -> bytes:
+    if cairosvg is None:
+        raise ValueError("SVG previews require cairosvg")
+    return cairosvg.svg2png(bytestring=data, output_width=size, output_height=size)
+
+
 def _fit(img, size: int):
     """Scale an image to fill a size×size box, enlarging small art as well.
 
@@ -144,8 +165,14 @@ def _fit(img, size: int):
 
 def _scaled_photo(size: int, *, path: Path | None = None, data: bytes | None = None):
     """Return a PhotoImage fitted to size×size, smoothly resampled when Pillow is present."""
+    if data is None and path is not None and path.suffix.lower() == ".svg":
+        data = path.read_bytes()
+    if data is not None and _looks_svg(data):
+        data = _rasterize_svg(data, size)
     if ImageTk is not None:
         src = str(path) if path is not None else io.BytesIO(data)
+        if data is not None:
+            src = io.BytesIO(data)
         with Image.open(src) as img:
             return ImageTk.PhotoImage(_fit(img.convert("RGBA"), size))
     photo = tk.PhotoImage(file=str(path)) if path is not None else tk.PhotoImage(data=data)
@@ -166,7 +193,13 @@ def _ctk_icon(size: int, *, path: Path | None = None, data: bytes | None = None)
     """
     if Image is None:
         return None
+    if data is None and path is not None and path.suffix.lower() == ".svg":
+        data = path.read_bytes()
+    if data is not None and _looks_svg(data):
+        data = _rasterize_svg(data, size)
     src = str(path) if path is not None else io.BytesIO(data)
+    if data is not None:
+        src = io.BytesIO(data)
     with Image.open(src) as img:
         fitted = _fit(img.convert("RGBA"), size)
         return ctk.CTkImage(light_image=fitted, dark_image=fitted, size=fitted.size)
@@ -196,7 +229,7 @@ def save_config(cfg: dict) -> None:
 
 @dataclass
 class SGDBIcon:
-    icon_id: int
+    icon_id: int | str
     url: str
     thumb: str
     width: int
@@ -385,6 +418,83 @@ class SteamGridDBClient:
             data = self._cdn_get(icon.url, timeout=20)
         except Exception:
             return self.download_thumbnail(icon.thumb)
+        try:
+            cache.write_bytes(data)
+        except OSError:
+            pass
+        return data
+
+
+class IconifyClient:
+    def __init__(self) -> None:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _get(self, path: str, timeout: int = 15) -> bytes:
+        last_error = None
+        for host in ICONIFY_HOSTS:
+            req = urllib.request.Request(f"{host}{path}")
+            req.add_header("User-Agent", USER_AGENT)
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    return r.read()
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(f"Iconify HTTP {exc.code}") from exc
+            except (TimeoutError, urllib.error.URLError) as exc:
+                last_error = exc
+                continue
+        raise RuntimeError(f"Iconify network error: {last_error}")
+
+    def search(self, query: str, limit: int = 64) -> list[SGDBIcon]:
+        limit = max(32, min(int(limit), 999))
+        params = urllib.parse.urlencode({"query": query, "limit": limit})
+        data = json.loads(self._get(f"/search?{params}", timeout=15))
+        collections = data.get("collections") or {}
+        icons: list[SGDBIcon] = []
+        for full_name in data.get("icons") or []:
+            if ":" not in full_name:
+                continue
+            prefix, name = full_name.split(":", 1)
+            collection = collections.get(prefix) or {}
+            label = collection.get("name") or prefix
+            path = f"/{urllib.parse.quote(prefix, safe='')}/{urllib.parse.quote(name, safe='')}.svg?height=256"
+            icons.append(SGDBIcon(
+                icon_id=f"iconify_{hashlib.md5(full_name.encode()).hexdigest()[:12]}",
+                url=f"{ICONIFY_HOSTS[0]}{path}",
+                thumb=f"{ICONIFY_HOSTS[0]}{path}",
+                width=256,
+                height=256,
+                mime="image/svg+xml",
+                style=label,
+                upvotes=0,
+                downvotes=0,
+                source="iconify",
+            ))
+        return icons
+
+    def _svg_cache(self, url: str) -> Path:
+        h = hashlib.md5(url.encode()).hexdigest()
+        return CACHE_DIR / f"iconify_{h}.svg"
+
+    def download_preview(self, icon: SGDBIcon) -> bytes:
+        return self._download_svg(icon.url)
+
+    def download_icon(self, url: str, dest: Path) -> None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(self._download_svg(url))
+
+    def _download_svg(self, url: str) -> bytes:
+        cache = self._svg_cache(url)
+        if cache.is_file():
+            try:
+                if time.time() - cache.stat().st_mtime < 86400:
+                    return cache.read_bytes()
+            except OSError:
+                pass
+        parsed = urllib.parse.urlparse(url)
+        path = parsed.path
+        if parsed.query:
+            path = f"{path}?{parsed.query}"
+        data = self._get(path, timeout=15)
         try:
             cache.write_bytes(data)
         except OSError:
@@ -701,11 +811,12 @@ class GameItem(ctk.CTkFrame):
 # ---------------------------------------------------------------------------
 
 class IconTile(ctk.CTkFrame):
-    def __init__(self, master, icon: SGDBIcon, on_pick, **kw):
+    def __init__(self, master, icon: SGDBIcon, on_pick, on_svg_missing=None, **kw):
         super().__init__(master, corner_radius=R_CARD, fg_color=C_ROW,
                          border_width=2, border_color=C_ROW, **kw)
         self.icon = icon
         self._on_pick = on_pick
+        self._on_svg_missing = on_svg_missing
         self._photo = None
 
         self.configure(cursor="hand2")
@@ -751,6 +862,8 @@ class IconTile(ctk.CTkFrame):
             if photo is None:
                 photo = _scaled_photo(TILE_SIZE - 24, data=data)
         except (tk.TclError, OSError, ValueError):
+            if self._on_svg_missing and data is not None and _looks_svg(data) and cairosvg is None:
+                self._on_svg_missing()
             self.img_holder.configure(text="?", font=F_HEADING, text_color=C_TEXT3)
             return
         self._photo = photo
@@ -859,6 +972,8 @@ class SteamShortcutForge(ctk.CTk):
         self._grid_cols = 0
         self._resize_job = None
         self._filter_mode = "all"
+        self.icon_source_var = ctk.StringVar(value="SteamGridDB")
+        self._svg_hint_shown = False
 
         self._build()
         self._first_run()
@@ -957,7 +1072,7 @@ class SteamShortcutForge(ctk.CTk):
         # ── MAIN PANEL ────────────────────────────────────────────────
         main = ctk.CTkFrame(self, fg_color=C_BG, corner_radius=0)
         main.grid(row=0, column=1, sticky="nsew")
-        main.grid_rowconfigure(2, weight=1)
+        main.grid_rowconfigure(3, weight=1)
         main.grid_columnconfigure(0, weight=1)
 
         # Header area
@@ -972,13 +1087,31 @@ class SteamShortcutForge(ctk.CTk):
         )
         self.main_sub.grid(row=1, column=0, sticky="w", padx=28, pady=(0, 16))
 
+        source_row = ctk.CTkFrame(main, fg_color="transparent")
+        source_row.grid(row=2, column=0, sticky="ew", padx=28, pady=(0, 10))
+        ctk.CTkLabel(source_row, text="Icon source", font=F_TINY,
+                     text_color=C_TEXT3).pack(side="left", padx=(0, 10))
+        self.source_selector = ctk.CTkSegmentedButton(
+            source_row,
+            values=["SteamGridDB", "Iconify"],
+            variable=self.icon_source_var,
+            command=self._on_source_changed,
+            selected_color=C_ACCENT_DIM,
+            selected_hover_color=C_CARD_HOVER,
+            unselected_color=C_CARD,
+            unselected_hover_color=C_CARD_HOVER,
+            text_color=C_TEXT,
+            height=30,
+        )
+        self.source_selector.pack(side="left")
+
         # Icon grid area
         self.icon_area = ctk.CTkScrollableFrame(
             main, fg_color=C_PANEL, corner_radius=R_CARD,
             scrollbar_fg_color="transparent",
             scrollbar_button_color=C_CARD, scrollbar_button_hover_color=C_TEXT3,
         )
-        self.icon_area.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 8))
+        self.icon_area.grid(row=3, column=0, sticky="nsew", padx=24, pady=(0, 8))
         self.icon_area._scrollbar.configure(width=8, corner_radius=4, border_spacing=3)
         # add="+" is essential: CTkScrollableFrame binds <Configure> on itself to
         # recompute the canvas scrollregion. Replacing that binding leaves the
@@ -988,7 +1121,7 @@ class SteamShortcutForge(ctk.CTk):
 
         # Action bar at bottom
         action_bar = ctk.CTkFrame(main, fg_color="transparent")
-        action_bar.grid(row=3, column=0, sticky="ew", padx=28, pady=(8, 16))
+        action_bar.grid(row=4, column=0, sticky="ew", padx=28, pady=(8, 16))
 
         self.browse_btn = ctk.CTkButton(
             action_bar, text="📁  Browse local file", height=42, corner_radius=21,
@@ -1015,7 +1148,7 @@ class SteamShortcutForge(ctk.CTk):
         self.status = ctk.CTkLabel(
             main, text="", font=F_TINY, text_color=C_TEXT3,
         )
-        self.status.grid(row=4, column=0, sticky="w", padx=28, pady=(0, 12))
+        self.status.grid(row=5, column=0, sticky="w", padx=28, pady=(0, 12))
 
     # -- Data -----------------------------------------------------------
 
@@ -1095,6 +1228,17 @@ class SteamShortcutForge(ctk.CTk):
 
     # -- Icon loading ---------------------------------------------------
 
+    def _on_source_changed(self, _value=None):
+        if self.selected_item:
+            self.main_sub.configure(
+                text=f"App ID: {self.selected_item.game.appid}  ·  Loading icons…")
+            self._load_icons(self.selected_item.game)
+
+    def _svg_missing_hint(self):
+        if not self._svg_hint_shown:
+            self._svg_hint_shown = True
+            self.status.configure(text="Install cairosvg to preview SVG icons; shortcuts can still use them.")
+
     def _scroll_icons_to_top(self):
         """Reset the icon grid viewport. Destroying tiles leaves the canvas
         scrolled where the previous game's longer list was, so a shorter list
@@ -1114,28 +1258,39 @@ class SteamShortcutForge(ctk.CTk):
         self._scroll_icons_to_top()
         self.after_idle(self._scroll_icons_to_top)
 
-        key = self.config_data.get("steamgriddb_api_key")
-        if not key:
-            self.main_sub.configure(text="Set API key in Settings to browse icons")
-            return
-
-        client = SteamGridDBClient(key)
+        source = self.icon_source_var.get()
+        if source == "SteamGridDB":
+            key = self.config_data.get("steamgriddb_api_key")
+            if not key:
+                self.main_sub.configure(text="Set API key in Settings to browse icons")
+                return
+            client = SteamGridDBClient(key)
+        else:
+            client = IconifyClient()
 
         def fetch():
             try:
-                gid = client.get_game_id(game.appid)
-                if gid is None:
-                    self.after(0, lambda: self.main_sub.configure(
-                        text=f"App ID: {game.appid}  ·  Not found on SteamGridDB"))
-                    return
-                icons = client.get_icons(gid)
-                if not icons:
-                    self.after(0, lambda: self.main_sub.configure(
-                        text=f"App ID: {game.appid}  ·  No icons available"))
-                    return
+                if source == "SteamGridDB":
+                    gid = client.get_game_id(game.appid)
+                    if gid is None:
+                        self.after(0, lambda: self.main_sub.configure(
+                            text=f"App ID: {game.appid}  ·  Not found on SteamGridDB"))
+                        return
+                    icons = client.get_icons(gid)
+                    if not icons:
+                        self.after(0, lambda: self.main_sub.configure(
+                            text=f"App ID: {game.appid}  ·  No icons available"))
+                        return
+                    status = f"App ID: {game.appid}  ·  {len(icons)} icons  ·  Most popular first"
+                else:
+                    icons = client.search(game.name)
+                    if not icons:
+                        self.after(0, lambda: self.main_sub.configure(
+                            text=f"App ID: {game.appid}  ·  No Iconify results"))
+                        return
+                    status = f"App ID: {game.appid}  ·  {len(icons)} Iconify icons"
 
-                self.after(0, lambda: self.main_sub.configure(
-                    text=f"App ID: {game.appid}  ·  {len(icons)} icons  ·  Most popular first"))
+                self.after(0, lambda: self.main_sub.configure(text=status))
 
                 # Lay the full grid out first so it settles into its final
                 # shape immediately, then stream artwork into the placeholders.
@@ -1212,7 +1367,8 @@ class SteamShortcutForge(ctk.CTk):
         self._grid_cols = cols
         for idx, icon in enumerate(icons):
             row, col = divmod(idx, cols)
-            tile = IconTile(self.icon_area, icon, on_pick=self._pick_icon)
+            tile = IconTile(self.icon_area, icon, on_pick=self._pick_icon,
+                            on_svg_missing=self._svg_missing_hint)
             tile.grid(row=row, column=col, padx=6, pady=6, sticky='n')
             self._tiles.append(tile)
         self.after_idle(self._scroll_icons_to_top)
@@ -1238,11 +1394,16 @@ class SteamShortcutForge(ctk.CTk):
 
         def dl():
             try:
-                ext = Path(urllib.parse.urlparse(icon.url).path).suffix.lower()
-                if ext not in VALID_ICON_EXTS:
-                    ext = ".png"
-                dest = ICON_STORE / f"{game.appid}_{icon.icon_id}{ext}"
-                client = SteamGridDBClient(self.config_data["steamgriddb_api_key"])
+                if icon.source == "iconify":
+                    ext = ".svg"
+                    dest = ICON_STORE / f"{game.appid}_{icon.icon_id}{ext}"
+                    client = IconifyClient()
+                else:
+                    ext = Path(urllib.parse.urlparse(icon.url).path).suffix.lower()
+                    if ext not in VALID_ICON_EXTS:
+                        ext = ".png"
+                    dest = ICON_STORE / f"{game.appid}_{icon.icon_id}{ext}"
+                    client = SteamGridDBClient(self.config_data["steamgriddb_api_key"])
                 client.download_icon(icon.url, dest)
                 self.after(0, lambda: self._apply_icon(game, dest))
             except Exception as exc:
