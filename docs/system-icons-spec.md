@@ -235,24 +235,44 @@ system file has since changed.
 
 ---
 
-## 10. Phasing
+## 10. Prior art — read before building
 
-Land these separately. Each is independently useful and independently
-revertable.
+Editing a `.desktop` file's `Icon=` through a GUI is a solved problem:
 
-1. **Refactor to `AppEntry`.** No user-visible change. Steam tab keeps working.
-   This is the risky commit; get it merged and exercised before building on it.
-2. **System scanner + tab**, with Browse-local-file only as the icon source.
-   Useful on its own — it is exactly the "change the Steam client's icon"
-   case that motivated this.
-3. **Icon theme source.** Offline, no new dependency beyond SVG rendering.
-4. **cairosvg rendering.** Can land with or before step 3.
-5. **Iconify source.** The largest surface, and the only one needing network
-   error handling, so last.
+- **KMenuEdit** — ships with KDE Plasma. Already installed on this machine.
+- **MenuLibre** — cross-desktop, Python/GTK3, in the AUR.
+- **Alacarte** (GNOME), **jdDesktopEntryEdit** — same territory.
+
+Do not rebuild these. What none of them do is **search an online icon library
+from inside the picker** — every one of them offers only the icon themes already
+installed locally. If the icon you want is not in Papirus or Breeze, you leave
+the app, find a PNG in a browser, save it, and type a path.
+
+That gap is the entire value proposition here, and it is the thing this app
+already does well for Steam games. The `.desktop` writing is plumbing; the
+searchable icon source is the product.
+
+## 11. Phasing
+
+Ordered so the differentiating feature lands first and each step is
+independently useful and revertable.
+
+1. **Iconify as a second source in the existing Steam tab.** No refactor, no
+   scanner, no new tab. Introduces the icon-source abstraction and cairosvg
+   rendering, which everything later depends on. Immediately useful: it covers
+   games SteamGridDB does not index.
+2. **cairosvg rendering.** Folded into step 1 — SVG is unusable without it.
+3. **Split the file into modules.** ~1100 lines already, and the audit flagged
+   it. Do this before adding a second tab, not after.
+4. **Refactor to `AppEntry`.** No user-visible change; the risky commit. Merge
+   and exercise before building on it.
+5. **System scanner + tab.** Browse-local-file and Iconify both work
+   immediately, since step 1 built the source abstraction.
+6. **Icon theme source.** Offline, no new dependencies by this point.
 
 ---
 
-## 11. Risks and open questions
+## 12. Risks and open questions
 
 **File size.** `steam_shortcut_forge.py` is ~1100 lines before any of this. The
 audit already flagged that it should be split into modules. Doing steps 1–5
@@ -275,7 +295,7 @@ after that has been used for a while.
 
 ---
 
-## 12. References
+## 13. References
 
 - Iconify API — https://iconify.design/docs/api/
 - Iconify search query — https://iconify.design/docs/api/search.html
