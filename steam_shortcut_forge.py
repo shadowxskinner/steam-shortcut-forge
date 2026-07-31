@@ -55,36 +55,37 @@ SGDB_BASE = "https://www.steamgriddb.com/api/v2"
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# Typography
-FONT_TITLE = ("Inter", 24, "bold")
-FONT_HEADING = ("Inter", 16, "bold")
-FONT_BODY = ("Inter", 14)
-FONT_BODY_BOLD = ("Inter", 14, "bold")
-FONT_SMALL = ("Inter", 12)
-FONT_TINY = ("Inter", 10)
-FONT_ICON = ("Inter", 18)
-FONT_BUTTON = ("Inter", 13, "bold")
+# Fonts
+F_LOGO = ("Inter", 20, "bold")
+F_TITLE = ("Inter", 18, "bold")
+F_HEADING = ("Inter", 15, "bold")
+F_BODY = ("Inter", 13)
+F_BODY_B = ("Inter", 13, "bold")
+F_SMALL = ("Inter", 11)
+F_TINY = ("Inter", 10)
+F_BUTTON = ("Inter", 12, "bold")
+F_GAME = ("Inter", 13, "bold")
+F_GAME_SUB = ("Inter", 10)
 
 # Colors
-C_BG = "#0f0f0f"
-C_SURFACE = "#1a1a1a"
+C_BG = "#0d0d0d"
+C_SIDEBAR = "#141414"
+C_PANEL = "#1a1a1a"
 C_CARD = "#222222"
-C_CARD_HOVER = "#2c2c2c"
-C_CARD_SELECTED = "#2a2a45"
-C_BORDER = "#333333"
+C_CARD_HOVER = "#2a2a2a"
+C_CARD_SELECTED = "#1e1e3a"
+C_BORDER = "#2a2a2a"
 C_BORDER_ACCENT = "#6c63ff"
 C_TEXT = "#f0f0f0"
-C_TEXT_SECONDARY = "#999999"
-C_TEXT_MUTED = "#666666"
+C_TEXT2 = "#aaaaaa"
+C_TEXT3 = "#666666"
 C_ACCENT = "#6c63ff"
 C_ACCENT_HOVER = "#7f78ff"
+C_ACCENT_DIM = "#2a2a45"
 C_SUCCESS = "#22c55e"
-C_SUCCESS_DIM = "#166534"
 C_DANGER = "#ef4444"
-C_DANGER_BG = "#3a1a1a"
-C_DANGER_HOVER = "#4a2020"
-C_FILTER_ACTIVE = "#2a2a45"
-C_FILTER_INACTIVE = "#1a1a1a"
+C_DANGER_BG = "#2a1515"
+C_BLUE = "#4f7df5"
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +119,8 @@ class SGDBIcon:
     height: int
     mime: str
     style: str
+    upvotes: int = 0
+    downvotes: int = 0
 
 
 class SteamGridDBClient:
@@ -175,9 +178,19 @@ class SteamGridDBClient:
             except (json.JSONDecodeError, OSError, TypeError):
                 pass
 
-        raw = (self._api_get(
-            f"/icons/game/{game_id}?types=static&nsfw=false&mimes=image/png"
-        ).get("data") or [])
+        raw = []
+        page = 0
+        while True:
+            resp = self._api_get(
+                f"/icons/game/{game_id}?types=static&nsfw=false&page={page}")
+            batch = resp.get("data") or []
+            if not batch:
+                break
+            raw.extend(batch)
+            total = resp.get("total", 0)
+            if len(raw) >= total:
+                break
+            page += 1
 
         icons: list[SGDBIcon] = []
         for item in raw:
@@ -186,15 +199,19 @@ class SteamGridDBClient:
                     icon_id=item["id"], url=item["url"], thumb=item["thumb"],
                     width=item.get("width", 0), height=item.get("height", 0),
                     mime=item.get("mime", ""), style=item.get("style", ""),
+                    upvotes=item.get("upvotes", 0),
+                    downvotes=item.get("downvotes", 0),
                 ))
             except (KeyError, TypeError):
                 continue
-        icons.sort(key=lambda ic: ic.width * ic.height, reverse=True)
+        # Sort by popularity: upvotes - downvotes, then by resolution
+        icons.sort(key=lambda ic: (ic.upvotes - ic.downvotes, ic.width * ic.height), reverse=True)
 
         try:
             cache.write_text(json.dumps([
                 {"icon_id": i.icon_id, "url": i.url, "thumb": i.thumb,
-                 "width": i.width, "height": i.height, "mime": i.mime, "style": i.style}
+                 "width": i.width, "height": i.height, "mime": i.mime,
+                 "style": i.style, "upvotes": i.upvotes, "downvotes": i.downvotes}
                 for i in icons
             ]))
         except OSError:
@@ -403,234 +420,138 @@ def _refresh_db() -> None:
 
 
 # ---------------------------------------------------------------------------
-# GUI — Game row widget
+# GUI — Sidebar game item
 # ---------------------------------------------------------------------------
 
-class GameRow(ctk.CTkFrame):
-    ICON_SIZE = 40
+class GameItem(ctk.CTkFrame):
+    THUMB = 36
 
-    def __init__(self, master, game: SteamGame, on_select, **kw):
-        super().__init__(master, corner_radius=10, fg_color=C_CARD,
-                         border_width=1, border_color=C_BORDER, height=64, **kw)
+    def __init__(self, master, game: SteamGame, on_click, **kw):
+        super().__init__(master, corner_radius=10, fg_color="transparent",
+                         height=52, **kw)
         self.game = game
-        self._on_select = on_select
+        self._on_click = on_click
         self._selected = False
-        self._photo_ref = None  # prevent GC
+        self._photo = None
 
         self.configure(cursor="hand2")
         self.grid_columnconfigure(2, weight=1)
 
-        # Icon preview (shows assigned icon or placeholder)
-        self.icon_label = ctk.CTkLabel(
-            self, text="", width=self.ICON_SIZE, height=self.ICON_SIZE,
-        )
-        self.icon_label.grid(row=0, column=0, rowspan=2, padx=(14, 0), pady=10)
-        self._load_icon_preview()
-
-        # Status dot
-        dot = "●" if game.has_shortcut else "○"
-        dot_color = C_SUCCESS if game.has_shortcut else C_TEXT_MUTED
-        self.dot_label = ctk.CTkLabel(
-            self, text=dot, width=20, font=FONT_SMALL, text_color=dot_color,
-        )
-        self.dot_label.grid(row=0, column=1, rowspan=2, padx=(8, 0), pady=10)
+        # Icon thumbnail
+        self.thumb_label = ctk.CTkLabel(self, text="", width=self.THUMB, height=self.THUMB)
+        self.thumb_label.grid(row=0, column=0, rowspan=2, padx=(10, 0), pady=8)
+        self._load_thumb()
 
         # Game name
-        self.name_label = ctk.CTkLabel(
-            self, text=game.name, anchor="w",
-            font=FONT_BODY_BOLD, text_color=C_TEXT,
+        self.name_lbl = ctk.CTkLabel(
+            self, text=game.name, anchor="w", font=F_GAME, text_color=C_TEXT,
         )
-        self.name_label.grid(row=0, column=2, sticky="sw", padx=(8, 14), pady=(12, 0))
+        self.name_lbl.grid(row=0, column=2, sticky="sw", padx=(10, 10), pady=(8, 0))
 
-        # App ID + status text
-        status_text = f"App ID: {game.appid}"
+        # Subtitle
+        sub = f"{game.appid}"
         if game.has_shortcut:
-            status_text += "  ·  Shortcut active"
-        self.info_label = ctk.CTkLabel(
-            self, text=status_text, anchor="w",
-            font=FONT_TINY, text_color=C_TEXT_SECONDARY,
+            sub += "  ·  ●"
+        self.sub_lbl = ctk.CTkLabel(
+            self, text=sub, anchor="w", font=F_GAME_SUB,
+            text_color=C_SUCCESS if game.has_shortcut else C_TEXT3,
         )
-        self.info_label.grid(row=1, column=2, sticky="nw", padx=(8, 14), pady=(0, 12))
+        self.sub_lbl.grid(row=1, column=2, sticky="nw", padx=(10, 10), pady=(0, 8))
 
-        # Click binding on all children
-        for w in [self, self.icon_label, self.dot_label, self.name_label, self.info_label]:
-            w.bind("<Button-1>", self._clicked)
-            w.bind("<Enter>", self._hover_in)
-            w.bind("<Leave>", self._hover_out)
+        for w in [self, self.thumb_label, self.name_lbl, self.sub_lbl]:
+            w.bind("<Button-1>", lambda _: self._on_click(self))
+            w.bind("<Enter>", self._enter)
+            w.bind("<Leave>", self._leave)
 
-    def _load_icon_preview(self):
-        """Try to load and display the assigned icon as a thumbnail."""
+    def _load_thumb(self):
         if not self.game.icon_path or not self.game.icon_path.exists():
-            self.icon_label.configure(
-                text="🎮", font=("Inter", 22), text_color=C_TEXT_MUTED,
-            )
+            self.thumb_label.configure(text="🎮", font=("Inter", 18), text_color=C_TEXT3)
             return
         try:
             photo = tk.PhotoImage(file=str(self.game.icon_path))
             w, h = photo.width(), photo.height()
-            scale = max(w // self.ICON_SIZE, h // self.ICON_SIZE, 1)
-            if scale > 1:
-                photo = photo.subsample(scale, scale)
-            self._photo_ref = photo
-            self.icon_label.configure(image=photo, text="")
+            s = max(w // self.THUMB, h // self.THUMB, 1)
+            if s > 1:
+                photo = photo.subsample(s, s)
+            self._photo = photo
+            self.thumb_label.configure(image=photo, text="")
         except tk.TclError:
-            self.icon_label.configure(
-                text="🎮", font=("Inter", 22), text_color=C_SUCCESS,
-            )
+            self.thumb_label.configure(text="🎮", font=("Inter", 18), text_color=C_SUCCESS)
 
-    def _clicked(self, _e=None):
-        self._on_select(self)
-
-    def _hover_in(self, _e=None):
+    def _enter(self, _=None):
         if not self._selected:
             self.configure(fg_color=C_CARD_HOVER)
 
-    def _hover_out(self, _e=None):
+    def _leave(self, _=None):
         if not self._selected:
-            self.configure(fg_color=C_CARD)
+            self.configure(fg_color="transparent")
 
     def set_selected(self, sel: bool):
         self._selected = sel
-        self.configure(
-            fg_color=C_CARD_SELECTED if sel else C_CARD,
-            border_color=C_BORDER_ACCENT if sel else C_BORDER,
-        )
+        self.configure(fg_color=C_CARD_SELECTED if sel else "transparent")
 
     def refresh(self):
-        dot = "●" if self.game.has_shortcut else "○"
-        color = C_SUCCESS if self.game.has_shortcut else C_TEXT_MUTED
-        self.dot_label.configure(text=dot, text_color=color)
-        status = f"App ID: {self.game.appid}"
+        sub = f"{self.game.appid}"
         if self.game.has_shortcut:
-            status += "  ·  Shortcut active"
-        self.info_label.configure(text=status)
-        self._load_icon_preview()
+            sub += "  ·  ●"
+        self.sub_lbl.configure(
+            text=sub,
+            text_color=C_SUCCESS if self.game.has_shortcut else C_TEXT3,
+        )
+        self._load_thumb()
 
 
 # ---------------------------------------------------------------------------
-# GUI — Icon picker dialog
+# GUI — Icon tile in main panel
 # ---------------------------------------------------------------------------
 
-class IconPickerDialog(ctk.CTkToplevel):
-    COLS = 4
+class IconTile(ctk.CTkFrame):
+    def __init__(self, master, icon: SGDBIcon, thumb_data: bytes, on_pick, **kw):
+        super().__init__(master, corner_radius=12, fg_color=C_CARD,
+                         border_width=1, border_color=C_BORDER, **kw)
+        self.icon = icon
+        self._on_pick = on_pick
+        self._photo = None
 
-    def __init__(self, parent, game: SteamGame, client: SteamGridDBClient):
-        super().__init__(parent)
-        self.game = game
-        self.client = client
-        self.result_path: Path | None = None
-        self._photo_refs: list = []
+        self.configure(cursor="hand2")
 
-        self.title(f"Pick icon — {game.name}")
-        self.geometry("540x500")
-        self.minsize(420, 360)
-        self.configure(fg_color=C_BG)
-        self.transient(parent)
-        self.grab_set()
-
-        # Header
-        ctk.CTkLabel(
-            self, text=f"Icons for {game.name}",
-            font=FONT_HEADING, text_color=C_TEXT,
-        ).pack(padx=20, pady=(20, 4), anchor="w")
-
-        self.status = ctk.CTkLabel(
-            self, text="Fetching from SteamGridDB…",
-            font=FONT_SMALL, text_color=C_TEXT_SECONDARY,
-        )
-        self.status.pack(padx=20, pady=(0, 12), anchor="w")
-
-        # Scrollable grid
-        self.grid_frame = ctk.CTkScrollableFrame(
-            self, fg_color=C_SURFACE, corner_radius=10,
-        )
-        self.grid_frame.pack(fill="both", expand=True, padx=20, pady=(0, 12))
-
-        # Cancel button
-        ctk.CTkButton(
-            self, text="Cancel", height=36,
-            fg_color=C_CARD, hover_color=C_CARD_HOVER,
-            text_color=C_TEXT, corner_radius=8, font=FONT_BUTTON,
-            command=self.destroy,
-        ).pack(padx=20, pady=(0, 20), anchor="e")
-
-        threading.Thread(target=self._fetch, daemon=True).start()
-
-    def _fetch(self):
-        try:
-            gid = self.client.get_game_id(self.game.appid)
-            if gid is None:
-                self.after(0, lambda: self.status.configure(text="Game not found on SteamGridDB."))
-                return
-            icons = self.client.get_icons(gid)
-            if not icons:
-                self.after(0, lambda: self.status.configure(text="No icons available."))
-                return
-            self.after(0, lambda: self.status.configure(
-                text=f"{len(icons)} icon(s) — click to apply"))
-            for i, icon in enumerate(icons):
-                try:
-                    data = self.client.download_thumbnail(icon.thumb)
-                    self.after(0, self._add_tile, i, icon, data)
-                except Exception:
-                    continue
-        except RuntimeError as exc:
-            msg = str(exc)
-            self.after(0, lambda: self.status.configure(text=msg))
-        except Exception as exc:
-            msg = f"Error: {exc}"
-            self.after(0, lambda: self.status.configure(text=msg))
-
-    def _add_tile(self, idx: int, icon: SGDBIcon, thumb_data: bytes):
-        row, col = divmod(idx, self.COLS)
-
-        frame = ctk.CTkFrame(self.grid_frame, fg_color=C_CARD, corner_radius=10,
-                             border_width=1, border_color=C_BORDER)
-        frame.grid(row=row, column=col, padx=6, pady=6)
-
+        # Thumbnail
         try:
             photo = tk.PhotoImage(data=thumb_data)
             w, h = photo.width(), photo.height()
-            scale = max(w // 80, h // 80, 1)
-            if scale > 1:
-                photo = photo.subsample(scale, scale)
-            self._photo_refs.append(photo)
-
-            btn = tk.Button(
-                frame, image=photo, relief="flat", cursor="hand2",
+            s = max(w // 72, h // 72, 1)
+            if s > 1:
+                photo = photo.subsample(s, s)
+            self._photo = photo
+            img_btn = tk.Button(
+                self, image=photo, relief="flat", cursor="hand2",
                 bg=C_CARD, activebackground=C_CARD_HOVER, bd=0,
                 highlightthickness=0,
-                command=lambda ic=icon: self._pick(ic),
+                command=lambda: self._on_pick(self.icon),
             )
-            btn.pack(padx=8, pady=(8, 2))
+            img_btn.pack(padx=10, pady=(10, 4))
         except tk.TclError:
             ctk.CTkButton(
-                frame, text=f"{icon.width}×{icon.height}",
-                fg_color=C_ACCENT, corner_radius=8, width=80, height=60,
-                font=FONT_SMALL, command=lambda ic=icon: self._pick(ic),
-            ).pack(padx=8, pady=(8, 2))
+                self, text="Icon", fg_color=C_ACCENT, corner_radius=8,
+                width=72, height=56, font=F_SMALL,
+                command=lambda: self._on_pick(self.icon),
+            ).pack(padx=10, pady=(10, 4))
 
-        size = f"{icon.width}×{icon.height}" if icon.width else icon.style
-        ctk.CTkLabel(frame, text=size, font=FONT_TINY,
-                     text_color=C_TEXT_MUTED).pack(pady=(0, 8))
+        # Info line
+        size = f"{icon.width}×{icon.height}" if icon.width else "—"
+        votes = f"▲{icon.upvotes}" if icon.upvotes else ""
+        info = f"{size}  {votes}".strip()
+        ctk.CTkLabel(self, text=info, font=F_TINY, text_color=C_TEXT3).pack(pady=(0, 4))
 
-    def _pick(self, icon: SGDBIcon):
-        self.status.configure(text="Downloading…")
-        self.update_idletasks()
+        # Style tag
+        ctk.CTkLabel(
+            self, text=icon.style or "custom", font=F_TINY, text_color=C_TEXT3,
+            fg_color=C_ACCENT_DIM, corner_radius=4, width=60, height=18,
+        ).pack(pady=(0, 10))
 
-        def dl():
-            try:
-                ext = ".png" if ".png" in icon.url.lower() else (
-                    ".ico" if ".ico" in icon.url.lower() else ".png")
-                dest = ICON_STORE / f"{self.game.appid}_{icon.icon_id}{ext}"
-                self.client.download_icon(icon.url, dest)
-                self.result_path = dest
-                self.after(0, self.destroy)
-            except Exception as exc:
-                msg = f"Download failed: {exc}"
-                self.after(0, lambda: self.status.configure(text=msg))
-
-        threading.Thread(target=dl, daemon=True).start()
+        # Hover
+        self.bind("<Enter>", lambda _: self.configure(border_color=C_ACCENT))
+        self.bind("<Leave>", lambda _: self.configure(border_color=C_BORDER))
 
 
 # ---------------------------------------------------------------------------
@@ -647,47 +568,31 @@ class SettingsDialog(ctk.CTkToplevel):
         self.transient(parent)
         self.grab_set()
 
-        ctk.CTkLabel(
-            self, text="Settings", font=FONT_HEADING, text_color=C_TEXT,
-        ).pack(padx=24, pady=(24, 16), anchor="w")
+        ctk.CTkLabel(self, text="Settings", font=F_HEADING, text_color=C_TEXT,
+                      ).pack(padx=24, pady=(24, 16), anchor="w")
 
-        # API key section
-        key_frame = ctk.CTkFrame(self, fg_color=C_SURFACE, corner_radius=10)
-        key_frame.pack(fill="x", padx=24, pady=(0, 16))
+        box = ctk.CTkFrame(self, fg_color=C_PANEL, corner_radius=12)
+        box.pack(fill="x", padx=24, pady=(0, 16))
 
-        ctk.CTkLabel(
-            key_frame, text="SteamGridDB API Key",
-            font=FONT_BODY_BOLD, text_color=C_TEXT,
-        ).pack(padx=16, pady=(16, 2), anchor="w")
+        ctk.CTkLabel(box, text="SteamGridDB API Key", font=F_BODY_B,
+                      text_color=C_TEXT).pack(padx=16, pady=(16, 2), anchor="w")
+        ctk.CTkLabel(box, text="Free at steamgriddb.com → Profile → API",
+                      font=F_TINY, text_color=C_TEXT3).pack(padx=16, pady=(0, 8), anchor="w")
 
-        ctk.CTkLabel(
-            key_frame, text="Free at steamgriddb.com → Profile → API",
-            font=FONT_TINY, text_color=C_TEXT_MUTED,
-        ).pack(padx=16, pady=(0, 8), anchor="w")
-
-        self.key_entry = ctk.CTkEntry(
-            key_frame, placeholder_text="Paste your API key",
-            font=FONT_BODY, corner_radius=8, height=38,
-        )
+        self.key_entry = ctk.CTkEntry(box, placeholder_text="Paste API key",
+                                       font=F_BODY, corner_radius=8, height=38)
         self.key_entry.pack(fill="x", padx=16, pady=(0, 16))
-        existing = config.get("steamgriddb_api_key", "")
-        if existing:
-            self.key_entry.insert(0, existing)
+        if config.get("steamgriddb_api_key"):
+            self.key_entry.insert(0, config["steamgriddb_api_key"])
 
-        # Buttons
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(fill="x", padx=24, pady=(0, 24))
-        ctk.CTkButton(
-            btn_row, text="Cancel", height=36,
-            fg_color=C_CARD, hover_color=C_CARD_HOVER,
-            text_color=C_TEXT, corner_radius=8, font=FONT_BUTTON,
-            command=self.destroy,
-        ).pack(side="right")
-        ctk.CTkButton(
-            btn_row, text="Save", height=36,
-            fg_color=C_ACCENT, hover_color=C_ACCENT_HOVER,
-            corner_radius=8, font=FONT_BUTTON, command=self._save,
-        ).pack(side="right", padx=(0, 8))
+        row = ctk.CTkFrame(self, fg_color="transparent")
+        row.pack(fill="x", padx=24, pady=(0, 24))
+        ctk.CTkButton(row, text="Cancel", height=34, fg_color=C_CARD,
+                       hover_color=C_CARD_HOVER, text_color=C_TEXT, corner_radius=8,
+                       font=F_BUTTON, command=self.destroy).pack(side="right")
+        ctk.CTkButton(row, text="Save", height=34, fg_color=C_ACCENT,
+                       hover_color=C_ACCENT_HOVER, corner_radius=8, font=F_BUTTON,
+                       command=self._save).pack(side="right", padx=(0, 8))
 
     def _save(self):
         key = self.key_entry.get().strip()
@@ -700,169 +605,182 @@ class SettingsDialog(ctk.CTkToplevel):
 
 
 # ---------------------------------------------------------------------------
-# GUI — Main application
+# GUI — Main application (dashboard layout)
 # ---------------------------------------------------------------------------
 
 class SteamShortcutForge(ctk.CTk):
+    ICON_COLS = 4
+
     def __init__(self):
         super().__init__(fg_color=C_BG)
         self.title("Steam Shortcut Forge")
-        self.geometry("760x680")
-        self.minsize(560, 460)
+        self.geometry("1100x700")
+        self.minsize(900, 550)
 
         self.config_data = load_config()
         self.games: list[SteamGame] = []
-        self.rows: list[GameRow] = []
-        self.selected_row: GameRow | None = None
-        self._filter_mode = "all"  # "all", "with", "without"
+        self.items: list[GameItem] = []
+        self.selected_item: GameItem | None = None
+        self._icon_photos: list = []
+        self._filter_mode = "all"
 
-        self._build_ui()
+        self._build()
         self._first_run()
         self._scan()
 
-    def _build_ui(self):
-        # ── Header ──────────────────────────────────────────────────────
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=24, pady=(24, 0))
+    def _build(self):
+        # ── Root grid: sidebar | main ──────────────────────────────────
+        self.grid_columnconfigure(0, weight=0, minsize=300)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
-        ctk.CTkLabel(
-            header, text="Steam Shortcut Forge", font=FONT_TITLE, text_color=C_TEXT,
-        ).pack(side="left")
+        # ── SIDEBAR ───────────────────────────────────────────────────
+        sidebar = ctk.CTkFrame(self, fg_color=C_SIDEBAR, corner_radius=0, width=300)
+        sidebar.grid(row=0, column=0, sticky="nsew")
+        sidebar.grid_propagate(False)
+        sidebar.grid_rowconfigure(3, weight=1)
+        sidebar.grid_columnconfigure(0, weight=1)
 
-        # Header buttons (right side)
-        ctk.CTkButton(
-            header, text="⚙", width=38, height=38, corner_radius=10,
-            fg_color=C_CARD, hover_color=C_CARD_HOVER,
-            text_color=C_TEXT_SECONDARY, font=FONT_ICON,
-            command=self._settings,
-        ).pack(side="right")
+        # Logo area
+        logo_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
+        logo_frame.grid(row=0, column=0, sticky="ew", padx=16, pady=(20, 4))
+        ctk.CTkLabel(logo_frame, text="⚒", font=("Inter", 26),
+                      text_color=C_ACCENT).pack(side="left")
+        ctk.CTkLabel(logo_frame, text=" Shortcut Forge", font=F_LOGO,
+                      text_color=C_TEXT).pack(side="left")
 
-        ctk.CTkButton(
-            header, text="Rescan", width=80, height=38, corner_radius=10,
-            fg_color=C_CARD, hover_color=C_CARD_HOVER,
-            text_color=C_TEXT, font=FONT_BUTTON,
-            command=self._scan,
-        ).pack(side="right", padx=(0, 8))
-
-        # ── Subtitle ───────────────────────────────────────────────────
-        self.subtitle = ctk.CTkLabel(
-            self, text="Manage launcher shortcuts for your Steam games",
-            font=FONT_SMALL, text_color=C_TEXT_MUTED,
-        )
-        self.subtitle.pack(padx=24, pady=(4, 16), anchor="w")
-
-        # ── Search + filter bar ────────────────────────────────────────
-        bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.pack(fill="x", padx=24, pady=(0, 12))
-        bar.grid_columnconfigure(0, weight=1)
-
+        # Search
         self.search_var = ctk.StringVar()
         self.search_var.trace_add("write", lambda *_: self._filter())
         ctk.CTkEntry(
-            bar, textvariable=self.search_var, height=42, corner_radius=10,
-            placeholder_text="Search games…", font=FONT_BODY,
+            sidebar, textvariable=self.search_var, height=36, corner_radius=8,
+            placeholder_text="Search…", font=F_BODY,
             border_width=1, border_color=C_BORDER,
-        ).grid(row=0, column=0, sticky="ew")
+        ).grid(row=1, column=0, sticky="ew", padx=16, pady=(12, 8))
 
-        # Filter buttons
-        filter_frame = ctk.CTkFrame(bar, fg_color="transparent")
-        filter_frame.grid(row=0, column=1, padx=(10, 0))
+        # Filter chips
+        chip_row = ctk.CTkFrame(sidebar, fg_color="transparent")
+        chip_row.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
 
-        self.filter_all = ctk.CTkButton(
-            filter_frame, text="All", width=50, height=42, corner_radius=10,
-            fg_color=C_FILTER_ACTIVE, hover_color=C_CARD_HOVER,
-            text_color=C_TEXT, font=FONT_BUTTON, border_width=1,
+        self.chip_all = ctk.CTkButton(
+            chip_row, text="All", width=46, height=28, corner_radius=14,
+            fg_color=C_ACCENT_DIM, hover_color=C_CARD_HOVER,
+            text_color=C_TEXT, font=F_TINY, border_width=1,
             border_color=C_BORDER_ACCENT,
             command=lambda: self._set_filter("all"),
         )
-        self.filter_all.pack(side="left", padx=(0, 4))
+        self.chip_all.pack(side="left", padx=(0, 4))
 
-        self.filter_with = ctk.CTkButton(
-            filter_frame, text="● Has", width=64, height=42, corner_radius=10,
-            fg_color=C_FILTER_INACTIVE, hover_color=C_CARD_HOVER,
-            text_color=C_TEXT_SECONDARY, font=FONT_BUTTON, border_width=1,
+        self.chip_has = ctk.CTkButton(
+            chip_row, text="● Active", width=62, height=28, corner_radius=14,
+            fg_color="transparent", hover_color=C_CARD_HOVER,
+            text_color=C_TEXT3, font=F_TINY, border_width=1,
             border_color=C_BORDER,
             command=lambda: self._set_filter("with"),
         )
-        self.filter_with.pack(side="left", padx=(0, 4))
+        self.chip_has.pack(side="left", padx=(0, 4))
 
-        self.filter_without = ctk.CTkButton(
-            filter_frame, text="○ None", width=72, height=42, corner_radius=10,
-            fg_color=C_FILTER_INACTIVE, hover_color=C_CARD_HOVER,
-            text_color=C_TEXT_SECONDARY, font=FONT_BUTTON, border_width=1,
+        self.chip_none = ctk.CTkButton(
+            chip_row, text="○ None", width=58, height=28, corner_radius=14,
+            fg_color="transparent", hover_color=C_CARD_HOVER,
+            text_color=C_TEXT3, font=F_TINY, border_width=1,
             border_color=C_BORDER,
             command=lambda: self._set_filter("without"),
         )
-        self.filter_without.pack(side="left")
+        self.chip_none.pack(side="left")
 
-        # ── Game list ──────────────────────────────────────────────────
-        self.list_frame = ctk.CTkScrollableFrame(
-            self, fg_color="transparent", corner_radius=0,
+        # Game list
+        self.game_list = ctk.CTkScrollableFrame(
+            sidebar, fg_color="transparent", corner_radius=0,
+            scrollbar_button_color=C_BORDER, scrollbar_button_hover_color=C_TEXT3,
         )
-        self.list_frame.pack(fill="both", expand=True, padx=24, pady=(0, 8))
-        self.list_frame.grid_columnconfigure(0, weight=1)
+        self.game_list.grid(row=3, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.game_list.grid_columnconfigure(0, weight=1)
 
-        # ── Action bar ─────────────────────────────────────────────────
-        action_bar = ctk.CTkFrame(self, fg_color=C_SURFACE, corner_radius=12,
-                                  border_width=1, border_color=C_BORDER)
-        action_bar.pack(fill="x", padx=24, pady=(0, 8))
+        # Sidebar bottom buttons
+        sb_bottom = ctk.CTkFrame(sidebar, fg_color="transparent")
+        sb_bottom.grid(row=4, column=0, sticky="ew", padx=16, pady=(0, 16))
 
-        inner = ctk.CTkFrame(action_bar, fg_color="transparent")
-        inner.pack(padx=12, pady=12)
+        ctk.CTkButton(
+            sb_bottom, text="⚙  Settings", height=34, corner_radius=8,
+            fg_color=C_CARD, hover_color=C_CARD_HOVER, text_color=C_TEXT2,
+            font=F_BUTTON, anchor="w", command=self._settings,
+        ).pack(fill="x", pady=(0, 6))
 
-        self.sgdb_btn = ctk.CTkButton(
-            inner, text="⬇  Fetch from SteamGridDB", height=40,
-            corner_radius=10, fg_color=C_ACCENT,
-            hover_color=C_ACCENT_HOVER, font=FONT_BUTTON,
-            command=self._on_sgdb, state="disabled",
+        ctk.CTkButton(
+            sb_bottom, text="↻  Rescan", height=34, corner_radius=8,
+            fg_color=C_CARD, hover_color=C_CARD_HOVER, text_color=C_TEXT2,
+            font=F_BUTTON, anchor="w", command=self._scan,
+        ).pack(fill="x")
+
+        # ── MAIN PANEL ────────────────────────────────────────────────
+        main = ctk.CTkFrame(self, fg_color=C_BG, corner_radius=0)
+        main.grid(row=0, column=1, sticky="nsew")
+        main.grid_rowconfigure(2, weight=1)
+        main.grid_columnconfigure(0, weight=1)
+
+        # Header area
+        self.main_header = ctk.CTkLabel(
+            main, text="Select a game", font=F_TITLE, text_color=C_TEXT,
         )
-        self.sgdb_btn.pack(side="left", padx=(0, 8))
+        self.main_header.grid(row=0, column=0, sticky="w", padx=28, pady=(28, 4))
+
+        self.main_sub = ctk.CTkLabel(
+            main, text="Choose a game from the sidebar to browse icons",
+            font=F_SMALL, text_color=C_TEXT3,
+        )
+        self.main_sub.grid(row=1, column=0, sticky="w", padx=28, pady=(0, 16))
+
+        # Icon grid area
+        self.icon_area = ctk.CTkScrollableFrame(
+            main, fg_color=C_PANEL, corner_radius=14,
+            scrollbar_button_color=C_BORDER, scrollbar_button_hover_color=C_TEXT3,
+        )
+        self.icon_area.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 8))
+
+        # Action bar at bottom
+        action_bar = ctk.CTkFrame(main, fg_color="transparent")
+        action_bar.grid(row=3, column=0, sticky="ew", padx=28, pady=(8, 16))
 
         self.browse_btn = ctk.CTkButton(
-            inner, text="📁  Browse", height=40,
-            corner_radius=10, fg_color=C_CARD,
-            hover_color=C_CARD_HOVER, text_color=C_TEXT,
-            font=FONT_BUTTON, command=self._on_browse, state="disabled",
+            action_bar, text="📁  Browse local file", height=38, corner_radius=10,
+            fg_color=C_CARD, hover_color=C_CARD_HOVER, text_color=C_TEXT,
+            font=F_BUTTON, command=self._on_browse, state="disabled",
         )
         self.browse_btn.pack(side="left", padx=(0, 8))
 
         self.remove_btn = ctk.CTkButton(
-            inner, text="Remove", height=40,
-            corner_radius=10, fg_color=C_DANGER_BG,
-            hover_color=C_DANGER_HOVER, text_color=C_DANGER,
-            font=FONT_BUTTON, command=self._on_remove, state="disabled",
+            action_bar, text="Remove shortcut", height=38, corner_radius=10,
+            fg_color=C_DANGER_BG, hover_color="#3a2020", text_color=C_DANGER,
+            font=F_BUTTON, command=self._on_remove, state="disabled",
         )
         self.remove_btn.pack(side="left", padx=(0, 8))
 
         self.bulk_btn = ctk.CTkButton(
-            inner, text="⬇  Auto-assign all", height=40,
-            corner_radius=10, fg_color=C_CARD,
-            hover_color=C_CARD_HOVER, text_color=C_ACCENT,
-            font=FONT_BUTTON, command=self._on_bulk,
+            action_bar, text="⬇  Auto-assign all", height=38, corner_radius=10,
+            fg_color=C_ACCENT_DIM, hover_color=C_CARD_HOVER, text_color=C_ACCENT,
+            font=F_BUTTON, command=self._on_bulk,
         )
-        self.bulk_btn.pack(side="left")
+        self.bulk_btn.pack(side="right")
 
-        # ── Status bar ─────────────────────────────────────────────────
+        # Status
         self.status = ctk.CTkLabel(
-            self, text="", font=FONT_SMALL, text_color=C_TEXT_MUTED,
+            main, text="", font=F_TINY, text_color=C_TEXT3,
         )
-        self.status.pack(fill="x", padx=24, pady=(0, 16))
+        self.status.grid(row=4, column=0, sticky="w", padx=28, pady=(0, 12))
 
-    # -- Data & filtering -----------------------------------------------
+    # -- Data -----------------------------------------------------------
 
     def _first_run(self):
         if not self.config_data.get("steamgriddb_api_key"):
             from tkinter import messagebox
-            if messagebox.askyesno(
-                "Setup",
-                "Steam Shortcut Forge can fetch icons from SteamGridDB.\n\n"
-                "You need a free API key from steamgriddb.com.\n\n"
-                "Enter your key now?",
-            ):
+            if messagebox.askyesno("Setup",
+                "Steam Shortcut Forge needs a SteamGridDB API key.\n\n"
+                "Get one free at steamgriddb.com → Profile → API.\n\nEnter now?"):
                 self._settings()
 
     def _scan(self):
-        self.status.configure(text="Scanning Steam libraries…")
+        self.status.configure(text="Scanning…")
         self.update_idletasks()
         try:
             self.games = scan_games()
@@ -876,173 +794,226 @@ class SteamShortcutForge(ctk.CTk):
 
     def _set_filter(self, mode: str):
         self._filter_mode = mode
-
-        # Update button styling
-        for btn, m in [(self.filter_all, "all"), (self.filter_with, "with"),
-                       (self.filter_without, "without")]:
+        for btn, m in [(self.chip_all, "all"), (self.chip_has, "with"),
+                       (self.chip_none, "without")]:
             if m == mode:
-                btn.configure(fg_color=C_FILTER_ACTIVE, text_color=C_TEXT,
+                btn.configure(fg_color=C_ACCENT_DIM, text_color=C_TEXT,
                               border_color=C_BORDER_ACCENT)
             else:
-                btn.configure(fg_color=C_FILTER_INACTIVE, text_color=C_TEXT_SECONDARY,
+                btn.configure(fg_color="transparent", text_color=C_TEXT3,
                               border_color=C_BORDER)
         self._filter()
 
     def _filter(self):
         q = self.search_var.get().strip().lower()
         filtered = self.games
-
         if q:
             filtered = [g for g in filtered if q in g.name.lower()]
-
         if self._filter_mode == "with":
             filtered = [g for g in filtered if g.has_shortcut]
         elif self._filter_mode == "without":
             filtered = [g for g in filtered if not g.has_shortcut]
 
-        # Clear
-        for row in self.rows:
-            row.destroy()
-        self.rows.clear()
-        self.selected_row = None
+        for it in self.items:
+            it.destroy()
+        self.items.clear()
+        self.selected_item = None
         self._set_actions(False)
 
         for i, game in enumerate(filtered):
-            row = GameRow(self.list_frame, game, on_select=self._select_row)
-            row.grid(row=i, column=0, sticky="ew", pady=3)
-            self.rows.append(row)
+            item = GameItem(self.game_list, game, on_click=self._select_game)
+            item.grid(row=i, column=0, sticky="ew", pady=2)
+            self.items.append(item)
 
-    def _select_row(self, row: GameRow):
-        if self.selected_row:
-            self.selected_row.set_selected(False)
-        row.set_selected(True)
-        self.selected_row = row
+    def _select_game(self, item: GameItem):
+        if self.selected_item:
+            self.selected_item.set_selected(False)
+        item.set_selected(True)
+        self.selected_item = item
         self._set_actions(True)
 
-    def _set_actions(self, enabled: bool):
-        state = "normal" if enabled else "disabled"
-        self.sgdb_btn.configure(state=state)
-        self.browse_btn.configure(state=state)
-        self.remove_btn.configure(state=state)
+        # Update header
+        self.main_header.configure(text=item.game.name)
+        self.main_sub.configure(text=f"App ID: {item.game.appid}  ·  Loading icons…")
 
-    # -- Settings -------------------------------------------------------
+        # Auto-fetch icons
+        self._load_icons(item.game)
+
+    def _set_actions(self, on: bool):
+        s = "normal" if on else "disabled"
+        self.browse_btn.configure(state=s)
+        self.remove_btn.configure(state=s)
+
+    # -- Icon loading ---------------------------------------------------
+
+    def _load_icons(self, game: SteamGame):
+        # Clear existing
+        for w in self.icon_area.winfo_children():
+            w.destroy()
+        self._icon_photos.clear()
+
+        key = self.config_data.get("steamgriddb_api_key")
+        if not key:
+            self.main_sub.configure(text="Set API key in Settings to browse icons")
+            return
+
+        client = SteamGridDBClient(key)
+
+        def fetch():
+            try:
+                gid = client.get_game_id(game.appid)
+                if gid is None:
+                    self.after(0, lambda: self.main_sub.configure(
+                        text=f"App ID: {game.appid}  ·  Not found on SteamGridDB"))
+                    return
+                icons = client.get_icons(gid)
+                if not icons:
+                    self.after(0, lambda: self.main_sub.configure(
+                        text=f"App ID: {game.appid}  ·  No icons available"))
+                    return
+
+                self.after(0, lambda: self.main_sub.configure(
+                    text=f"App ID: {game.appid}  ·  {len(icons)} icons  ·  Most popular first"))
+
+                for i, icon in enumerate(icons):
+                    try:
+                        data = client.download_thumbnail(icon.thumb)
+                        self.after(0, self._add_tile, i, icon, data, game)
+                    except Exception:
+                        continue
+
+            except RuntimeError as exc:
+                msg = str(exc)
+                self.after(0, lambda: self.main_sub.configure(text=msg))
+            except Exception as exc:
+                msg = f"Error: {exc}"
+                self.after(0, lambda: self.main_sub.configure(text=msg))
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+    def _add_tile(self, idx: int, icon: SGDBIcon, thumb_data: bytes, game: SteamGame):
+        # Only add if this game is still selected
+        if not self.selected_item or self.selected_item.game.appid != game.appid:
+            return
+
+        row, col = divmod(idx, self.ICON_COLS)
+        tile = IconTile(self.icon_area, icon, thumb_data, on_pick=self._pick_icon)
+        tile.grid(row=row, column=col, padx=6, pady=6)
+
+    def _pick_icon(self, icon: SGDBIcon):
+        if not self.selected_item:
+            return
+        game = self.selected_item.game
+        self.main_sub.configure(text=f"Downloading icon…")
+        self.update_idletasks()
+
+        def dl():
+            try:
+                ext = ".png" if ".png" in icon.url.lower() else (
+                    ".ico" if ".ico" in icon.url.lower() else ".png")
+                dest = ICON_STORE / f"{game.appid}_{icon.icon_id}{ext}"
+                client = SteamGridDBClient(self.config_data["steamgriddb_api_key"])
+                client.download_icon(icon.url, dest)
+                self.after(0, lambda: self._apply_icon(dest))
+            except Exception as exc:
+                msg = f"Download failed: {exc}"
+                self.after(0, lambda: self.main_sub.configure(text=msg))
+
+        threading.Thread(target=dl, daemon=True).start()
+
+    # -- Actions --------------------------------------------------------
 
     def _settings(self):
         SettingsDialog(self, self.config_data)
         self.config_data = load_config()
 
-    # -- Single-game actions --------------------------------------------
-
-    def _on_sgdb(self):
-        if not self.selected_row:
+    def _apply_icon(self, path: Path):
+        if not self.selected_item:
             return
-        key = self.config_data.get("steamgriddb_api_key")
-        if not key:
+        try:
+            create_shortcut(self.selected_item.game, path)
+        except Exception as e:
             from tkinter import messagebox
-            messagebox.showinfo("API Key Required",
-                                "Set your SteamGridDB API key in Settings first.")
+            messagebox.showerror("Error", str(e))
             return
-        client = SteamGridDBClient(key)
-        dialog = IconPickerDialog(self, self.selected_row.game, client)
-        self.wait_window(dialog)
-        if dialog.result_path:
-            self._apply_icon(dialog.result_path)
+        self.selected_item.refresh()
+        self.main_sub.configure(text=f"App ID: {self.selected_item.game.appid}  ·  Shortcut created!")
+        self.status.configure(
+            text=f"{len(self.games)} games  ·  "
+                 f"{sum(1 for g in self.games if g.has_shortcut)} with shortcuts")
 
     def _on_browse(self):
-        if not self.selected_row:
+        if not self.selected_item:
             return
         path = filedialog.askopenfilename(
-            title=f"Icon for {self.selected_row.game.name}",
+            title=f"Icon for {self.selected_item.game.name}",
             filetypes=[("Icon images", "*.ico *.png *.svg *.xpm"), ("All", "*.*")],
         )
         if path:
             self._apply_icon(Path(path))
 
-    def _apply_icon(self, path: Path):
-        if not self.selected_row:
-            return
-        try:
-            create_shortcut(self.selected_row.game, path)
-        except Exception as e:
-            from tkinter import messagebox
-            messagebox.showerror("Error", str(e))
-            return
-        self.selected_row.refresh()
-        self.status.configure(text=f"Shortcut created for {self.selected_row.game.name}")
-
     def _on_remove(self):
-        if not self.selected_row or not self.selected_row.game.has_shortcut:
+        if not self.selected_item or not self.selected_item.game.has_shortcut:
             return
         from tkinter import messagebox
-        if messagebox.askyesno("Remove", f"Remove shortcut for {self.selected_row.game.name}?"):
-            remove_shortcut(self.selected_row.game)
-            self.selected_row.refresh()
-            self.status.configure(text=f"Shortcut removed")
-
-    # -- Bulk auto-assign -----------------------------------------------
+        if messagebox.askyesno("Remove", f"Remove shortcut for {self.selected_item.game.name}?"):
+            remove_shortcut(self.selected_item.game)
+            self.selected_item.refresh()
+            self.main_sub.configure(text=f"App ID: {self.selected_item.game.appid}  ·  Shortcut removed")
+            self.status.configure(
+                text=f"{len(self.games)} games  ·  "
+                     f"{sum(1 for g in self.games if g.has_shortcut)} with shortcuts")
 
     def _on_bulk(self):
         key = self.config_data.get("steamgriddb_api_key")
         if not key:
             from tkinter import messagebox
-            messagebox.showinfo("API Key Required",
-                                "Set your SteamGridDB API key in Settings first.")
+            messagebox.showinfo("API Key Required", "Set your API key in Settings first.")
             return
-
-        games_todo = [g for g in self.games if not g.has_shortcut]
-        if not games_todo:
+        todo = [g for g in self.games if not g.has_shortcut]
+        if not todo:
             self.status.configure(text="All games already have shortcuts.")
             return
-
         from tkinter import messagebox
-        if not messagebox.askyesno(
-            "Auto-assign icons",
-            f"Fetch and assign the best icon for {len(games_todo)} game(s)?\n\n"
-            "This uses the highest-resolution PNG from SteamGridDB for each game.",
-        ):
+        if not messagebox.askyesno("Auto-assign",
+            f"Fetch the best icon for {len(todo)} game(s)?"):
             return
 
         self.bulk_btn.configure(state="disabled", text="Working…")
-        self.update_idletasks()
 
         def worker():
             client = SteamGridDBClient(key)
             done, fail = 0, 0
-            for i, game in enumerate(games_todo):
+            for i, game in enumerate(todo):
                 self.after(0, lambda g=game, n=i: self.status.configure(
-                    text=f"({n + 1}/{len(games_todo)}) Fetching icon for {g.name}…"))
+                    text=f"({n+1}/{len(todo)}) {g.name}…"))
                 try:
                     gid = client.get_game_id(game.appid)
-                    if gid is None:
-                        fail += 1
-                        continue
+                    if not gid:
+                        fail += 1; continue
                     icons = client.get_icons(gid)
                     if not icons:
-                        fail += 1
-                        continue
+                        fail += 1; continue
                     best = icons[0]
                     ext = ".png" if ".png" in best.url.lower() else ".ico"
                     dest = ICON_STORE / f"{game.appid}_{best.icon_id}{ext}"
                     client.download_icon(best.url, dest)
                     self.after(0, lambda g=game, d=dest: create_shortcut(g, d))
                     done += 1
-                    time.sleep(0.3)  # be kind to the API
+                    time.sleep(0.3)
                 except Exception:
                     fail += 1
-                    continue
-
-            def finish():
-                self.bulk_btn.configure(state="normal", text="⬇  Auto-assign all")
-                self.status.configure(text=f"Done — {done} assigned, {fail} skipped")
-                self._filter()
-
-            self.after(0, finish)
+            self.after(0, lambda: (
+                self.bulk_btn.configure(state="normal", text="⬇  Auto-assign all"),
+                self.status.configure(text=f"Done — {done} assigned, {fail} skipped"),
+                self._filter(),
+            ))
 
         threading.Thread(target=worker, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Entry
 # ---------------------------------------------------------------------------
 
 def main() -> int:
