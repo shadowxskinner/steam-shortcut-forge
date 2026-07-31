@@ -456,7 +456,7 @@ class IconifyClient:
             prefix, name = full_name.split(":", 1)
             collection = collections.get(prefix) or {}
             label = collection.get("name") or prefix
-            path = f"/{urllib.parse.quote(prefix, safe='')}/{urllib.parse.quote(name, safe='')}.svg?height=256"
+            path = f"/{urllib.parse.quote(prefix, safe='')}/{urllib.parse.quote(name, safe='')}.svg?height=256&color=%23ffffff"
             icons.append(SGDBIcon(
                 icon_id=f"iconify_{hashlib.md5(full_name.encode()).hexdigest()[:12]}",
                 url=f"{ICONIFY_HOSTS[0]}{path}",
@@ -1240,7 +1240,7 @@ class SteamShortcutForge(ctk.CTk):
         self.main_sub.configure(text=f"App ID: {item.game.appid}  ·  Loading icons…")
         self._update_iconify_search_visibility()
         if self.icon_source_var.get() == "Iconify":
-            self._seed_iconify_search(item.game)
+            self.iconify_search_var.set("")
 
         # Auto-fetch icons
         self._load_icons(item.game)
@@ -1258,7 +1258,7 @@ class SteamShortcutForge(ctk.CTk):
             self.main_sub.configure(
                 text=f"App ID: {self.selected_item.game.appid}  ·  Loading icons…")
             if self.icon_source_var.get() == "Iconify":
-                self._seed_iconify_search(self.selected_item.game)
+                self.iconify_search_var.set("")
             self._load_icons(self.selected_item.game)
 
     def _update_iconify_search_visibility(self):
@@ -1269,10 +1269,6 @@ class SteamShortcutForge(ctk.CTk):
             if self._iconify_search_job is not None:
                 self.after_cancel(self._iconify_search_job)
                 self._iconify_search_job = None
-
-    def _seed_iconify_search(self, game: SteamGame):
-        match = re.search(r"[\w+-]+", game.name)
-        self.iconify_search_var.set(match.group(0).lower() if match else "")
 
     def _schedule_iconify_search(self, event=None):
         if event is not None and getattr(event, "keysym", "") == "Return":
