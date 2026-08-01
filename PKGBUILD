@@ -19,6 +19,13 @@ makedepends=(
     'python-setuptools'
     'python-wheel'
 )
+# Icon themes are read from disk, never bundled — they carry their own
+# licenses (WhiteSur is GPL-3.0) and installing them is one command.
+optdepends=(
+    'papirus-icon-theme: large library of application icons to choose from'
+    'whitesur-icon-theme: macOS Big Sur style application icons'
+    'tela-icon-theme: flat colourful application icons'
+)
 source=("$pkgname-$pkgver.tar.gz::https://github.com/shadowxskinner/steam-shortcut-forge/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('4e50da4151b21c81eb78a56c56ef6919487147e746e4aa1ca737b7effb757ecd')
 

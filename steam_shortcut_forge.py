@@ -31,6 +31,7 @@ import tkinter as tk
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog
@@ -53,6 +54,12 @@ try:
 except ImportError:
     Image = ImageTk = None
     _LANCZOS = None
+
+# Many .ico files declare a size in their header that does not match the
+# embedded bitmap. Pillow decodes them correctly regardless, so the warning is
+# noise on every icon load. Scoped to this one message so nothing else hides.
+warnings.filterwarnings("ignore", message="Image was not the expected size",
+                        module="PIL.IcoImagePlugin")
 
 try:
     import cairosvg
@@ -255,6 +262,28 @@ class SGDBIcon:
 # A launcher slot is square. Anything wider than this letterboxes into a
 # sliver once scaled down, so it is not worth offering as a shortcut icon.
 LOGO_MAX_ASPECT = 2.0
+
+
+def _iconify_query_for(app) -> str:
+    """First Iconify query to try for an app, from its display name."""
+    return (app.name or "").strip().lower()
+
+
+def _iconify_fallback_query(app) -> str:
+    """Second query to try when the display name finds nothing.
+
+    Desktop files are frequently named in reverse-DNS form, and the final
+    component is usually the canonical application id that icon sets index
+    under — org.kde.dolphin becomes "dolphin", org.mozilla.firefox becomes
+    "firefox". Returns "" when it would duplicate the primary query.
+    """
+    source = getattr(app, "desktop_source", None)
+    if source is None:
+        return ""
+    stem = Path(source).stem
+    candidate = stem.rsplit(".", 1)[-1].strip().lower()
+    primary = _iconify_query_for(app)
+    return candidate if candidate and candidate != primary else ""
 
 
 def _ellipsize(text: str, limit: int) -> str:
@@ -1412,24 +1441,11 @@ class SteamShortcutForge(ctk.CTk):
         )
         self.main_sub.grid(row=1, column=0, sticky="w", padx=28, pady=(0, 16))
 
-        source_row = ctk.CTkFrame(main, fg_color="transparent")
-        source_row.grid(row=2, column=0, sticky="ew", padx=28, pady=(0, 10))
-        ctk.CTkLabel(source_row, text="Icon source", font=F_TINY,
-                     text_color=C_TEXT3).pack(side="left", padx=(0, 10))
-        self.source_selector = ctk.CTkSegmentedButton(
-            source_row,
-            values=["SteamGridDB", "Iconify"],
-            variable=self.icon_source_var,
-            command=self._on_source_changed,
-            selected_color=C_ACCENT_DIM,
-            selected_hover_color=C_CARD_HOVER,
-            unselected_color=C_CARD,
-            unselected_hover_color=C_CARD_HOVER,
-            text_color=C_TEXT,
-            height=30,
-        )
-        self.source_selector.pack(side="left")
-
+        # No source selector: each tab has exactly one online source.
+        # SteamGridDB is keyed on Steam appid and holds no system apps;
+        # Iconify indexes generic concepts and brand marks and holds no game
+        # art. Offering both in either tab only invites a search that cannot
+        # succeed, which is what made Iconify look broken on the Steam tab.
         self.iconify_search_frame = ctk.CTkFrame(main, fg_color="transparent")
         self.iconify_search_frame.grid(row=3, column=0, sticky="ew", padx=28, pady=(0, 10))
         ctk.CTkLabel(self.iconify_search_frame, text="Iconify search", font=F_TINY,
@@ -1596,7 +1612,7 @@ class SteamShortcutForge(ctk.CTk):
         self._update_source_options()
         self._update_iconify_search_visibility()
         if self.icon_source_var.get() == "Iconify":
-            self.iconify_search_var.set("")
+            self.iconify_search_var.set(_iconify_query_for(item.game))
 
         # Auto-fetch icons
         self._load_icons(item.game)
@@ -1617,23 +1633,9 @@ class SteamShortcutForge(ctk.CTk):
     # -- Icon loading ---------------------------------------------------
 
     def _update_source_options(self):
-        if self.app_tab_var.get() == "System":
-            self.source_selector.configure(values=["Iconify"])
-            self.icon_source_var.set("Iconify")
-        else:
-            self.source_selector.configure(values=["SteamGridDB", "Iconify"])
-            if self.icon_source_var.get() not in {"SteamGridDB", "Iconify"}:
-                self.icon_source_var.set("SteamGridDB")
-
-    def _on_source_changed(self, _value=None):
-        self._update_iconify_search_visibility()
-        if self.selected_item:
-            label = "Desktop" if self.selected_item.game.kind == "system" else "App ID"
-            self.main_sub.configure(
-                text=f"{label}: {self.selected_item.game.appid}  ·  Loading icons…")
-            if self.icon_source_var.get() == "Iconify":
-                self.iconify_search_var.set("")
-            self._load_icons(self.selected_item.game)
+        """The active tab determines the online source; there is no choice."""
+        self.icon_source_var.set(
+            "Iconify" if self.app_tab_var.get() == "System" else "SteamGridDB")
 
     def _update_iconify_search_visibility(self):
         if self.icon_source_var.get() == "Iconify":
@@ -1708,30 +1710,39 @@ class SteamShortcutForge(ctk.CTk):
                 if source == "SteamGridDB":
                     gid = client.get_game_id(game.appid)
                     if gid is None:
-                        self.after(0, lambda: self.main_sub.configure(
-                            text=f"App ID: {game.appid}  ·  Not found on SteamGridDB"))
+                        self.after(0, self._sub_if_current, game,
+                                   f"App ID: {game.appid}  ·  Not found on SteamGridDB")
                         return
                     icons = client.get_icons(gid)
                     if not icons:
-                        self.after(0, lambda: self.main_sub.configure(
-                            text=f"App ID: {game.appid}  ·  No icons available"))
+                        self.after(0, self._sub_if_current, game,
+                                   f"App ID: {game.appid}  ·  No icons available")
                         return
                     status = f"App ID: {game.appid}  ·  {len(icons)} icons  ·  Most popular first"
                 else:
                     query = self.iconify_search_var.get().strip()
                     if not query:
-                        self.after(0, lambda: self.main_sub.configure(
-                            text="Search 275,000 icons — try 'gamepad', 'steam', 'rocket'"))
+                        self.after(0, self._sub_if_current, game,
+                                   "Search 275,000 icons — try 'gamepad', 'steam', 'rocket'")
                         return
                     icons = client.search(query)
                     if not icons:
-                        self.after(0, lambda q=query: self.main_sub.configure(
-                            text=f"No icons match '{q}'"))
+                        # Display names often miss ("System Settings"), while the
+                        # desktop id usually hits ("org.kde.dolphin" -> dolphin).
+                        fallback = _iconify_fallback_query(game)
+                        if fallback:
+                            icons = client.search(fallback)
+                            if icons:
+                                query = fallback
+                                self.after(0, self._query_if_current, game, fallback)
+                    if not icons:
+                        self.after(0, self._sub_if_current, game,
+                                   f"No icons match '{query}' — try another term")
                         return
                     label = "Desktop" if game.kind == "system" else "App ID"
                     status = f"{label}: {game.appid}  ·  {len(icons)} Iconify icons for '{query}'"
 
-                self.after(0, lambda: self.main_sub.configure(text=status))
+                self.after(0, self._sub_if_current, game, status)
 
                 # Lay the full grid out first so it settles into its final
                 # shape immediately, then stream artwork into the placeholders.
@@ -1745,13 +1756,27 @@ class SteamShortcutForge(ctk.CTk):
                         continue
 
             except RuntimeError as exc:
-                msg = str(exc)
-                self.after(0, lambda: self.main_sub.configure(text=msg))
+                self.after(0, self._sub_if_current, game, str(exc))
             except Exception as exc:
-                msg = f"Error: {exc}"
-                self.after(0, lambda: self.main_sub.configure(text=msg))
+                self.after(0, self._sub_if_current, game, f"Error: {exc}")
 
         threading.Thread(target=fetch, daemon=True).start()
+
+    def _sub_if_current(self, game: SteamGame, text: str) -> None:
+        """Update the detail subtitle only if `game` is still selected.
+
+        Worker threads post these through self.after, so a slow lookup for one
+        app can land after the user has moved to another. _build_tiles and
+        _fill_tile already guard themselves; status and search-box updates must
+        too, or a stale worker relabels the app you are now looking at.
+        """
+        if self._still_showing(game):
+            self.main_sub.configure(text=text)
+
+    def _query_if_current(self, game: SteamGame, query: str) -> None:
+        """Set the Iconify search box only if `game` is still selected."""
+        if self._still_showing(game) and self.icon_source_var.get() == "Iconify":
+            self.iconify_search_var.set(query)
 
     def _still_showing(self, game: SteamGame) -> bool:
         return bool(self.selected_item) and self.selected_item.game.appid == game.appid
@@ -1848,8 +1873,7 @@ class SteamShortcutForge(ctk.CTk):
                 client.download_icon(icon.url, dest)
                 self.after(0, lambda: self._apply_icon(game, dest))
             except Exception as exc:
-                msg = f"Download failed: {exc}"
-                self.after(0, lambda: self.main_sub.configure(text=msg))
+                self.after(0, self._sub_if_current, game, f"Download failed: {exc}")
 
         threading.Thread(target=dl, daemon=True).start()
 
