@@ -264,6 +264,37 @@ class SGDBIcon:
 LOGO_MAX_ASPECT = 2.0
 
 
+def _theme_query_for(app) -> str:
+    """The icon name to look up in installed themes.
+
+    Icon= is normally a bare name (org.kde.dolphin) which is exactly the key
+    themes index under. Two cases need care:
+
+    * An absolute path pointing into our own ICON_STORE — that happens as soon
+      as the user assigns any icon, and its filename is a generated hash like
+      firefox.desktop_iconify_8086126f4e11. Searching that finds nothing.
+    * Any other absolute path, e.g. /usr/share/pixmaps/foo.png.
+
+    In both cases the desktop file's own basename is the better key, because it
+    is the application id themes index under: org.kde.dolphin.desktop ->
+    org.kde.dolphin, firefox.desktop -> firefox.
+    """
+    raw = (getattr(app, "icon_name", "") or "").strip()
+    fallback = Path(getattr(app, "appid", "") or "").stem
+
+    if not raw:
+        return fallback
+    if raw.startswith("/") or raw.startswith("~"):
+        expanded = Path(raw).expanduser()
+        try:
+            if expanded.is_relative_to(ICON_STORE):
+                return fallback          # our own generated filename
+        except (ValueError, OSError):
+            pass
+        return fallback or expanded.stem
+    return Path(raw).stem if Path(raw).suffix.lower() in THEME_ICON_EXTS else raw
+
+
 def _iconify_query_for(app) -> str:
     """First Iconify query to try for an app, from its display name."""
     return (app.name or "").strip().lower()
@@ -556,6 +587,7 @@ class SteamGame:
     kind: str = "steam"
     desktop_source: Path | None = None
     desktop_local: Path | None = None
+    icon_name: str = ""   # raw Icon= value; the key theme lookup uses
 
 
 _RE_APPID = re.compile(r'"appid"\s+"(\d+)"')
@@ -705,6 +737,268 @@ def _icon_roots() -> list[Path]:
     return roots
 
 
+THEME_ROOTS_EXTRA = ("~/.icons", "~/.local/share/icons")
+THEME_ICON_EXTS = (".svg", ".png", ".xpm")
+THEME_CACHE = "themes.json"
+# Bump when the indexer's traversal or ranking changes, so a cache written
+# by an older build is discarded instead of silently reused.
+THEME_INDEX_VERSION = 2
+_SCALABLE_RANK = 1_000_000  # scalable beats any fixed size
+
+
+def _theme_roots() -> list[Path]:
+    """Every directory that can contain installed icon themes."""
+    roots = list(_icon_roots())
+    roots += [Path(p).expanduser() for p in THEME_ROOTS_EXTRA]
+    seen, out = set(), []
+    for r in roots:
+        key = str(r)
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+
+def _size_rank(path: Path) -> int:
+    """Rank a candidate by the size directory in its path.
+
+    Theme layouts put the size in a path component — scalable/apps/x.svg or
+    256x256/apps/x.png. Bigger is better, and scalable beats everything since
+    it is resolution independent.
+    """
+    for part in path.parts:
+        low = part.lower()
+        if low == "scalable":
+            return _SCALABLE_RANK
+        m = re.fullmatch(r"(\d+)(?:x\d+)?", low)
+        if m:
+            return int(m.group(1))
+    return 0
+
+
+def _walk_theme(theme_dir: Path) -> dict[str, Path]:
+    """Map icon name -> best artwork path for one theme.
+
+    Follows symlinks, because themes like WhiteSur are largely symlink farms
+    generated at install time — skipping links would find almost nothing. A
+    visited (st_dev, st_ino) set prevents circular links from hanging the walk,
+    and anything resolving outside the theme root is ignored.
+    """
+    best: dict[str, tuple[int, Path]] = {}
+    visited: set[tuple[int, int]] = set()
+    try:
+        root_real = theme_dir.resolve()
+    except OSError:
+        return {}
+
+    for dirpath, dirnames, filenames in os.walk(theme_dir, followlinks=True):
+        here = Path(dirpath)
+        try:
+            st = here.stat()
+        except OSError:
+            dirnames[:] = []
+            continue
+        marker = (st.st_dev, st.st_ino)
+        if marker in visited:
+            dirnames[:] = []          # already walked — circular symlink
+            continue
+        visited.add(marker)
+        try:
+            if not here.resolve().is_relative_to(root_real):
+                dirnames[:] = []      # link escaped the theme
+                continue
+        except OSError:
+            dirnames[:] = []
+            continue
+
+        # Several layouts exist in the wild and all must be indexed:
+        #   hicolor/Papirus:  <size>/apps/name.svg
+        #   Breeze:           apps/<size>/name.svg
+        #   WhiteSur:         apps@2x/<size>/name.svg
+        # startswith rather than equality catches the @2x and -symbolic
+        # variants; it deliberately does not match "applications".
+        try:
+            rel = here.relative_to(theme_dir)
+        except ValueError:
+            continue
+        if not any(p.lower().startswith("apps") for p in rel.parts):
+            continue
+        rank = _size_rank(here)
+        for fname in filenames:
+            stem, ext = os.path.splitext(fname)
+            if ext.lower() not in THEME_ICON_EXTS:
+                continue
+            current = best.get(stem)
+            if current is None or rank > current[0]:
+                best[stem] = (rank, here / fname)
+    return {name: path for name, (_, path) in best.items()}
+
+
+class IconThemeClient:
+    """Installed icon themes as an icon source.
+
+    Unlike the online sources this needs no search in the common case: a
+    system app's .desktop already names its icon (Icon=org.kde.dolphin), so an
+    exact lookup across every installed theme returns that app's icon as each
+    theme draws it. Search is only the fallback.
+    """
+
+    _index: dict[str, dict[str, str]] | None = None
+    _signature: list[list] | None = None
+
+    @staticmethod
+    def _current_signature() -> list[list]:
+        sig = []
+        for root in _theme_roots():
+            if not root.is_dir():
+                continue
+            for theme_dir in sorted(root.iterdir()):
+                if not theme_dir.is_dir():
+                    continue
+                try:
+                    sig.append([str(theme_dir), int(theme_dir.stat().st_mtime)])
+                except OSError:
+                    continue
+        return sig
+
+    @classmethod
+    def index(cls) -> dict[str, dict[str, str]]:
+        """Build (or reuse) the theme index, cached on disk between runs."""
+        signature = cls._current_signature()
+        if cls._index is not None and cls._signature == signature:
+            return cls._index
+
+        cache = CACHE_DIR / THEME_CACHE
+        if cache.is_file():
+            try:
+                blob = json.loads(cache.read_text())
+                if (blob.get("version") == THEME_INDEX_VERSION
+                        and blob.get("signature") == signature):
+                    cls._index, cls._signature = blob["themes"], signature
+                    return cls._index
+            except (json.JSONDecodeError, OSError, KeyError, TypeError):
+                pass
+
+        themes: dict[str, dict[str, str]] = {}
+        for root in _theme_roots():
+            if not root.is_dir():
+                continue
+            for theme_dir in sorted(root.iterdir()):
+                if not theme_dir.is_dir():
+                    continue
+                found = _walk_theme(theme_dir)
+                if not found:
+                    continue
+                # Later roots win: a user copy shadows the system one.
+                themes.setdefault(theme_dir.name, {})
+                themes[theme_dir.name].update({k: str(v) for k, v in found.items()})
+
+        cls._index, cls._signature = themes, signature
+        try:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps({"version": THEME_INDEX_VERSION,
+                                         "signature": signature,
+                                         "themes": themes}))
+        except OSError:
+            pass
+        return themes
+
+    @staticmethod
+    def download_preview(icon: SGDBIcon) -> bytes:
+        """Theme artwork is already local — read it instead of fetching."""
+        return Path(icon.url).read_bytes()
+
+    @staticmethod
+    def _tile(theme: str, name: str, path: str) -> SGDBIcon:
+        return SGDBIcon(
+            icon_id=f"theme_{hashlib.md5(f'{theme}/{name}'.encode()).hexdigest()[:12]}",
+            url=path,
+            thumb=path,
+            width=0,
+            height=0,
+            mime="image/svg+xml" if path.lower().endswith(".svg") else "image/png",
+            style=theme,
+            source="theme",
+        )
+
+    @classmethod
+    def lookup(cls, icon_name: str) -> list[SGDBIcon]:
+        """Every installed theme's version of one exact icon name."""
+        icon_name = (icon_name or "").strip()
+        if not icon_name:
+            return []
+        out = []
+        for theme, icons in sorted(cls.index().items()):
+            path = icons.get(icon_name)
+            if path:
+                out.append(cls._tile(theme, icon_name, path))
+        return out
+
+    @classmethod
+    def search(cls, query: str, limit: int = 200) -> list[SGDBIcon]:
+        """Broaden from an exact name outward, best matches first.
+
+        Apps declare reverse-DNS icon names (org.kde.dolphin) but most themes
+        index generic freedesktop names (system-file-manager), so an exact
+        lookup alone returns nothing for most KDE applications. Widening in
+        stages keeps precise hits at the top while still filling the grid:
+
+        1. exact name across every theme
+        2. exact short name — org.kde.dolphin -> dolphin
+        3. substring on the short name, so "dolphin" also finds
+           "dolphin-symbolic" and friends
+        """
+        query = (query or "").strip()
+        if not query:
+            return []
+        short = query.rsplit(".", 1)[-1] if "." in query else query
+
+        out: list[SGDBIcon] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add(tiles):
+            for t in tiles:
+                key = (t.style, t.url)
+                if key not in seen:
+                    seen.add(key)
+                    out.append(t)
+
+        add(cls.lookup(query))
+        if short != query:
+            add(cls.lookup(short))
+
+        # Match both directions: "dolphin" should find "dolphin-symbolic", and
+        # "kwalletmanager5" should find "kwalletmanager". The length floor on
+        # the reverse direction stops short fragments matching everything.
+        needle = short.lower()
+        per_theme: dict[str, list[SGDBIcon]] = {}
+        for theme, icons in sorted(cls.index().items()):
+            hits = []
+            for name in sorted(icons):
+                low = name.lower()
+                if needle in low or (len(low) >= 4 and low in needle):
+                    hits.append(cls._tile(theme, name, icons[name]))
+            if hits:
+                per_theme[theme] = hits
+
+        # Round-robin rather than theme-by-theme. Walking themes in order and
+        # stopping at the limit means one large theme (Papirus has thousands of
+        # icons) consumes every slot and later themes never appear at all —
+        # results would silently disappear as the user installs more themes.
+        row = 0
+        while len(out) < limit and per_theme:
+            for theme in list(per_theme):
+                hits = per_theme[theme]
+                if row >= len(hits):
+                    del per_theme[theme]
+                    continue
+                add([hits[row]])
+                if len(out) >= limit:
+                    break
+            row += 1
+        return out
+
+
 def resolve_icon_path(icon_value: str) -> Path | None:
     icon_value = icon_value.strip()
     if not icon_value:
@@ -792,6 +1086,7 @@ def scan_system_apps() -> list[SteamGame]:
                 kind="system",
                 desktop_source=path,
                 desktop_local=local_path,
+                icon_name=icon_value,
             )
     return sorted(entries.values(), key=lambda g: g.name.lower())
 
@@ -1441,15 +1736,33 @@ class SteamShortcutForge(ctk.CTk):
         )
         self.main_sub.grid(row=1, column=0, sticky="w", padx=28, pady=(0, 16))
 
-        # No source selector: each tab has exactly one online source.
-        # SteamGridDB is keyed on Steam appid and holds no system apps;
-        # Iconify indexes generic concepts and brand marks and holds no game
-        # art. Offering both in either tab only invites a search that cannot
-        # succeed, which is what made Iconify look broken on the Steam tab.
+        # Source selector — shown only on the System tab, which genuinely has
+        # two. The Steam tab is SteamGridDB-only: Iconify holds no game art,
+        # and offering it there just invites a search that cannot succeed.
+        self.source_row = ctk.CTkFrame(main, fg_color="transparent")
+        self.source_row.grid(row=2, column=0, sticky="ew", padx=28, pady=(0, 10))
+        ctk.CTkLabel(self.source_row, text="Icon source", font=F_TINY,
+                     text_color=C_TEXT3).pack(side="left", padx=(0, 10))
+        self.source_selector = ctk.CTkSegmentedButton(
+            self.source_row,
+            values=["Icon themes", "Iconify"],
+            variable=self.icon_source_var,
+            command=self._on_source_changed,
+            selected_color=C_ACCENT_DIM,
+            selected_hover_color=C_CARD_HOVER,
+            unselected_color=C_CARD,
+            unselected_hover_color=C_CARD_HOVER,
+            text_color=C_TEXT,
+            height=30,
+        )
+        self.source_selector.pack(side="left")
+        self.source_row.grid_remove()
+
         self.iconify_search_frame = ctk.CTkFrame(main, fg_color="transparent")
         self.iconify_search_frame.grid(row=3, column=0, sticky="ew", padx=28, pady=(0, 10))
-        ctk.CTkLabel(self.iconify_search_frame, text="Iconify search", font=F_TINY,
-                     text_color=C_TEXT3).pack(side="left", padx=(0, 10))
+        self.search_label = ctk.CTkLabel(self.iconify_search_frame, text="Iconify search",
+                                         font=F_TINY, text_color=C_TEXT3)
+        self.search_label.pack(side="left", padx=(0, 10))
         self.iconify_search_entry = ctk.CTkEntry(
             self.iconify_search_frame,
             textvariable=self.iconify_search_var,
@@ -1562,6 +1875,7 @@ class SteamShortcutForge(ctk.CTk):
         self.main_header.configure(text="Select an app" if self.app_tab_var.get() == "System" else "Select a game")
         self.main_sub.configure(text="Choose an app from the sidebar to browse icons")
         self._update_source_options()
+        self._update_iconify_search_visibility()
         self._filter()
         self._update_status_summary()
 
@@ -1611,8 +1925,7 @@ class SteamShortcutForge(ctk.CTk):
         self.main_sub.configure(text=f"{label}: {item.game.appid}  ·  Loading icons…")
         self._update_source_options()
         self._update_iconify_search_visibility()
-        if self.icon_source_var.get() == "Iconify":
-            self.iconify_search_var.set(_iconify_query_for(item.game))
+        self._seed_query(item.game)
 
         # Auto-fetch icons
         self._load_icons(item.game)
@@ -1633,12 +1946,37 @@ class SteamShortcutForge(ctk.CTk):
     # -- Icon loading ---------------------------------------------------
 
     def _update_source_options(self):
-        """The active tab determines the online source; there is no choice."""
-        self.icon_source_var.set(
-            "Iconify" if self.app_tab_var.get() == "System" else "SteamGridDB")
+        """Steam has one source; System has two, so only System shows a picker."""
+        if self.app_tab_var.get() == "System":
+            if self.icon_source_var.get() not in {"Icon themes", "Iconify"}:
+                self.icon_source_var.set("Icon themes")
+            self.source_row.grid()
+        else:
+            self.icon_source_var.set("SteamGridDB")
+            self.source_row.grid_remove()
+
+    def _seed_query(self, game: SteamGame):
+        """Pre-fill the search box with the right starting term for the source."""
+        source = self.icon_source_var.get()
+        if source == "Icon themes":
+            self.iconify_search_var.set(_theme_query_for(game))
+        elif source == "Iconify":
+            self.iconify_search_var.set(_iconify_query_for(game))
+
+    def _on_source_changed(self, _value=None):
+        self._update_iconify_search_visibility()
+        if self.selected_item:
+            self._seed_query(self.selected_item.game)
+            self._load_icons(self.selected_item.game)
 
     def _update_iconify_search_visibility(self):
-        if self.icon_source_var.get() == "Iconify":
+        source = self.icon_source_var.get()
+        if source in {"Icon themes", "Iconify"}:
+            self.search_label.configure(
+                text="Icon name" if source == "Icon themes" else "Iconify search")
+            self.iconify_search_entry.configure(
+                placeholder_text="firefox, org.kde.dolphin…" if source == "Icon themes"
+                else "gamepad, steam, rocket…")
             self.iconify_search_frame.grid()
         else:
             self.iconify_search_frame.grid_remove()
@@ -1649,7 +1987,8 @@ class SteamShortcutForge(ctk.CTk):
     def _schedule_iconify_search(self, event=None):
         if event is not None and getattr(event, "keysym", "") == "Return":
             return None
-        if self.icon_source_var.get() != "Iconify" or not self.selected_item:
+        if self.icon_source_var.get() not in {"Icon themes", "Iconify"} \
+                or not self.selected_item:
             return None
         if self._iconify_search_job is not None:
             self.after_cancel(self._iconify_search_job)
@@ -1694,20 +2033,37 @@ class SteamShortcutForge(ctk.CTk):
 
         source = self.icon_source_var.get()
         if game.kind == "system" and source == "SteamGridDB":
-            source = "Iconify"
-            self.icon_source_var.set("Iconify")
+            source = "Icon themes"
+            self.icon_source_var.set("Icon themes")
         if source == "SteamGridDB":
             key = self.config_data.get("steamgriddb_api_key")
             if not key:
                 self.main_sub.configure(text="Set API key in Settings to browse icons")
                 return
             client = SteamGridDBClient(key)
+        elif source == "Icon themes":
+            client = IconThemeClient()
         else:
             client = IconifyClient()
 
         def fetch():
             try:
-                if source == "SteamGridDB":
+                if source == "Icon themes":
+                    query = self.iconify_search_var.get().strip()
+                    # The exact Icon= name is a direct hit across every theme;
+                    # substring search only matters when that name is unknown.
+                    # search() already leads with exact matches, then widens.
+                    icons = client.search(query) if query else []
+                    if not icons:
+                        themes = len(client.index())
+                        self.after(0, self._sub_if_current, game,
+                                   f"No installed theme has '{query}'  ·  "
+                                   f"{themes} theme(s) indexed" if query else
+                                   "Type an icon name to search installed themes")
+                        return
+                    status = (f"{len(icons)} icons in installed themes"
+                              f" for '{query}'")
+                elif source == "SteamGridDB":
                     gid = client.get_game_id(game.appid)
                     if gid is None:
                         self.after(0, self._sub_if_current, game,
@@ -1860,6 +2216,20 @@ class SteamShortcutForge(ctk.CTk):
 
         def dl():
             try:
+                if icon.source == "theme":
+                    # Already on disk — copy into ICON_STORE rather than
+                    # pointing Icon= at /usr/share/icons/<theme>/. A path into
+                    # a theme dies the day that theme is removed or updated;
+                    # a copy keeps the override self-contained.
+                    src = Path(icon.url)
+                    ext = src.suffix.lower()
+                    if ext not in VALID_ICON_EXTS:
+                        ext = ".png"
+                    dest = ICON_STORE / f"{game.appid}_{icon.icon_id}{ext}"
+                    ICON_STORE.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src, dest)
+                    self.after(0, lambda: self._apply_icon(game, dest))
+                    return
                 if icon.source == "iconify":
                     ext = ".svg"
                     dest = ICON_STORE / f"{game.appid}_{icon.icon_id}{ext}"
