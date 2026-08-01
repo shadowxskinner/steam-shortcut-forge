@@ -27,7 +27,7 @@ optdepends=(
     'tela-icon-theme: flat colourful application icons'
 )
 source=("$pkgname-$pkgver.tar.gz::https://github.com/shadowxskinner/steam-shortcut-forge/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('4e50da4151b21c81eb78a56c56ef6919487147e746e4aa1ca737b7effb757ecd')
+sha256sums=('eab72f35eb9084c7e795e2c25da1dad428d8746dd356baa0f0ba2c8f4a90da64')
 
 build() {
     cd "$pkgname-$pkgver"
