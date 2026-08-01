@@ -71,7 +71,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 APP_NAME = "steam-shortcut-forge"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.3.0"
 USER_AGENT = f"SteamShortcutForge/{APP_VERSION}"
 CONFIG_DIR = Path.home() / ".config" / APP_NAME
 CONFIG_FILE = CONFIG_DIR / "config.json"
