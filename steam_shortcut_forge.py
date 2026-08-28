@@ -38,6 +38,8 @@ from tkinter import filedialog
 
 import customtkinter as ctk
 
+from kairo.desktop import entry as _de
+
 # CustomTkinter draws rounded corners from a bundled OTF on Linux, but its
 # FontManager.load_font() only copies the file into ~/.fonts and returns True
 # without checking Tk can actually use it — so corners silently render square.
@@ -665,28 +667,9 @@ def scan_games() -> list[SteamGame]:
 # System application scanning
 # ---------------------------------------------------------------------------
 
-def _desktop_parser() -> configparser.RawConfigParser:
-    parser = configparser.RawConfigParser(interpolation=None, strict=False)
-    parser.optionxform = str
-    return parser
-
-
-def _parse_desktop(path: Path) -> configparser.RawConfigParser | None:
-    parser = _desktop_parser()
-    try:
-        parser.read(path, encoding="utf-8")
-    except (configparser.Error, UnicodeDecodeError, OSError):
-        return None
-    if not parser.has_section("Desktop Entry"):
-        return None
-    return parser
-
-
-def _desktop_bool(entry, key: str) -> bool:
-    try:
-        return entry.getboolean(key, fallback=False)
-    except ValueError:
-        return False
+_desktop_parser = _de.make_parser
+_parse_desktop = _de.parse
+_desktop_bool = _de.get_bool
 
 
 def _current_desktops() -> set[str]:
@@ -701,10 +684,12 @@ def _only_show_in_matches(value: str) -> bool:
 
 
 def _is_managed_desktop(path: Path) -> bool:
-    parser = _parse_desktop(path)
-    if parser is None:
-        return False
-    return parser.getboolean("Desktop Entry", MANAGED_KEY, fallback=False)
+    """True only for files this application wrote.
+
+    The authoritative check before overwriting or deleting anything in
+    ~/.local/share/applications. A hand-written override carries no marker.
+    """
+    return _de.is_managed(path)
 
 
 def _theme_names() -> list[str]:
@@ -1133,13 +1118,13 @@ def _desktop_escape(value: str) -> str:
 
 
 def _desktop_icon(path: Path) -> Path | None:
-    try:
-        for line in path.read_text(errors="ignore").splitlines():
-            if line.startswith("Icon="):
-                return Path(line.split("=", 1)[1].strip())
-    except OSError:
-        pass
-    return None
+    """The [Desktop Entry] icon, as a path.
+
+    Scoped to the group: a plain scan for a line starting with Icon= also
+    matches [Desktop Action ...] groups, which often carry their own.
+    """
+    value = _de.read_entry_icon(path)
+    return Path(value) if value else None
 
 
 def _existing_shortcuts() -> dict[str, Path | None]:
@@ -1207,79 +1192,11 @@ def remove_shortcut(game: SteamGame) -> None:
     _refresh_db()
 
 
-def _line_ending(text: str) -> str:
-    return "\r\n" if "\r\n" in text else "\n"
-
-
-def _split_key(line: str) -> tuple[str, str] | None:
-    stripped = line.lstrip()
-    if not stripped or stripped.startswith(("#", ";", "[")) or "=" not in stripped:
-        return None
-    key, value = stripped.split("=", 1)
-    return key.strip(), value.rstrip("\r\n")
-
-
 def _rewrite_desktop_entry_icon(text: str, icon_value: str, original_icon: str) -> str:
-    newline = _line_ending(text)
-    lines = text.splitlines(keepends=True)
-    out: list[str] = []
-    in_entry = False
-    saw_entry = False
-    icon_done = False
-    managed_done = False
-    original_done = False
-
-    def pending_marker_lines() -> list[str]:
-        pending: list[str] = []
-        if not icon_done:
-            pending.append(f"Icon={icon_value}{newline}")
-        if not managed_done:
-            pending.append(f"{MANAGED_KEY}=true{newline}")
-        if not original_done:
-            pending.append(f"{ORIGINAL_ICON_KEY}={original_icon}{newline}")
-        return pending
-
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            if in_entry:
-                out.extend(pending_marker_lines())
-                in_entry = False
-            if stripped == "[Desktop Entry]":
-                in_entry = True
-                saw_entry = True
-            out.append(line)
-            continue
-
-        if in_entry:
-            pair = _split_key(line)
-            if pair:
-                key, _value = pair
-                if key == "Icon":
-                    if not icon_done:
-                        out.append(f"Icon={icon_value}{newline}")
-                        icon_done = True
-                    continue
-                if key == MANAGED_KEY:
-                    if not managed_done:
-                        out.append(f"{MANAGED_KEY}=true{newline}")
-                        managed_done = True
-                    continue
-                if key == ORIGINAL_ICON_KEY:
-                    if not original_done:
-                        out.append(f"{ORIGINAL_ICON_KEY}={original_icon}{newline}")
-                        original_done = True
-                    continue
-        out.append(line)
-
-    if in_entry:
-        out.extend(pending_marker_lines())
-    elif not saw_entry:
-        out.append(f"[Desktop Entry]{newline}")
-        out.append(f"Icon={icon_value}{newline}")
-        out.append(f"{MANAGED_KEY}=true{newline}")
-        out.append(f"{ORIGINAL_ICON_KEY}={original_icon}{newline}")
-    return "".join(out)
+    """Scoped, line-preserving Icon= rewrite. See kairo.desktop.entry."""
+    return _de.rewrite_entry_icon(text, icon_value, original_icon,
+                                  managed_key=MANAGED_KEY,
+                                  original_key=ORIGINAL_ICON_KEY)
 
 
 def create_system_override(app: SteamGame, icon_src: Path) -> None:
@@ -1306,7 +1223,7 @@ def create_system_override(app: SteamGame, icon_src: Path) -> None:
 
     APPLICATIONS_DIR.mkdir(parents=True, exist_ok=True)
     rewritten = _rewrite_desktop_entry_icon(source_text, str(icon_src), original_icon)
-    target.write_text(rewritten, encoding="utf-8", errors="surrogateescape")
+    _de.atomic_write_text(target, rewritten)
     app.has_shortcut = True
     app.icon_path = icon_src
     app.desktop_local = target
@@ -1538,7 +1455,9 @@ class IconTile(ctk.CTkFrame):
 class SettingsDialog(ctk.CTkToplevel):
     def __init__(self, parent, config: dict):
         super().__init__(parent)
-        self.config = config
+        # NOT self.config — that shadows tkinter.Misc.config(), which
+        # CustomTkinter calls internally on every widget.
+        self.cfg = config
         self.title("Settings")
         self.geometry("480x220")
         self.configure(fg_color=C_BG)
@@ -1574,10 +1493,10 @@ class SettingsDialog(ctk.CTkToplevel):
     def _save(self):
         key = self.key_entry.get().strip()
         if key:
-            self.config["steamgriddb_api_key"] = key
+            self.cfg["steamgriddb_api_key"] = key
         else:
-            self.config.pop("steamgriddb_api_key", None)
-        save_config(self.config)
+            self.cfg.pop("steamgriddb_api_key", None)
+        save_config(self.cfg)
         self.destroy()
 
 

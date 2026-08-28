@@ -1,0 +1,322 @@
+"""Parsing and surgical editing of freedesktop ``.desktop`` files.
+
+This module is deliberately free of any GUI import so that it can be unit
+tested. It is the only place in Kairo that writes to a ``.desktop`` file, and
+it is the most dangerous code in the project: it edits files that live in the
+user's launcher directory.
+
+Two rules govern everything here.
+
+1. **Only ``Icon=`` inside the ``[Desktop Entry]`` group is ever touched.**
+   A ``[Desktop Action ...]`` group may carry its own ``Icon=`` for a jump-list
+   item; rewriting that would change an action's appearance for no reason.
+2. **Everything else survives byte for byte.** ``MimeType``, ``StartupWMClass``,
+   ``Actions``, translated ``Name[xx]`` keys, vendor ``X-*`` keys, comments,
+   blank lines and the file's original line endings are all preserved. A
+   regenerated file loses default-handler associations and window matching.
+"""
+
+from __future__ import annotations
+
+import configparser
+import os
+import tempfile
+from pathlib import Path
+
+DESKTOP_ENTRY_GROUP = "[Desktop Entry]"
+
+# Marker keys, most-preferred first. Kairo writes the first entry and accepts
+# any of them on read. The legacy Shortcut Forge keys must stay in these tuples
+# permanently: ``revert`` refuses to delete a file that carries no marker, so
+# dropping the old key would strand every override made before the rename with
+# no in-app way to restore the original icon.
+MANAGED_KEYS: tuple[str, ...] = ("X-ShortcutForge-Managed",)
+ORIGINAL_ICON_KEYS: tuple[str, ...] = ("X-ShortcutForge-OriginalIcon",)
+
+
+class DesktopEntryError(ValueError):
+    """Raised when a .desktop file cannot be safely edited."""
+
+
+# ---------------------------------------------------------------------------
+# Reading
+# ---------------------------------------------------------------------------
+
+def make_parser() -> configparser.RawConfigParser:
+    """A parser configured for the .desktop dialect.
+
+    ``optionxform = str`` keeps key case, which matters because ``Icon`` and
+    ``X-Kairo-Managed`` are case sensitive in the spec. ``strict=False``
+    tolerates duplicate keys rather than raising on a file we did not write.
+    """
+    parser = configparser.RawConfigParser(interpolation=None, strict=False)
+    parser.optionxform = str
+    return parser
+
+
+def parse(path: Path) -> configparser.RawConfigParser | None:
+    """Parse a .desktop file, or return None if it is unusable.
+
+    Returns None rather than raising for malformed, unreadable or
+    non-UTF-8 files, and for anything lacking a ``[Desktop Entry]`` group.
+    Callers treat None as "skip this file".
+    """
+    parser = make_parser()
+    try:
+        parser.read(path, encoding="utf-8")
+    except (configparser.Error, UnicodeDecodeError, OSError):
+        return None
+    if not parser.has_section("Desktop Entry"):
+        return None
+    return parser
+
+
+def get_bool(entry, key: str) -> bool:
+    try:
+        return entry.getboolean(key, fallback=False)
+    except ValueError:
+        return False
+
+
+def read_entry_icon(path: Path) -> str:
+    """The ``Icon=`` value from ``[Desktop Entry]``, or "" if absent.
+
+    Scoped to the group deliberately. A plain scan for a line starting with
+    ``Icon=`` also matches ``[Desktop Action ...]`` groups, which frequently
+    declare their own, and would then report an action's icon as the
+    application's.
+    """
+    text = _read_text(path)
+    if text is None:
+        return ""
+    for group, key, value, _raw in _iter_lines(text):
+        if group == DESKTOP_ENTRY_GROUP and key == "Icon":
+            return value.strip()
+    return ""
+
+
+def read_entry_value(path: Path, keys: tuple[str, ...] | str) -> str:
+    """First present value among ``keys`` in ``[Desktop Entry]``, else ""."""
+    if isinstance(keys, str):
+        keys = (keys,)
+    text = _read_text(path)
+    if text is None:
+        return ""
+    found: dict[str, str] = {}
+    for group, key, value, _raw in _iter_lines(text):
+        if group == DESKTOP_ENTRY_GROUP and key in keys and key not in found:
+            found[key] = value.strip()
+    for key in keys:
+        if key in found:
+            return found[key]
+    return ""
+
+
+def is_managed(path: Path, keys: tuple[str, ...] = MANAGED_KEYS) -> bool:
+    """True when the file carries one of our ownership markers set to true.
+
+    This is the authoritative permission check before deleting or overwriting
+    anything in the user's applications directory. A hand-written override
+    carries no marker and must never be touched.
+    """
+    value = read_entry_value(path, keys).strip().lower()
+    return value in {"true", "1", "yes"}
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8", errors="surrogateescape")
+    except OSError:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Line-level scanning
+# ---------------------------------------------------------------------------
+
+def _split_key(line: str) -> tuple[str, str] | None:
+    """Split a ``Key=Value`` line, or None for comments, blanks and headers."""
+    stripped = line.lstrip()
+    if not stripped or stripped.startswith(("#", ";", "[")) or "=" not in stripped:
+        return None
+    key, value = stripped.split("=", 1)
+    return key.strip(), value.rstrip("\r\n")
+
+
+def _group_header(line: str) -> str | None:
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        return stripped
+    return None
+
+
+def _iter_lines(text: str):
+    """Yield ``(group, key, value, raw_line)`` for every line in the file.
+
+    ``group`` is the current section header (or "" before the first one) and
+    ``key``/``value`` are None for headers, comments and blank lines.
+    """
+    group = ""
+    for raw in text.splitlines(keepends=True):
+        header = _group_header(raw)
+        if header is not None:
+            group = header
+            yield group, None, None, raw
+            continue
+        pair = _split_key(raw)
+        if pair is None:
+            yield group, None, None, raw
+        else:
+            yield group, pair[0], pair[1], raw
+
+
+def detect_newline(text: str) -> str:
+    return "\r\n" if "\r\n" in text else "\n"
+
+
+# ---------------------------------------------------------------------------
+# Writing
+# ---------------------------------------------------------------------------
+
+def escape_value(value: str) -> str:
+    """Escape a value for a .desktop field."""
+    return (value
+            .replace("\\", "\\\\")
+            .replace("\n", "\\n")
+            .replace("\t", "\\t")
+            .replace("\r", "\\r"))
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write via a temp file in the same directory, then ``os.replace``.
+
+    A crash or a full disk mid-write then leaves either the old file or the new
+    one, never a truncated .desktop that the launcher will show as a broken
+    entry. Same-directory placement keeps the replace on one filesystem, which
+    is what makes it atomic.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".kairo-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def rewrite_entry_icon(
+    text: str,
+    icon_value: str,
+    original_icon: str,
+    *,
+    managed_key: str = MANAGED_KEYS[0],
+    original_key: str = ORIGINAL_ICON_KEYS[0],
+    extra_managed_keys: tuple[str, ...] = (),
+) -> str:
+    """Return ``text`` with ``Icon=`` in ``[Desktop Entry]`` replaced.
+
+    Also stamps the ownership marker and records the pre-change icon so a
+    restore is possible even if the source file later changes. Any key listed
+    in ``extra_managed_keys`` that is already present is left in place, so a
+    file stamped by an older release keeps its old marker alongside the new one
+    and stays revertable by both.
+
+    Only the *first* ``[Desktop Entry]`` group is edited. The spec permits
+    exactly one; a malformed file with two is left alone after the first rather
+    than having lines silently dropped from it.
+
+    Raises DesktopEntryError when there is no ``[Desktop Entry]`` group at all.
+    Fabricating one would write a file into the launcher that claims to
+    describe an application it knows nothing about.
+    """
+    newline = detect_newline(text)
+    lines = text.splitlines(keepends=True)
+
+    if not any(_group_header(ln) == DESKTOP_ENTRY_GROUP for ln in lines):
+        raise DesktopEntryError("no [Desktop Entry] group")
+
+    out: list[str] = []
+    in_entry = False
+    entry_seen = False
+    icon_done = False
+    managed_done = False
+    original_done = False
+
+    def pending() -> list[str]:
+        add: list[str] = []
+        if not icon_done:
+            add.append(f"Icon={icon_value}{newline}")
+        if not managed_done:
+            add.append(f"{managed_key}=true{newline}")
+        if not original_done:
+            add.append(f"{original_key}={original_icon}{newline}")
+        return add
+
+    def flush(buf: list[str]) -> None:
+        """Append generated lines, ensuring the previous line is terminated.
+
+        A file whose last line has no trailing newline would otherwise get the
+        first generated key glued onto it: ``Terminal=falseIcon=/path``.
+        """
+        add = pending()
+        if not add:
+            return
+        if buf and not buf[-1].endswith(("\n", "\r")):
+            buf[-1] = buf[-1] + newline
+        buf.extend(add)
+
+    for raw in lines:
+        header = _group_header(raw)
+        if header is not None:
+            if in_entry:
+                flush(out)
+                in_entry = False
+            if header == DESKTOP_ENTRY_GROUP and not entry_seen:
+                in_entry = True
+                entry_seen = True
+            out.append(raw)
+            continue
+
+        if in_entry:
+            pair = _split_key(raw)
+            if pair is not None:
+                key = pair[0]
+                if key == "Icon":
+                    if not icon_done:
+                        out.append(f"Icon={icon_value}{newline}")
+                        icon_done = True
+                    continue
+                if key == managed_key:
+                    if not managed_done:
+                        out.append(f"{managed_key}=true{newline}")
+                        managed_done = True
+                    continue
+                if key == original_key:
+                    if not original_done:
+                        out.append(f"{original_key}={original_icon}{newline}")
+                        original_done = True
+                    continue
+                if key in extra_managed_keys:
+                    # A marker from an older release. Keep it verbatim so a
+                    # downgrade can still recognise and revert this file.
+                    out.append(raw)
+                    continue
+        out.append(raw)
+
+    if in_entry:
+        flush(out)
+
+    return "".join(out)
+
+
+def build_entry(fields: dict[str, str], *, newline: str = "\n") -> str:
+    """Render a fresh ``[Desktop Entry]`` file from ordered fields."""
+    parts = [f"{DESKTOP_ENTRY_GROUP}{newline}"]
+    for key, value in fields.items():
+        parts.append(f"{key}={value}{newline}")
+    return "".join(parts)
