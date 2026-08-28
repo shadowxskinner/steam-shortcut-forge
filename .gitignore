@@ -10,3 +10,6 @@ build/
 *.pkg.tar.zst
 pkg/
 src/
+
+# build output
+*.whl
