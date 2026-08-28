@@ -78,7 +78,7 @@ def get_bool(entry, key: str) -> bool:
         return False
 
 
-def read_entry_icon(path: Path) -> str:
+def entry_icon_from_text(text: str) -> str:
     """The ``Icon=`` value from ``[Desktop Entry]``, or "" if absent.
 
     Scoped to the group deliberately. A plain scan for a line starting with
@@ -86,22 +86,16 @@ def read_entry_icon(path: Path) -> str:
     declare their own, and would then report an action's icon as the
     application's.
     """
-    text = _read_text(path)
-    if text is None:
-        return ""
     for group, key, value, _raw in _iter_lines(text):
         if group == DESKTOP_ENTRY_GROUP and key == "Icon":
             return value.strip()
     return ""
 
 
-def read_entry_value(path: Path, keys: tuple[str, ...] | str) -> str:
+def entry_value_from_text(text: str, keys: tuple[str, ...] | str) -> str:
     """First present value among ``keys`` in ``[Desktop Entry]``, else ""."""
     if isinstance(keys, str):
         keys = (keys,)
-    text = _read_text(path)
-    if text is None:
-        return ""
     found: dict[str, str] = {}
     for group, key, value, _raw in _iter_lines(text):
         if group == DESKTOP_ENTRY_GROUP and key in keys and key not in found:
@@ -110,6 +104,16 @@ def read_entry_value(path: Path, keys: tuple[str, ...] | str) -> str:
         if key in found:
             return found[key]
     return ""
+
+
+def read_entry_icon(path: Path) -> str:
+    text = _read_text(path)
+    return entry_icon_from_text(text) if text is not None else ""
+
+
+def read_entry_value(path: Path, keys: tuple[str, ...] | str) -> str:
+    text = _read_text(path)
+    return entry_value_from_text(text, keys) if text is not None else ""
 
 
 def is_managed(path: Path, keys: tuple[str, ...] = MANAGED_KEYS) -> bool:
