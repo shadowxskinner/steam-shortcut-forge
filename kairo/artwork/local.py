@@ -31,7 +31,8 @@ class LocalFileSource(ArtworkSource):
     @staticmethod
     def artwork_for(path: Path) -> Artwork:
         return Artwork(id=f"local_{path.name}", source_id=SOURCE_ID,
-                       label="Local file", locator=str(path), kind="icon")
+                       name=path.stem, label="Local file",
+                       locator=str(path), kind="icon")
 
     def preview(self, art: Artwork) -> bytes:
         return Path(art.locator).read_bytes()

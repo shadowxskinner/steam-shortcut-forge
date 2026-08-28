@@ -14,7 +14,7 @@ from pathlib import Path
 
 from kairo import net, paths
 from kairo.artwork.base import ArtworkSource
-from kairo.models import Artwork, ArtQuery
+from kairo.models import CONFIDENCE_EXACT_SEARCH, Artwork, ArtQuery, Suggestion
 
 SOURCE_ID = "iconify"
 
@@ -37,10 +37,9 @@ class IconifySource(ArtworkSource):
     query_placeholder = "gamepad, browser, terminal..."
 
     def supports(self, provider_id: str) -> bool:
-        # Parity with the shipped UI, which offered Iconify for desktop entries
-        # only. Opening it to Steam is a one-line change and worth doing: it
-        # covers games SteamGridDB does not index.
-        return provider_id == "desktop"
+        # Every provider, including Steam: Iconify covers games SteamGridDB
+        # does not index, and is the only keyless source for them.
+        return True
 
     # -- HTTP ------------------------------------------------------------
 
@@ -89,6 +88,7 @@ class IconifySource(ArtworkSource):
             out.append(Artwork(
                 id=f"iconify_{hashlib.md5(full_name.encode()).hexdigest()[:12]}",
                 source_id=self.id,
+                name=name,
                 label=collection.get("name") or prefix,
                 width=RENDER_HEIGHT,
                 height=RENDER_HEIGHT,
@@ -97,6 +97,29 @@ class IconifySource(ArtworkSource):
                 kind="icon",
             ))
         return out
+
+    def best_match(self, query: ArtQuery) -> Suggestion | None:
+        """Only when an icon set contains this exact name.
+
+        Iconify search is a relevance ranking over 275,000 icons, so its top
+        result is often merely thematically related - searching "steam" returns
+        locomotives. Requiring the icon's own name to equal the search term
+        turns a fuzzy source into one that can say "yes, this set has an icon
+        called firefox" and nothing weaker.
+        """
+        for term in (query.text, query.fallback_text):
+            term = (term or "").strip().lower()
+            if not term:
+                continue
+            try:
+                results = self._search(term)
+            except Exception:
+                return None
+            for art in results:
+                if art.name.lower() == term:
+                    return Suggestion(art, CONFIDENCE_EXACT_SEARCH,
+                                      f"'{term}' in {art.label}")
+        return None
 
     # -- transfer --------------------------------------------------------
 

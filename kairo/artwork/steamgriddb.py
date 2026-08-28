@@ -16,7 +16,7 @@ from typing import Any
 
 from kairo import net, paths
 from kairo.artwork.base import ArtworkSource
-from kairo.models import Artwork, ArtQuery
+from kairo.models import CONFIDENCE_ID, Artwork, ArtQuery, Suggestion
 
 SOURCE_ID = "steamgriddb"
 API_BASE = "https://www.steamgriddb.com/api/v2"
@@ -170,6 +170,19 @@ class SteamGridDBSource(ArtworkSource):
         assets.sort(key=lambda a: (a.kind == "icon", a.score, a.width * a.height),
                     reverse=True)
         return assets
+
+    def best_match(self, query: ArtQuery) -> Suggestion | None:
+        """Highest confidence available anywhere in Kairo.
+
+        The lookup is keyed on the Steam appid, so there is no question of
+        having found the wrong game. find() already ranks real icons above
+        wordmark logos, so the first result is the one to take.
+        """
+        results = self.find(query)
+        if not results:
+            return None
+        return Suggestion(results[0], CONFIDENCE_ID,
+                          f"matched by Steam app ID {query.steam_appid}")
 
     # -- transfer --------------------------------------------------------
 

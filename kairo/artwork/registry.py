@@ -40,6 +40,23 @@ class ArtworkRegistry:
                 and s.available(config)]
 
 
+    def auto_match_chain(self, provider,
+                         config: dict[str, Any] | None = None) -> list[ArtworkSource]:
+        """Sources to try for automatic matching, in the provider's order.
+
+        Silently drops anything unusable, so a machine with no SteamGridDB key
+        falls through to themes and Iconify instead of failing.
+        """
+        chain: list[ArtworkSource] = []
+        for source_id in getattr(provider, "auto_match_sources", ()):
+            source = self.get(source_id)
+            if (source is not None
+                    and source.supports(provider.id)
+                    and source.available(config)):
+                chain.append(source)
+        return chain
+
+
 def default_registry(config: dict[str, Any] | None = None) -> ArtworkRegistry:
     """Adding a source is one import and one line here."""
     cfg = config or {}

@@ -110,6 +110,10 @@ class DesktopEntryProvider(AppProvider):
     label = "Applications"
     noun = "apps"
 
+    # Installed themes first: an application declares its own icon name, so an
+    # exact index hit is both offline and unambiguous.
+    auto_match_sources = ("theme", "iconify")
+
     def writer(self) -> LauncherWriter:
         return OverrideWriter()
 

@@ -13,7 +13,8 @@ import shutil
 from pathlib import Path
 
 from kairo.artwork.base import ArtworkSource
-from kairo.models import Artwork, ArtQuery
+from kairo.models import (CONFIDENCE_EXACT_NAME, CONFIDENCE_SHORT_NAME,
+                          Artwork, ArtQuery, Suggestion)
 from kairo.themeindex import ThemeIndex
 
 SOURCE_ID = "theme"
@@ -30,7 +31,10 @@ class IconThemeSource(ArtworkSource):
     query_placeholder = "firefox, org.kde.dolphin..."
 
     def supports(self, provider_id: str) -> bool:
-        return provider_id == "desktop"
+        # Every provider. A Steam game whose artwork SteamGridDB does not
+        # index may still have a themed icon, and the user may simply prefer
+        # their theme's style.
+        return True
 
     # -- tiles -----------------------------------------------------------
 
@@ -39,6 +43,7 @@ class IconThemeSource(ArtworkSource):
         return Artwork(
             id=f"theme_{hashlib.md5(f'{theme}/{name}'.encode()).hexdigest()[:12]}",
             source_id=SOURCE_ID,
+            name=name,
             label=theme,
             locator=path,
             mime="image/svg+xml" if path.lower().endswith(".svg") else "image/png",
@@ -113,6 +118,33 @@ class IconThemeSource(ArtworkSource):
                     break
             row += 1
         return out
+
+    def best_match(self, query: ArtQuery) -> Suggestion | None:
+        """Exact name hits only.
+
+        The widening search in find() is right for a human browsing a grid and
+        wrong for automatic application: a substring match on a short name hits
+        almost anything, and "dolphin" finding "dolphin-emulator" is exactly
+        the sort of confident-looking mistake that erodes trust in the feature.
+        """
+        name = (query.icon_name or "").strip()
+        if not name:
+            return None
+
+        exact = self.lookup(name)
+        if exact:
+            return Suggestion(exact[0], CONFIDENCE_EXACT_NAME,
+                              f"exact icon name '{name}' in {exact[0].label}")
+
+        # org.kde.dolphin -> dolphin. Still an exact index hit, just on the
+        # canonical short id rather than the reverse-DNS form.
+        if "." in name:
+            short = name.rsplit(".", 1)[-1]
+            hits = self.lookup(short)
+            if hits:
+                return Suggestion(hits[0], CONFIDENCE_SHORT_NAME,
+                                  f"exact icon name '{short}' in {hits[0].label}")
+        return None
 
     # -- transfer --------------------------------------------------------
 

@@ -19,6 +19,15 @@ class LauncherWriter(ABC):
     the two implementations in ``writers.py`` rather than inventing a third.
     """
 
+    #: What restoring this kind of entry means, for the change history.
+    #: "created" - Kairo made the file, so restoring deletes it.
+    #: "overrode" - Kairo shadowed someone else's, so restoring un-shadows it.
+    action: str = ""
+
+    @abstractmethod
+    def target(self, entry: AppEntry) -> Path:
+        """The launcher entry this writer owns for ``entry``."""
+
     @abstractmethod
     def apply(self, entry: AppEntry, icon_src: Path) -> Path:
         """Apply ``icon_src`` to ``entry``. Returns the stored icon path."""
@@ -41,6 +50,12 @@ class AppProvider(ABC):
     label: str = ""
     #: What one of these is called, for status lines: "games", "apps".
     noun: str = "apps"
+
+    #: Artwork source ids to consult for automatic matching, best first.
+    #: Declared here rather than decided in the UI, so adding a source or
+    #: reordering the preference never means comparing button labels again.
+    #: A source absent from this tuple can still be browsed manually.
+    auto_match_sources: tuple[str, ...] = ()
 
     def available(self) -> bool:
         """False when this provider has nothing to offer on this machine."""

@@ -69,6 +69,8 @@ class GeneratedEntryWriter(LauncherWriter):
     restoring means deleting it. Steam games work this way; AppImages will.
     """
 
+    action = "created"
+
     def __init__(self, prefix: str, build_fields):
         self.prefix = prefix
         self.build_fields = build_fields
@@ -136,6 +138,8 @@ class OverrideWriter(LauncherWriter):
     again. Native apps, Flatpaks and AppImages that install a .desktop all work
     this way, which is why they need no scanner of their own.
     """
+
+    action = "overrode"
 
     def target(self, entry: AppEntry) -> Path:
         basename = entry.payload.get("basename") or f"{entry.local_id}.desktop"

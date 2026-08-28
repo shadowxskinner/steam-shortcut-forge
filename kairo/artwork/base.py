@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
-from kairo.models import Artwork, ArtQuery
+from kairo.models import Artwork, ArtQuery, Suggestion
 
 
 class ArtworkSource(ABC):
@@ -42,6 +42,17 @@ class ArtworkSource(ABC):
     @abstractmethod
     def find(self, query: ArtQuery) -> list[Artwork]:
         ...
+
+    def best_match(self, query: ArtQuery) -> Suggestion | None:
+        """The one artwork this source would auto-apply, or None.
+
+        Opt-in: the default is None, so a source contributes to automatic
+        matching only when it can express real confidence. A source that can
+        only offer a fuzzy search result should return None rather than a
+        low score, because "no match" is a better outcome than silently
+        putting the wrong icon on somebody's application.
+        """
+        return None
 
     @abstractmethod
     def preview(self, art: Artwork) -> bytes:

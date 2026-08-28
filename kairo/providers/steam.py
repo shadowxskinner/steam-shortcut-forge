@@ -151,6 +151,12 @@ class SteamProvider(AppProvider):
     label = "Steam"
     noun = "games"
 
+    # SteamGridDB first: it matches on the actual Steam app ID, so it is the
+    # only source that can be certain it found the right game. Themes and
+    # Iconify are fallbacks for games it does not index, and for users with
+    # no API key.
+    auto_match_sources = ("steamgriddb", "theme", "iconify")
+
     def available(self) -> bool:
         return bool(candidate_roots())
 

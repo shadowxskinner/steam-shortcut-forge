@@ -65,6 +65,9 @@ class Artwork:
     id: str
     source_id: str
     label: str = ""
+    #: The source's own name for this icon (theme icon name, Iconify icon
+    #: name). Used to tell an exact match from a fuzzy search hit.
+    name: str = ""
     width: int = 0
     height: int = 0
     score: float = 0.0
@@ -96,3 +99,42 @@ class ArtQuery:
         return ArtQuery(entry=self.entry, text=text,
                         fallback_text=self.fallback_text,
                         icon_name=self.icon_name, steam_appid=self.steam_appid)
+
+
+# ---------------------------------------------------------------------------
+# Match confidence
+# ---------------------------------------------------------------------------
+
+#: Matched on an authoritative identifier - a Steam appid resolved through
+#: SteamGridDB. There is no ambiguity about which game this is.
+CONFIDENCE_ID = 1.0
+
+#: The application's own declared icon name matched a theme icon exactly.
+CONFIDENCE_EXACT_NAME = 0.9
+
+#: An icon set contains an icon whose name is exactly the term we searched.
+CONFIDENCE_EXACT_SEARCH = 0.75
+
+#: The reverse-DNS short name matched: org.kde.dolphin -> dolphin.
+CONFIDENCE_SHORT_NAME = 0.7
+
+#: A substring or search-engine hit. Plausible, never certain.
+CONFIDENCE_FUZZY = 0.3
+
+#: Below this, Kairo leaves the application unmatched rather than guessing.
+#: Applying questionable artwork automatically is worse than applying none:
+#: the user has to notice it happened before they can undo it.
+AUTO_APPLY_THRESHOLD = 0.7
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    """One source's best answer for one application, with its confidence."""
+
+    artwork: Artwork
+    confidence: float
+    reason: str
+
+    @property
+    def confident(self) -> bool:
+        return self.confidence >= AUTO_APPLY_THRESHOLD
