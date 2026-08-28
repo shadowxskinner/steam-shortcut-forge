@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from kairo import config as config_store
-from kairo import paths
+from kairo import migration, paths
 from kairo.artwork.local import LocalFileSource
 from kairo.artwork.registry import default_registry as artwork_registry
 from kairo.artwork.steamgriddb import CONFIG_KEY as SGDB_KEY
@@ -22,7 +22,9 @@ from kairo.ui import theme as T
 from kairo.ui.settings import SettingsDialog
 from kairo.ui.widgets import AppRow, ArtworkTile
 
-WINDOW_TITLE = "Steam Shortcut Forge"
+from kairo import APP_NAME
+
+WINDOW_TITLE = APP_NAME
 SEARCH_DEBOUNCE_MS = 400
 GRID_GUTTER = 12
 DEFAULT_COLS = 3
@@ -34,6 +36,14 @@ class KairoApp(ctk.CTk):
         self.title(WINDOW_TITLE)
         self.geometry("1320x860")
         self.minsize(1040, 620)
+
+        # Before anything reads config: an older installation's settings,
+        # icons and launcher entries are moved into place first. Never fatal -
+        # a failed migration records itself and Kairo starts normally.
+        try:
+            self._migration = migration.migrate_if_needed()
+        except Exception as exc:                       # pragma: no cover
+            self._migration = migration.MigrationReport(failures=[str(exc)])
 
         self.config_data = config_store.load()
         self.providers = provider_registry()
@@ -57,6 +67,7 @@ class KairoApp(ctk.CTk):
         self.search_var = ctk.StringVar()
 
         self._build(available)
+        self._announce_migration()
         self._first_run()
         self.scan()
 
@@ -218,6 +229,24 @@ class KairoApp(ctk.CTk):
         self.status.grid(row=6, column=0, sticky="w", padx=28, pady=(0, 12))
 
     # -- scanning ---------------------------------------------------------
+
+    def _announce_migration(self):
+        """Tell the user once that their files moved.
+
+        Paths changing under people without explanation is how a rename turns
+        into a bug report.
+        """
+        report = getattr(self, "_migration", None)
+        if report is None or not report.performed:
+            return
+        self.status.configure(text=report.summary())
+        body = (f"{report.summary()}\n\n"
+                "Your original Steam Shortcut Forge files have been left where "
+                "they were, so nothing is lost.")
+        if report.failures:
+            body += ("\n\nCould not migrate:\n"
+                     + "\n".join(report.failures[:10]))
+        messagebox.showinfo("Welcome to Kairo", body)
 
     def _first_run(self):
         steam = self.providers.get("steam")

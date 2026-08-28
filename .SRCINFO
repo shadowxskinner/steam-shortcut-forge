@@ -1,8 +1,8 @@
-pkgbase = steam-shortcut-forge
-	pkgdesc = Assign custom icons to Steam games in your Linux app launcher
-	pkgver = 1.3.0
+pkgbase = kairo
+	pkgdesc = Automatic launcher artwork for Linux
+	pkgver = 2.0.0
 	pkgrel = 1
-	url = https://github.com/shadowxskinner/steam-shortcut-forge
+	url = https://github.com/shadowxskinner/kairo
 	arch = any
 	license = MIT
 	makedepends = python-build
@@ -17,7 +17,10 @@ pkgbase = steam-shortcut-forge
 	optdepends = papirus-icon-theme: large library of application icons to choose from
 	optdepends = whitesur-icon-theme: macOS Big Sur style application icons
 	optdepends = tela-icon-theme: flat colourful application icons
-	source = steam-shortcut-forge-1.3.0.tar.gz::https://github.com/shadowxskinner/steam-shortcut-forge/archive/refs/tags/v1.3.0.tar.gz
-	sha256sums = eab72f35eb9084c7e795e2c25da1dad428d8746dd356baa0f0ba2c8f4a90da64
+	provides = steam-shortcut-forge
+	conflicts = steam-shortcut-forge
+	replaces = steam-shortcut-forge
+	source = kairo-2.0.0.tar.gz::https://github.com/shadowxskinner/kairo/archive/refs/tags/v2.0.0.tar.gz
+	sha256sums = SKIP
 
-pkgname = steam-shortcut-forge
+pkgname = kairo

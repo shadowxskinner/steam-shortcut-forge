@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # release.sh — cut a release without the version drifting between files.
 #
-# The version lives in three places (pyproject.toml, PKGBUILD, and
-# APP_VERSION in the source). Bumping them by hand has silently gone wrong
-# on every release so far, producing tags whose tarballs contain the
-# previous version's code. This does all three, in the right order.
+# The version now lives in exactly one place, kairo/__init__.py. pyproject
+# reads it via dynamic metadata. Only PKGBUILD's pkgver has to be kept in
+# step, because makepkg cannot import Python.
 #
 # Order matters: the git tag must exist on GitHub before updpkgsums runs,
-# because updpkgsums downloads the tarball that the tag creates.
+# because updpkgsums downloads the tarball the tag creates.
 #
-# Usage:  ./release.sh 1.1.2
+# Usage:  ./release.sh 2.0.1
 
 set -euo pipefail
 
@@ -25,45 +24,37 @@ if [[ -n "$(git status --porcelain)" ]]; then
     echo "error: working tree is dirty — commit or stash first" >&2
     exit 1
 fi
-
 if [[ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]]; then
     echo "error: releases are cut from main" >&2
     exit 1
 fi
-
 if git rev-parse "v$VERSION" >/dev/null 2>&1; then
     echo "error: tag v$VERSION already exists" >&2
     exit 1
 fi
 
-echo "==> Bumping all three version strings to $VERSION"
-sed -i -E "s/^pkgver=.*/pkgver=$VERSION/"            PKGBUILD
-sed -i -E "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
-sed -i -E "s/^APP_VERSION = \".*\"/APP_VERSION = \"$VERSION\"/" steam_shortcut_forge.py
+echo "==> Setting the version"
+sed -i -E "s/^__version__ = \".*\"/__version__ = \"$VERSION\"/" kairo/__init__.py
+sed -i -E "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD
 
-# Fail loudly rather than shipping a mismatch.
-for check in "PKGBUILD:pkgver=$VERSION" \
-             "pyproject.toml:version = \"$VERSION\"" \
-             "steam_shortcut_forge.py:APP_VERSION = \"$VERSION\""; do
-    file="${check%%:*}"; expect="${check#*:}"
-    grep -qF "$expect" "$file" || { echo "error: $file did not update" >&2; exit 1; }
-done
-echo "    all three agree"
+# Read it back the way the build will, rather than trusting the sed.
+ACTUAL="$(python -c 'import kairo; print(kairo.__version__)')"
+[[ "$ACTUAL" == "$VERSION" ]] || { echo "error: kairo.__version__ is $ACTUAL" >&2; exit 1; }
+grep -qF "pkgver=$VERSION" PKGBUILD || { echo "error: PKGBUILD did not update" >&2; exit 1; }
+echo "    kairo.__version__ and pkgver both $VERSION"
 
-python -m py_compile steam_shortcut_forge.py
-echo "    py_compile ok"
+echo "==> Tests"
+python -m pytest -q
 
 echo "==> Committing and tagging"
-git commit -am "Bump version to $VERSION"
+git commit -am "Release $VERSION"
 git push
 git tag -a "v$VERSION" -m "Release $VERSION"
 git push origin "v$VERSION"
 
-echo "==> Waiting for the GitHub tarball to become available"
+echo "==> Waiting for the GitHub tarball"
 for _ in $(seq 1 10); do
-    if updpkgsums 2>/dev/null; then
-        break
-    fi
+    updpkgsums 2>/dev/null && break
     echo "    not ready yet, retrying in 3s"
     sleep 3
 done

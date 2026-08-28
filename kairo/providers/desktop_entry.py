@@ -107,7 +107,7 @@ def fallback_query_for(entry: AppEntry) -> str:
 
 class DesktopEntryProvider(AppProvider):
     id = PROVIDER_ID
-    label = "System"
+    label = "Applications"
     noun = "apps"
 
     def writer(self) -> LauncherWriter:

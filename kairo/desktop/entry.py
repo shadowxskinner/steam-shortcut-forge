@@ -30,8 +30,9 @@ DESKTOP_ENTRY_GROUP = "[Desktop Entry]"
 # permanently: ``revert`` refuses to delete a file that carries no marker, so
 # dropping the old key would strand every override made before the rename with
 # no in-app way to restore the original icon.
-MANAGED_KEYS: tuple[str, ...] = ("X-ShortcutForge-Managed",)
-ORIGINAL_ICON_KEYS: tuple[str, ...] = ("X-ShortcutForge-OriginalIcon",)
+MANAGED_KEYS: tuple[str, ...] = ("X-Kairo-Managed", "X-ShortcutForge-Managed")
+ORIGINAL_ICON_KEYS: tuple[str, ...] = ("X-Kairo-OriginalIcon",
+                                       "X-ShortcutForge-OriginalIcon")
 
 
 class DesktopEntryError(ValueError):
@@ -127,9 +128,22 @@ def is_managed(path: Path, keys: tuple[str, ...] = MANAGED_KEYS) -> bool:
     return value in {"true", "1", "yes"}
 
 
+def read_text_exact(path: Path) -> str:
+    """Read a .desktop file without translating its line endings.
+
+    ``Path.read_text`` opens in universal-newline mode, which silently turns
+    every CRLF into LF. The rewriter then sees an LF-only file, writes LF, and
+    a CRLF file comes back with different bytes on every line - a change we
+    never intended to make to somebody else's file. ``newline=""`` disables the
+    translation so the original endings survive round-tripping.
+    """
+    with open(path, encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        return fh.read()
+
+
 def _read_text(path: Path) -> str | None:
     try:
-        return path.read_text(encoding="utf-8", errors="surrogateescape")
+        return read_text_exact(path)
     except OSError:
         return None
 
@@ -213,22 +227,14 @@ def atomic_write_text(path: Path, text: str) -> None:
         raise
 
 
-def rewrite_entry_icon(
-    text: str,
-    icon_value: str,
-    original_icon: str,
-    *,
-    managed_key: str = MANAGED_KEYS[0],
-    original_key: str = ORIGINAL_ICON_KEYS[0],
-    extra_managed_keys: tuple[str, ...] = (),
-) -> str:
-    """Return ``text`` with ``Icon=`` in ``[Desktop Entry]`` replaced.
+def set_entry_values(text: str, values: dict[str, str]) -> str:
+    """Set keys inside the first ``[Desktop Entry]`` group, preserving all else.
 
-    Also stamps the ownership marker and records the pre-change icon so a
-    restore is possible even if the source file later changes. Any key listed
-    in ``extra_managed_keys`` that is already present is left in place, so a
-    file stamped by an older release keeps its old marker alongside the new one
-    and stays revertable by both.
+    Existing keys are replaced in place, so field order is kept; missing ones
+    are appended to the end of the group. Every other line in the file -
+    including keys we know nothing about, ``[Desktop Action ...]`` groups,
+    comments, blank lines and the original line endings - is passed through
+    untouched.
 
     Only the *first* ``[Desktop Entry]`` group is edited. The spec permits
     exactly one; a malformed file with two is left alone after the first rather
@@ -245,34 +251,23 @@ def rewrite_entry_icon(
         raise DesktopEntryError("no [Desktop Entry] group")
 
     out: list[str] = []
+    pending = dict(values)
     in_entry = False
     entry_seen = False
-    icon_done = False
-    managed_done = False
-    original_done = False
-
-    def pending() -> list[str]:
-        add: list[str] = []
-        if not icon_done:
-            add.append(f"Icon={icon_value}{newline}")
-        if not managed_done:
-            add.append(f"{managed_key}=true{newline}")
-        if not original_done:
-            add.append(f"{original_key}={original_icon}{newline}")
-        return add
 
     def flush(buf: list[str]) -> None:
-        """Append generated lines, ensuring the previous line is terminated.
+        """Append the keys that had no existing line to replace.
 
         A file whose last line has no trailing newline would otherwise get the
         first generated key glued onto it: ``Terminal=falseIcon=/path``.
         """
-        add = pending()
-        if not add:
+        if not pending:
             return
         if buf and not buf[-1].endswith(("\n", "\r")):
             buf[-1] = buf[-1] + newline
-        buf.extend(add)
+        for key, value in pending.items():
+            buf.append(f"{key}={value}{newline}")
+        pending.clear()
 
     for raw in lines:
         header = _group_header(raw)
@@ -288,34 +283,38 @@ def rewrite_entry_icon(
 
         if in_entry:
             pair = _split_key(raw)
-            if pair is not None:
+            if pair is not None and pair[0] in pending:
                 key = pair[0]
-                if key == "Icon":
-                    if not icon_done:
-                        out.append(f"Icon={icon_value}{newline}")
-                        icon_done = True
-                    continue
-                if key == managed_key:
-                    if not managed_done:
-                        out.append(f"{managed_key}=true{newline}")
-                        managed_done = True
-                    continue
-                if key == original_key:
-                    if not original_done:
-                        out.append(f"{original_key}={original_icon}{newline}")
-                        original_done = True
-                    continue
-                if key in extra_managed_keys:
-                    # A marker from an older release. Keep it verbatim so a
-                    # downgrade can still recognise and revert this file.
-                    out.append(raw)
-                    continue
+                out.append(f"{key}={pending.pop(key)}{newline}")
+                continue
         out.append(raw)
 
     if in_entry:
         flush(out)
 
     return "".join(out)
+
+
+def rewrite_entry_icon(
+    text: str,
+    icon_value: str,
+    original_icon: str,
+    *,
+    managed_key: str = MANAGED_KEYS[0],
+    original_key: str = ORIGINAL_ICON_KEYS[0],
+) -> str:
+    """Replace ``Icon=`` and stamp the ownership markers.
+
+    Recording the pre-change icon makes a restore possible even if the source
+    file later changes. Marker keys written by older releases are left in
+    place, so a file stays revertable by both this build and the one that
+    created it.
+    """
+    return set_entry_values(text, {
+        "Icon": icon_value,
+        managed_key: "true",
+        original_key: original_icon,
+    })
 
 
 def build_entry(fields: dict[str, str], *, newline: str = "\n") -> str:

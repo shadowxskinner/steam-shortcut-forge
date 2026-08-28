@@ -11,19 +11,19 @@ import os
 from pathlib import Path
 
 #: Directory name under ~/.config and ~/.local/share.
-APP_DIRNAME = "steam-shortcut-forge"
+APP_DIRNAME = "kairo"
 
 #: Older directory names, newest first. Read for migration; never written.
-LEGACY_APP_DIRNAMES: tuple[str, ...] = ()
+LEGACY_APP_DIRNAMES: tuple[str, ...] = ("steam-shortcut-forge",)
 
 #: Filename prefix for launcher entries this application generates.
-DESKTOP_PREFIX = "steam-shortcut-forge-"
+DESKTOP_PREFIX = "kairo-"
 
 #: Prefixes used by earlier releases. Generated-entry discovery must keep
 #: matching these or previously created shortcuts become invisible to the app,
 #: which would report every game as uncustomised while leaving the old files
 #: behind in the user's launcher as undeletable duplicates.
-LEGACY_DESKTOP_PREFIXES: tuple[str, ...] = ()
+LEGACY_DESKTOP_PREFIXES: tuple[str, ...] = ("steam-shortcut-forge-",)
 
 
 def home() -> Path:
@@ -66,6 +66,10 @@ def legacy_config_dir(name: str) -> Path:
 
 def legacy_data_dir(name: str) -> Path:
     return home() / ".local" / "share" / name
+
+
+def legacy_icon_store(name: str) -> Path:
+    return legacy_data_dir(name) / "icons"
 
 
 def system_application_dirs() -> list[Path]:

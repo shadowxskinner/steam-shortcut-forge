@@ -164,7 +164,7 @@ class OverrideWriter(LauncherWriter):
         # Read the override if we already made one, so repeated applies do not
         # record our own previous icon as the "original".
         read_from = target if (target.exists() and de.is_managed(target)) else source
-        text = read_from.read_text(encoding="utf-8", errors="surrogateescape")
+        text = de.read_text_exact(read_from)
 
         # If we already own this file, its recorded original icon is the real
         # one. Re-reading Icon= would capture our own previous choice and make
@@ -178,10 +178,7 @@ class OverrideWriter(LauncherWriter):
             value = de.read_entry_icon(target)
             previous_icon = Path(value) if value else None
 
-        rewritten = de.rewrite_entry_icon(
-            text, str(stored), original,
-            extra_managed_keys=de.MANAGED_KEYS[1:] + de.ORIGINAL_ICON_KEYS[1:],
-        )
+        rewritten = de.rewrite_entry_icon(text, str(stored), original)
         de.atomic_write_text(target, rewritten)
         _discard_stored_icon(previous_icon, keep=stored)
 

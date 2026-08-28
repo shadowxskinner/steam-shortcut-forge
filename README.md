@@ -1,86 +1,124 @@
-# Steam Shortcut Forge
+# Kairo
 
-A Linux desktop app that gives your Steam games proper icons in the
-system app launcher (KDE, GNOME, or any freedesktop-compliant desktop).
+**Automatic launcher artwork for Linux.**
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Platform](https://img.shields.io/badge/Platform-Linux-orange)
 
-## The problem
+Linux already lets you change an application's icon by hand. What it does not
+do is find the application, find the artwork, and apply it for you.
 
-Steam auto-generates launcher entries for installed games, but you
-can't control their icons, and the entries go stale when games get
-uninstalled. On KDE/GNOME, this means broken or ugly shortcuts in
-your app launcher.
+Doing it manually means: locate the app, search the web for artwork, download
+an image, find the right `.desktop` file, work out which fields are safe to
+edit, write the override to the right directory — then repeat for every
+application you care about.
 
-## The solution
+Kairo does that part.
 
-Steam Shortcut Forge scans every Steam library on your machine, shows
-you exactly what's installed, and lets you assign icons — either
-fetched automatically from [SteamGridDB](https://www.steamgriddb.com)
-or picked manually from your own files.
+```
+Scan system  →  63 applications found  →  51 with artwork available  →  Apply
+```
 
-## Features
+You should never need to know what a `.desktop` file is, where your
+distribution keeps launcher entries, or what a Flatpak app id looks like.
 
-- **SteamGridDB integration** — browse and apply community-uploaded
-  icons for any game. Results are cached locally.
-- **Bulk auto-assign** — one click to fetch the best icon for every
-  game at once.
-- **Multi-library support** — finds games across native installs,
-  Flatpak, and extra library folders on other drives.
-- **Filter & search** — filter by shortcut status, search by name.
-- **Icon preview** — see assigned icons right in the game list.
-- **Clean dark UI** — built with CustomTkinter.
-- Creates standard `.desktop` launcher entries — shows up in your
-  launcher immediately, no logout required.
-- Detects native vs Flatpak Steam automatically.
+## What it covers
 
-## Screenshots
+- **Steam games** — every library on every drive, native and Flatpak installs,
+  with artwork from [SteamGridDB](https://www.steamgriddb.com).
+- **Everything else with a launcher entry** — native packages, Flatpaks and
+  AppImages all install a freedesktop `.desktop` file, so they are all
+  discovered by the same scanner. Artwork comes from your installed icon
+  themes or from [Iconify](https://iconify.design)'s ~275,000 open source
+  icons.
+- **Your own images** — any `.png`, `.svg`, `.ico` or `.xpm`.
 
-<!-- Add screenshots here after first run -->
+## Safety
 
-## Installation
+Kairo changes how your launcher looks. That has to be reversible.
+
+- **Original files are never edited.** For an application that already has a
+  launcher entry, Kairo copies it to `~/.local/share/applications/` and rewrites
+  a single line. Nothing under `/usr` or `/var/lib/flatpak` is ever written.
+- **Everything is user-level.** Kairo never needs root.
+- **Every change is marked.** Files Kairo creates carry an ownership marker,
+  and it refuses to modify or delete any launcher entry that does not have one —
+  so a `.desktop` you wrote yourself is safe.
+- **The original icon is recorded** inside the override, so Restore works even
+  if the application is updated afterwards.
+- **Desktop integration survives.** `MimeType`, `StartupWMClass`, `Actions`,
+  translated names and vendor keys are copied byte for byte. Only `Icon=` in
+  `[Desktop Entry]` changes — never an icon inside a `[Desktop Action]` group.
+
+## Install
 
 ### Arch Linux (AUR)
 
 ```bash
-yay -S steam-shortcut-forge
+yay -S kairo
 ```
 
-### Requirements (manual install)
+Upgrading from `steam-shortcut-forge` replaces it automatically.
 
-- Python 3.10+
-- Tk (`sudo pacman -S tk` on Arch, `sudo apt install python3-tk` on
-  Debian/Ubuntu)
-- A free [SteamGridDB API key](https://www.steamgriddb.com/profile/preferences/api)
-
-### Setup
+### From source
 
 ```bash
-git clone https://github.com/shadowxskinner/steam-shortcut-forge.git
-cd steam-shortcut-forge
-python -m venv .venv
-source .venv/bin/activate
-pip install customtkinter
-python steam_shortcut_forge.py
+git clone https://github.com/shadowxskinner/kairo.git
+cd kairo
+python -m venv .venv && source .venv/bin/activate
+pip install -e .
+kairo
 ```
 
-On first launch, enter your SteamGridDB API key in Settings.
+Requires Python 3.10+ and Tk (`pacman -S tk`, `apt install python3-tk`).
 
-## How it works
+A free [SteamGridDB API key](https://www.steamgriddb.com/profile/preferences/api)
+is optional — it is only needed for Steam game artwork. Icon themes, Iconify
+and local files all work without an account.
 
-- Steam libraries are found by checking standard install locations
-  and parsing `libraryfolders.vdf` for additional drives.
-- Installed games are read from `appmanifest_*.acf` files.
-- SteamGridDB lookups go through their REST API with disk caching
-  (game IDs cached permanently, icon lists cached 24h, thumbnails
-  cached after first download).
-- Icons are stored in `~/.local/share/steam-shortcut-forge/icons/`.
-- Launcher entries are written as
-  `~/.local/share/applications/steam-shortcut-forge-<appid>.desktop`,
-  separate from Steam's own entries.
-- Config and cache live in `~/.config/steam-shortcut-forge/`.
+## Upgrading from Steam Shortcut Forge
+
+Kairo is the same project, renamed and rebuilt. The old name described a
+Steam-only tool; the application had already outgrown it.
+
+On first launch your settings, icons and launcher entries are migrated
+automatically:
+
+| Was | Is now |
+| --- | --- |
+| `~/.config/steam-shortcut-forge/` | `~/.config/kairo/` |
+| `~/.local/share/steam-shortcut-forge/icons/` | `~/.local/share/kairo/icons/` |
+| `steam-shortcut-forge-<appid>.desktop` | `kairo-<appid>.desktop` |
+
+Your old directories are **left in place**, so nothing is lost and a downgrade
+still works. Kairo permanently recognises the old `X-ShortcutForge-*` markers,
+so every icon override you made before the rename stays restorable.
+
+## Where things live
+
+- Config: `~/.config/kairo/config.json`
+- Cache: `~/.config/kairo/cache/` (safe to delete; it rebuilds)
+- Icons: `~/.local/share/kairo/icons/`
+- Launcher entries: `~/.local/share/applications/`
+
+## Architecture
+
+Two extension points, so a new kind of application or a new source of artwork
+is an added file rather than a rewrite:
+
+- **`AppProvider`** — where applications come from. `SteamProvider` generates
+  launcher entries; `DesktopEntryProvider` shadows existing ones. Those are the
+  only two ways to own a launcher entry, so there are exactly two writers.
+- **`ArtworkSource`** — where icons come from. SteamGridDB, icon themes,
+  Iconify and local files.
+
+A dedicated Flatpak or AppImage provider would add richer metadata, not new
+coverage — both are already found by `DesktopEntryProvider`.
+
+```bash
+python -m pytest      # tests run against a fixture HOME, never your desktop
+```
 
 ## License
 

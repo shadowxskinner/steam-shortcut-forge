@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Kairo
+GenericName=Launcher Artwork
+Comment=Automatic launcher artwork for Linux
+Exec=kairo
+Icon=io.github.shadowxskinner.Kairo
+Categories=Utility;DesktopSettings;
+Keywords=icon;icons;artwork;launcher;desktop;shortcut;steam;theme;
+Terminal=false
+StartupNotify=true
+StartupWMClass=Kairo

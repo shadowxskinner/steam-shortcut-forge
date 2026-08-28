@@ -1,3 +1,9 @@
+> **Historical.** This is the v1.2.0 spec, written while the project was
+> still called Steam Shortcut Forge. It is kept because its reasoning about
+> the two write paths (section 3) and about prior art (section 10) still
+> governs Kairo's design. Its phasing in section 11 was completed by the
+> Kairo 2.0.0 refactor; names and paths in it are out of date.
+
 # Spec — System icons (v1.2.0)
 
 Extend Shortcut Forge from "icons for Steam games" to "icons for anything on

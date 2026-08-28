@@ -262,12 +262,28 @@ def test_is_managed_ignores_marker_in_an_action_group(tmp_path):
     assert de.is_managed(path) is False
 
 
-def test_extra_managed_keys_are_preserved():
+def test_unknown_keys_are_preserved():
+    """Including markers written by an older release, which must stay
+    readable so a downgrade can still revert the file."""
     text = BASIC.replace("Icon=org.kde.dolphin\n",
                          "Icon=org.kde.dolphin\nX-Legacy-Managed=true\n")
-    out = de.rewrite_entry_icon(text, "/n.png", "org.kde.dolphin",
-                                extra_managed_keys=("X-Legacy-Managed",))
-    assert "X-Legacy-Managed=true" in out
+    out = de.rewrite_entry_icon(text, "/n.png", "org.kde.dolphin")
+    assert "X-Legacy-Managed=true" in lines(out)
+
+
+def test_set_entry_values_replaces_in_place_and_appends():
+    out = de.set_entry_values(BASIC, {"Icon": "/x.png", "NewKey": "v"})
+    body = lines(out)
+    assert "Icon=/x.png" in body
+    assert "NewKey=v" in body
+    # Replacement keeps position; the new key goes at the end of the group.
+    assert body.index("Icon=/x.png") < body.index("Exec=dolphin %u")
+
+
+def test_set_entry_values_ignores_action_groups():
+    out = de.set_entry_values(ACTIONS, {"Icon": "/x.png"})
+    assert "Icon=firefox-window" in lines(out)
+    assert "Icon=/x.png" in lines(out)
 
 
 # -- Atomic write -----------------------------------------------------------
@@ -295,3 +311,20 @@ def test_atomic_write_creates_parent(tmp_path):
 def test_escape_value():
     assert de.escape_value("a\nb") == "a\\nb"
     assert de.escape_value("c\\d") == "c\\\\d"
+
+
+def test_read_text_exact_does_not_translate_crlf(tmp_path):
+    """Path.read_text() normalises CRLF to LF, which silently rewrote every
+    line of a CRLF .desktop file on save."""
+    path = tmp_path / "crlf.desktop"
+    path.write_bytes(BASIC.replace("\n", "\r\n").encode())
+    assert "\r\n" in de.read_text_exact(path)
+
+
+def test_crlf_file_round_trips_byte_identically(tmp_path):
+    path = tmp_path / "crlf.desktop"
+    original = BASIC.replace("\n", "\r\n")
+    path.write_bytes(original.encode())
+    text = de.read_text_exact(path)
+    de.atomic_write_text(path, de.set_entry_values(text, {}))
+    assert path.read_bytes() == original.encode()
