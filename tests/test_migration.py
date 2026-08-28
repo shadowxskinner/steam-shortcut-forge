@@ -109,11 +109,11 @@ def test_generated_icon_paths_are_repointed(migrated):
 
 def test_repointed_icons_actually_exist(migrated):
     """The failure this guards against is silent: entry intact, artwork gone."""
+    from pathlib import Path
+
     for name in ("kairo-440.desktop", "kairo-620.desktop"):
         icon = de.read_entry_icon(paths.applications_dir() / name)
         assert icon.startswith(str(paths.icon_store()))
-        assert paths.home().joinpath(icon.lstrip("/")).exists() or True
-        from pathlib import Path
         assert Path(icon).is_file()
 
 
@@ -319,3 +319,176 @@ def test_leftovers_are_listed_but_not_removed(migrated):
     leftovers = migration.legacy_leftovers()
     assert len(leftovers) == 2
     assert all(p.is_dir() for p in leftovers)
+
+
+# ---------------------------------------------------------------------------
+# Collision with an existing Kairo entry
+# ---------------------------------------------------------------------------
+
+def test_collision_with_foreign_kairo_file_touches_neither(legacy_install):
+    """A file named kairo-440.desktop that Kairo did not create is not ours to
+    overwrite just because the name matches our scheme."""
+    apps = legacy_install["apps"]
+    foreign = apps / "kairo-440.desktop"
+    foreign.write_text("[Desktop Entry]\nType=Application\nName=My Own TF2\n"
+                       "Icon=my-icon\nExec=something-else\n")
+    legacy_before = read(apps / "steam-shortcut-forge-440.desktop")
+
+    report = migration.migrate_if_needed()
+
+    assert read(foreign) == ("[Desktop Entry]\nType=Application\nName=My Own TF2\n"
+                             "Icon=my-icon\nExec=something-else\n")
+    assert (apps / "steam-shortcut-forge-440.desktop").is_file()
+    assert read(apps / "steam-shortcut-forge-440.desktop") == legacy_before
+    assert any("kairo-440.desktop" in c for c in report.collisions)
+
+
+def test_collision_does_not_stop_the_other_entries(legacy_install):
+    apps = legacy_install["apps"]
+    (apps / "kairo-440.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Mine\nIcon=x\n")
+
+    report = migration.migrate_if_needed()
+
+    assert (apps / "kairo-620.desktop").is_file()
+    assert report.shortcuts_moved == 1
+    assert report.overrides_updated == 1
+    assert report.performed is True
+
+
+def test_collision_is_recorded_in_the_config(legacy_install):
+    (legacy_install["apps"] / "kairo-440.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Mine\nIcon=x\n")
+    migration.migrate_if_needed()
+    cfg = json.loads(paths.config_file().read_text())
+    assert cfg[migration.MIGRATION_REPORT]["collisions"]
+
+
+def test_collision_is_mentioned_in_the_summary(legacy_install):
+    (legacy_install["apps"] / "kairo-440.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Mine\nIcon=x\n")
+    report = migration.migrate_if_needed()
+    assert "already exists" in report.summary()
+
+
+def test_owned_kairo_target_supersedes_the_legacy_copy(legacy_install):
+    """The interrupted-migration case: target written, source not yet removed."""
+    apps = legacy_install["apps"]
+    icons = legacy_install["icons"]
+    (apps / "kairo-440.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Team Fortress 2\n"
+        f"Icon={icons / '440_aaaa.png'}\nX-SteamAppId=440\n"
+        "X-Kairo-Managed=true\n")
+
+    report = migration.migrate_if_needed()
+
+    assert not (apps / "steam-shortcut-forge-440.desktop").exists()
+    assert (apps / "kairo-440.desktop").is_file()
+    assert report.collisions == []
+    assert report.shortcuts_moved == 2
+    # The surviving file is repointed at the new store.
+    assert de.read_entry_icon(apps / "kairo-440.desktop") == \
+        str(paths.icon_store() / "440_aaaa.png")
+
+
+# ---------------------------------------------------------------------------
+# Evidence: a legacy-named file is not automatically ours
+# ---------------------------------------------------------------------------
+
+def test_foreign_file_with_our_old_prefix_is_left_alone(legacy_install):
+    apps = legacy_install["apps"]
+    intruder = apps / "steam-shortcut-forge-notmine.desktop"
+    intruder.write_text("[Desktop Entry]\nType=Application\nName=Not Ours\n"
+                        "Icon=whatever\nExec=/usr/bin/true\n")
+
+    report = migration.migrate_if_needed()
+
+    assert intruder.is_file()
+    assert not (apps / "kairo-notmine.desktop").exists()
+    assert any("notmine" in s for s in report.skipped_foreign)
+
+
+@pytest.mark.parametrize("body,expected", [
+    ("[Desktop Entry]\nX-SteamAppId=440\n", True),
+    ("[Desktop Entry]\nExec=steam steam://rungameid/440\n", True),
+    ("[Desktop Entry]\nX-Kairo-Managed=true\n", True),
+    ("[Desktop Entry]\nX-ShortcutForge-Managed=true\n", True),
+    ("[Desktop Entry]\nName=Something\nIcon=generic\n", False),
+    ("[Desktop Entry]\nX-SteamAppId=999\n", False),
+    ("[Desktop Entry]\nExec=steam steam://rungameid/999\n", False),
+    ("not a desktop file\n", False),
+    ("", False),
+])
+def test_evidence_rules(body, expected, fake_home):
+    store = paths.legacy_icon_store("steam-shortcut-forge")
+    got = bool(migration.legacy_generated_evidence(body, "440", store))
+    assert got is expected
+
+
+def test_icon_in_the_old_store_counts_as_evidence(fake_home):
+    store = paths.legacy_icon_store("steam-shortcut-forge")
+    text = f"[Desktop Entry]\nName=X\nIcon={store / '440_a.png'}\n"
+    assert migration.legacy_generated_evidence(text, "440", store)
+
+
+# ---------------------------------------------------------------------------
+# Detection when the legacy directories are already gone
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def orphaned_launchers(fake_home):
+    """Launcher entries survive, but the old config and data dirs do not."""
+    apps = fake_home / ".local" / "share" / "applications"
+    (apps / "steam-shortcut-forge-440.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Team Fortress 2\n"
+        "Exec=steam steam://rungameid/440\nIcon=/gone/440.png\n"
+        "Categories=Game;\nX-SteamAppId=440\n")
+    return apps
+
+
+def test_detects_install_from_launcher_entries_alone(orphaned_launchers):
+    assert not (paths.legacy_config_dir("steam-shortcut-forge")).exists()
+    assert not (paths.legacy_data_dir("steam-shortcut-forge")).exists()
+    assert migration.find_legacy_install() == "steam-shortcut-forge"
+    assert migration.needs_migration() is True
+
+
+def test_orphaned_launchers_are_migrated(orphaned_launchers):
+    report = migration.migrate_if_needed()
+    assert report.performed is True
+    assert report.shortcuts_moved == 1
+    assert (orphaned_launchers / "kairo-440.desktop").is_file()
+    assert not (orphaned_launchers / "steam-shortcut-forge-440.desktop").exists()
+
+
+def test_orphaned_launcher_keeps_an_unresolvable_icon_path(orphaned_launchers):
+    """The old icon store is gone, so there is nothing to repoint to. Leave the
+    path alone rather than inventing one that does not exist either."""
+    migration.migrate_if_needed()
+    icon = de.read_entry_icon(orphaned_launchers / "kairo-440.desktop")
+    assert icon == "/gone/440.png"
+
+
+def test_detects_install_from_a_managed_override_alone(fake_home):
+    apps = fake_home / ".local" / "share" / "applications"
+    (apps / "org.kde.dolphin.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Dolphin\nIcon=/gone/x.png\n"
+        "X-ShortcutForge-Managed=true\n"
+        "X-ShortcutForge-OriginalIcon=org.kde.dolphin\n")
+    assert migration.find_legacy_install() == "steam-shortcut-forge"
+    report = migration.migrate_if_needed()
+    assert report.overrides_updated == 1
+    assert "X-Kairo-Managed=true" in read(apps / "org.kde.dolphin.desktop")
+
+
+def test_no_evidence_means_no_migration(fake_home):
+    apps = fake_home / ".local" / "share" / "applications"
+    (apps / "firefox.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Firefox\nIcon=firefox\n")
+    (apps / "steam-shortcut-forge-lookalike.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Lookalike\nIcon=x\n")
+    assert migration.find_legacy_install() is None
+    assert migration.needs_migration() is False
+    report = migration.migrate_if_needed()
+    assert report.performed is False
+    assert not paths.config_file().exists()

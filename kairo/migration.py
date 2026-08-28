@@ -65,6 +65,11 @@ class MigrationReport:
     shortcuts_moved: int = 0
     overrides_updated: int = 0
     failures: list[str] = field(default_factory=list)
+    #: Legacy entries whose Kairo-named target already existed and could not
+    #: be proven to belong to Kairo. Both files are left untouched.
+    collisions: list[str] = field(default_factory=list)
+    #: Legacy-prefixed files with no evidence of being ours. Never touched.
+    skipped_foreign: list[str] = field(default_factory=list)
 
     @property
     def changed_anything(self) -> bool:
@@ -83,6 +88,9 @@ class MigrationReport:
             bits.append(f"{self.icons_copied} icon file(s)")
         moved = ", ".join(bits) if bits else "your settings"
         text = f"Migrated {moved} from Steam Shortcut Forge."
+        if self.collisions:
+            text += (f" {len(self.collisions)} entr(y/ies) were left alone "
+                     "because a file with the new name already exists.")
         if self.failures:
             text += f" {len(self.failures)} item(s) could not be migrated."
         return text
@@ -94,6 +102,8 @@ class MigrationReport:
             "icons_copied": self.icons_copied,
             "config_copied": self.config_copied,
             "failures": self.failures,
+            "collisions": self.collisions,
+            "skipped_foreign": self.skipped_foreign,
         }
 
 
@@ -112,11 +122,83 @@ def _read_new_config() -> dict:
         return {}
 
 
+def legacy_generated_evidence(text: str, local_id: str, legacy_store: Path) -> str:
+    """Why we believe a legacy-named .desktop was written by us, or "".
+
+    The filename prefix alone is not proof. Someone can create
+    ``steam-shortcut-forge-anything.desktop`` by hand, and a rename must not
+    give Kairo licence to move or rewrite a file it did not create. Generated
+    entries from before 2.0.0 carried no ownership marker - they were found by
+    prefix - so evidence has to come from what the old generator actually
+    wrote into them.
+
+    Any single one of these is conclusive; a file with none is left alone.
+    """
+    if not text.strip():
+        return ""
+    try:
+        if not any(_ln.strip() == de.DESKTOP_ENTRY_GROUP
+                   for _ln in text.splitlines()):
+            return ""
+    except Exception:
+        return ""
+
+    if de.managed_from_text(text):
+        return "carries a Kairo ownership marker"
+    if de.entry_value_from_text(text, "X-SteamAppId") == local_id:
+        return "X-SteamAppId matches the filename"
+
+    icon = de.entry_icon_from_text(text)
+    if icon.startswith("/"):
+        try:
+            if Path(icon).is_relative_to(legacy_store):
+                return "icon points into the old icon store"
+        except ValueError:
+            pass
+
+    if local_id and f"rungameid/{local_id}" in de.entry_value_from_text(text, "Exec"):
+        return "Exec launches the matching Steam app"
+    return ""
+
+
+def _has_legacy_launcher_entries(name: str) -> bool:
+    """True when launcher entries prove an old install, even with its dirs gone.
+
+    Users clear ~/.config and ~/.local/share far more readily than they clear
+    ~/.local/share/applications, because the launcher entries are the part they
+    can see. Detecting only on the directories would strand exactly those
+    shortcuts: invisible to Kairo, undeletable from the launcher.
+    """
+    applications = paths.applications_dir()
+    if not applications.is_dir():
+        return False
+    legacy_store = paths.legacy_icon_store(name)
+
+    for prefix in paths.LEGACY_DESKTOP_PREFIXES:
+        for path in applications.glob(f"{prefix}*.desktop"):
+            local_id = paths.strip_generated_prefix(path.name)
+            try:
+                text = de.read_text_exact(path)
+            except OSError:
+                continue
+            if legacy_generated_evidence(text, local_id, legacy_store):
+                return True
+
+    # An override stamped with the old marker is unambiguous proof.
+    for path in applications.glob("*.desktop"):
+        if paths.is_generated_name(path.name):
+            continue
+        if de.is_managed(path, de.MANAGED_KEYS[1:]):
+            return True
+    return False
+
+
 def find_legacy_install() -> str | None:
     """The name of an older installation with data worth migrating."""
     for name in paths.LEGACY_APP_DIRNAMES:
         if (paths.legacy_config_dir(name).is_dir()
-                or paths.legacy_data_dir(name).is_dir()):
+                or paths.legacy_data_dir(name).is_dir()
+                or _has_legacy_launcher_entries(name)):
             return name
     return None
 
@@ -182,8 +264,28 @@ def _migrate_icons(legacy_name: str, report: MigrationReport) -> None:
             report.failures.append(f"{path.name}: {exc}")
 
 
+def _kairo_values(text: str, legacy_store: Path, new_store: Path) -> dict[str, str]:
+    """The keys to set on a file being brought forward into Kairo."""
+    values: dict[str, str] = {de.MANAGED_KEYS[0]: "true"}
+    repointed = _repoint_icon(de.entry_icon_from_text(text), legacy_store, new_store)
+    if repointed:
+        values["Icon"] = repointed
+    return values
+
+
 def _migrate_generated(legacy_name: str, report: MigrationReport) -> None:
-    """Rename generated entries and repoint them at the new icon store."""
+    """Rename generated entries and repoint them at the new icon store.
+
+    Three things can go wrong here and each has to be handled without ever
+    damaging a file we cannot prove we wrote:
+
+    * The legacy file may not be ours at all - anyone can create a file whose
+      name happens to start with our old prefix.
+    * A file with the new Kairo name may already exist. If it is ours it
+      supersedes the legacy copy; if it is not, both files are left exactly as
+      they are and the collision is reported.
+    * The file may simply be unreadable.
+    """
     applications = paths.applications_dir()
     if not applications.is_dir():
         return
@@ -196,14 +298,41 @@ def _migrate_generated(legacy_name: str, report: MigrationReport) -> None:
             if not local_id:
                 continue
             target = applications / f"{paths.DESKTOP_PREFIX}{local_id}.desktop"
+
             try:
                 text = de.read_text_exact(path)
-                values: dict[str, str] = {de.MANAGED_KEYS[0]: "true"}
-                repointed = _repoint_icon(de.entry_icon_from_text(text),
-                                          legacy_store, new_store)
-                if repointed:
-                    values["Icon"] = repointed
-                de.atomic_write_text(target, de.set_entry_values(text, values))
+            except OSError as exc:
+                report.failures.append(f"{path.name}: {exc}")
+                continue
+
+            evidence = legacy_generated_evidence(text, local_id, legacy_store)
+            if not evidence:
+                # Named like ours, but nothing says we wrote it. Hands off.
+                report.skipped_foreign.append(
+                    f"{path.name}: no evidence Kairo created it")
+                continue
+
+            try:
+                if target.exists() and target != path:
+                    if not de.is_managed(target):
+                        # Cannot prove the target is ours. Leaving the legacy
+                        # file in place too, so nothing is lost either way.
+                        report.collisions.append(
+                            f"{target.name} already exists and was not created "
+                            f"by Kairo — left it and {path.name} untouched")
+                        continue
+                    # The Kairo-named file is ours and is the current one; the
+                    # legacy copy is a leftover, most likely from a migration
+                    # interrupted between writing and deleting.
+                    target_text = de.read_text_exact(target)
+                    de.atomic_write_text(target, de.set_entry_values(
+                        target_text, _kairo_values(target_text, legacy_store, new_store)))
+                    path.unlink()
+                    report.shortcuts_moved += 1
+                    continue
+
+                de.atomic_write_text(target, de.set_entry_values(
+                    text, _kairo_values(text, legacy_store, new_store)))
                 # Must be a move: leaving both would duplicate the entry.
                 if path != target:
                     path.unlink()

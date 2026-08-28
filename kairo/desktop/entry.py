@@ -117,6 +117,10 @@ def read_entry_value(path: Path, keys: tuple[str, ...] | str) -> str:
     return entry_value_from_text(text, keys) if text is not None else ""
 
 
+def managed_from_text(text: str, keys: tuple[str, ...] = MANAGED_KEYS) -> bool:
+    return entry_value_from_text(text, keys).strip().lower() in {"true", "1", "yes"}
+
+
 def is_managed(path: Path, keys: tuple[str, ...] = MANAGED_KEYS) -> bool:
     """True when the file carries one of our ownership markers set to true.
 
