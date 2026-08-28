@@ -195,3 +195,34 @@ def test_describe_reports_cancellation():
 
     summary = run_bulk([1, 2, 3], work, token=token)
     assert "Cancelled after 1 of 3" in summary.describe()
+
+
+def test_a_failing_progress_callback_does_not_abort_the_run():
+    """Progress posts to a window the user may have closed. If that exception
+    escaped, it would skip the caller's cleanup - which is where the ledger
+    gets written."""
+    def boom(index, total, item):
+        raise RuntimeError("window closed")
+
+    seen = []
+    summary = run_bulk([1, 2, 3], seen.append, on_progress=boom)
+    assert seen == [1, 2, 3]
+    assert summary.succeeded == 3
+
+
+def test_a_failing_result_callback_does_not_abort_the_run():
+    def boom(item, status, detail):
+        raise RuntimeError("window closed")
+
+    summary = run_bulk([1, 2, 3], lambda i: None, on_result=boom)
+    assert summary.succeeded == 3
+
+
+def test_a_failing_label_is_still_fatal_for_that_item_only():
+    """label() is used to build a failure message, so it runs inside the
+    per-item handling rather than the callback shield."""
+    def work(item):
+        raise RuntimeError("x")
+
+    summary = run_bulk([1], work, label=str)
+    assert summary.failed == 1

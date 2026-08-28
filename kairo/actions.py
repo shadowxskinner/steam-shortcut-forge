@@ -95,8 +95,11 @@ def fetch_and_apply(
     """Download the artwork, then apply it. Cancellation is checked between."""
     if token is not None:
         token.check()
-    stem = f"{entry.local_id.replace('/', '_')}_{art.id}"
     from kairo import paths
+    # art.id comes from a remote service and ends up in a filename, and the
+    # sources create missing parent directories, so it is sanitised rather
+    # than trusted.
+    stem = paths.icon_stem(entry.provider_id, entry.local_id, art.id)
     icon_path = source.fetch(art, paths.icon_store(), stem)
     if token is not None:
         token.check()
@@ -162,10 +165,15 @@ def restore_all(
     def work(record: ChangeRecord) -> None:
         restore_record(record, registry, ledger=ledger, refresh=False)
 
-    summary = run_bulk(records, work, token=token,
-                       label=lambda r: r.name, on_progress=on_progress)
-    ledger.save()
-    database.refresh()
+    try:
+        summary = run_bulk(records, work, token=token,
+                           label=lambda r: r.name, on_progress=on_progress)
+    finally:
+        # Whatever happened, what was already undone must be recorded. Losing
+        # the ledger here would leave restored entries still listed as
+        # changed, and unrestored ones invisible.
+        ledger.save()
+        database.refresh()
     return summary
 
 
@@ -193,9 +201,14 @@ def apply_many(
         fetch_and_apply(entry, provider, source, art, ledger=ledger,
                         token=token, refresh=False, save_ledger=False)
 
-    summary = run_bulk(plans, work, token=token,
-                       label=lambda plan: plan[0].name, on_progress=on_progress)
-    if ledger is not None:
-        ledger.save()
-    database.refresh()
+    try:
+        summary = run_bulk(plans, work, token=token,
+                           label=lambda plan: plan[0].name, on_progress=on_progress)
+    finally:
+        # The .desktop files are already written. If the ledger is not saved
+        # here those applications are customised with no record of it, so
+        # Changes cannot list them and Restore All cannot undo them.
+        if ledger is not None:
+            ledger.save()
+        database.refresh()
     return summary

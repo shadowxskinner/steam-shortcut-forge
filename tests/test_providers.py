@@ -195,13 +195,17 @@ def test_generated_writer_finds_entries_under_a_legacy_prefix(
         steam_entry, png, fake_home, monkeypatch):
     monkeypatch.setattr(paths, "LEGACY_DESKTOP_PREFIXES", ("old-prefix-",))
     legacy = paths.applications_dir() / "old-prefix-440.desktop"
-    legacy.write_text("[Desktop Entry]\nType=Application\nName=TF2\nIcon=/old.png\n")
+    # Carries our marker, as everything migration brings forward does. An
+    # unmarked file with the same name is covered by
+    # test_apply_does_not_delete_a_foreign_legacy_entry.
+    legacy.write_text("[Desktop Entry]\nType=Application\nName=TF2\nIcon=/old.png\n"
+                      f"{de.MANAGED_KEYS[0]}=true\n")
 
     writer = GeneratedEntryWriter(paths.DESKTOP_PREFIX, SteamProvider().writer().build_fields)
     assert writer.existing(steam_entry) == legacy
 
     writer.apply(steam_entry, png)
-    # The legacy file must go, or the launcher shows the game twice.
+    # An entry we wrote must go, or the launcher shows the game twice.
     assert not legacy.exists()
     assert (paths.applications_dir() / f"{paths.DESKTOP_PREFIX}440.desktop").is_file()
 
@@ -319,3 +323,105 @@ def test_registry_hides_providers_with_nothing_to_offer(fake_home):
     ids = {p.id for p in default_registry().available()}
     assert "steam" not in ids          # no Steam install in this fixture
     assert "desktop" in ids
+
+
+# ---------------------------------------------------------------------------
+# Ownership guards on generated entries
+#
+# The override writer refused to touch a file it did not create from the
+# start. The generated writer did not, on the theory that the filename was
+# proof enough - the same assumption the migration pass had to abandon.
+# ---------------------------------------------------------------------------
+
+def test_apply_refuses_a_foreign_file_with_our_name(steam_entry, png, fake_home):
+    target = paths.applications_dir() / f"{paths.DESKTOP_PREFIX}440.desktop"
+    target.write_text("[Desktop Entry]\nType=Application\nName=MY OWN\nIcon=mine\n")
+
+    with pytest.raises(ValueError):
+        SteamProvider().writer().apply(steam_entry, png)
+    assert "Name=MY OWN" in target.read_text()
+
+
+def test_apply_replaces_our_own_entry_normally(steam_entry, png, fake_home):
+    writer = SteamProvider().writer()
+    writer.apply(steam_entry, png)
+    writer.apply(steam_entry, png)          # no refusal on our own file
+    assert de.is_managed(writer.target(steam_entry))
+
+
+def test_apply_does_not_delete_a_foreign_legacy_entry(steam_entry, png, fake_home,
+                                                      monkeypatch):
+    """Migration deliberately leaves unproven legacy-named files alone; apply
+    must not quietly delete the same file a moment later."""
+    monkeypatch.setattr(paths, "LEGACY_DESKTOP_PREFIXES", ("steam-shortcut-forge-",))
+    foreign = paths.applications_dir() / "steam-shortcut-forge-440.desktop"
+    foreign.write_text("[Desktop Entry]\nType=Application\nName=NOT OURS\nIcon=x\n")
+
+    SteamProvider().writer().apply(steam_entry, png)
+
+    assert foreign.is_file()
+    assert "Name=NOT OURS" in foreign.read_text()
+    assert (paths.applications_dir() / f"{paths.DESKTOP_PREFIX}440.desktop").is_file()
+
+
+def test_apply_still_removes_our_own_legacy_entry(steam_entry, png, fake_home,
+                                                  monkeypatch):
+    monkeypatch.setattr(paths, "LEGACY_DESKTOP_PREFIXES", ("steam-shortcut-forge-",))
+    ours = paths.applications_dir() / "steam-shortcut-forge-440.desktop"
+    ours.write_text("[Desktop Entry]\nType=Application\nName=TF2\nIcon=/x.png\n"
+                    f"{de.MANAGED_KEYS[0]}=true\n")
+
+    SteamProvider().writer().apply(steam_entry, png)
+    assert not ours.exists()
+
+
+def test_restore_refuses_an_entry_without_our_marker(fake_home):
+    from kairo.models import AppEntry
+
+    target = paths.applications_dir() / f"{paths.DESKTOP_PREFIX}777.desktop"
+    target.write_text("[Desktop Entry]\nType=Application\nName=HAND WRITTEN\nIcon=x\n")
+    entry = AppEntry(key="steam:777", provider_id="steam", name="Hand written")
+
+    writer = SteamProvider().writer()
+    allowed, reason = writer.can_restore(entry)
+    assert allowed is False
+    assert reason
+    with pytest.raises(ValueError):
+        writer.restore(entry)
+    assert target.is_file()
+
+
+def test_restore_of_a_missing_entry_is_still_a_no_op(fake_home):
+    from kairo.models import AppEntry
+
+    entry = AppEntry(key="steam:999", provider_id="steam", name="Gone",
+                     customized=True)
+    SteamProvider().writer().restore(entry)      # must not raise
+    assert entry.customized is False
+
+
+def test_stored_icons_are_namespaced_by_provider(fake_home, png):
+    """Two providers with the same local id must not share one file, or
+    restoring either would delete artwork the other still points at."""
+    from kairo.models import AppEntry
+
+    a = AppEntry(key="steam:440", provider_id="steam", name="A")
+    b = AppEntry(key="desktop:440", provider_id="desktop", name="B")
+    assert store_icon(a, png) != store_icon(b, png)
+
+
+def test_restoring_one_app_leaves_the_other_artwork_alone(steam_library,
+                                                          system_apps, png):
+    from kairo.providers.writers import OverrideWriter
+
+    steam = SteamProvider()
+    entry = next(a for a in steam.scan() if a.local_id == "440")
+    dolphin = next(a for a in DesktopEntryProvider().scan() if a.name == "Dolphin")
+
+    steam_icon = steam.writer().apply(entry, png)
+    dolphin_icon = OverrideWriter().apply(dolphin, png)
+
+    steam.writer().restore(entry)
+
+    assert not steam_icon.exists()
+    assert dolphin_icon.exists()

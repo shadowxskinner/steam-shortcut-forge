@@ -146,12 +146,26 @@ def run_bulk(
     summary = BulkSummary(total=len(items))
     name_of = label or (lambda item: str(item))
 
+    def notify(callback, *args) -> None:
+        """Run a presentation callback without letting it abort the run.
+
+        These post updates to a window that the user may have closed, so they
+        can raise long after the caller stopped caring. A progress label
+        failing must never cost the caller its cleanup - which is where the
+        ledger gets written.
+        """
+        if callback is None:
+            return
+        try:
+            callback(*args)
+        except Exception:
+            pass
+
     for index, item in enumerate(items):
         if token.cancelled:
             summary.cancelled = True
             break
-        if on_progress is not None:
-            on_progress(index, summary.total, item)
+        notify(on_progress, index, summary.total, item)
         try:
             work(item)
         except Cancelled:
@@ -161,19 +175,16 @@ def run_bulk(
             summary.skipped += 1
             summary.processed += 1
             summary.skips.append(f"{name_of(item)}: {exc}" if str(exc) else name_of(item))
-            if on_result is not None:
-                on_result(item, "skipped", str(exc))
+            notify(on_result, item, "skipped", str(exc))
             continue
         except Exception as exc:
             summary.failed += 1
             summary.processed += 1
             summary.failures.append(f"{name_of(item)}: {exc}")
-            if on_result is not None:
-                on_result(item, "failed", str(exc))
+            notify(on_result, item, "failed", str(exc))
             continue
         summary.succeeded += 1
         summary.processed += 1
-        if on_result is not None:
-            on_result(item, "ok", "")
+        notify(on_result, item, "ok", "")
 
     return summary

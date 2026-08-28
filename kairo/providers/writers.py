@@ -40,9 +40,8 @@ def store_icon(entry: AppEntry, icon_src: Path) -> Path:
     except OSError:
         pass
 
-    safe = entry.local_id.replace("/", "_")
     digest = hashlib.md5(str(icon_src).encode()).hexdigest()[:8]
-    dest = store / f"{safe}_{digest}{suffix}"
+    dest = store / f"{paths.icon_stem(entry.provider_id, entry.local_id)}_{digest}{suffix}"
     shutil.copyfile(icon_src, dest)
     return dest
 
@@ -88,21 +87,37 @@ class GeneratedEntryWriter(LauncherWriter):
         return None
 
     def apply(self, entry: AppEntry, icon_src: Path) -> Path:
+        target = self.target(entry)
+
+        # A filename matching our naming scheme is not proof we wrote it.
+        # Someone can create kairo-440.desktop by hand, and overwriting it
+        # would destroy their work. Same rule the override writer follows and
+        # the same rule migration follows.
+        if target.exists() and not de.is_managed(target):
+            raise ValueError(
+                "There is already a launcher entry with this name that Kairo "
+                "did not create. Remove or rename it first.")
+
         stored = store_icon(entry, icon_src)
         paths.applications_dir().mkdir(parents=True, exist_ok=True)
 
         previous_file = self.existing(entry)
         previous_icon = None
+        previous_is_ours = False
         if previous_file is not None:
-            value = de.read_entry_icon(previous_file)
-            previous_icon = Path(value) if value else None
+            previous_is_ours = de.is_managed(previous_file)
+            if previous_is_ours:
+                value = de.read_entry_icon(previous_file)
+                previous_icon = Path(value) if value else None
 
         fields = self.build_fields(entry, stored)
-        de.atomic_write_text(self.target(entry), de.build_entry(fields))
+        de.atomic_write_text(target, de.build_entry(fields))
 
-        # An entry written under a legacy prefix would otherwise linger and
-        # show up in the launcher a second time.
-        if previous_file is not None and previous_file != self.target(entry):
+        # An entry we wrote under a legacy prefix would otherwise linger and
+        # show up in the launcher a second time. One we did not write is left
+        # exactly where it is.
+        if (previous_file is not None and previous_file != target
+                and previous_is_ours):
             previous_file.unlink(missing_ok=True)
 
         _discard_stored_icon(previous_icon, keep=stored)
@@ -112,11 +127,24 @@ class GeneratedEntryWriter(LauncherWriter):
         return stored
 
     def can_restore(self, entry: AppEntry) -> tuple[bool, str]:
-        if self.existing(entry) is None:
+        target = self.existing(entry)
+        if target is None:
             return False, "No shortcut to remove."
+        if not de.is_managed(target):
+            return False, ("There is a launcher entry with this name that "
+                           "Kairo did not create, so Kairo will not remove it.")
         return True, ""
 
     def restore(self, entry: AppEntry) -> None:
+        allowed, reason = self.can_restore(entry)
+        if not allowed:
+            target = self.existing(entry)
+            if target is None:
+                entry.customized = False
+                entry.current_icon = None
+                return
+            raise ValueError(reason)
+
         target = self.existing(entry)
         if target is not None:
             target.unlink(missing_ok=True)

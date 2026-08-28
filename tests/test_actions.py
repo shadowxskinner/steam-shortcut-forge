@@ -294,3 +294,46 @@ def test_apply_many_can_be_cancelled(steam_library, png, ledger, art):
 
     assert summary.cancelled is True
     assert summary.succeeded <= 1
+
+
+# ---------------------------------------------------------------------------
+# The ledger must survive a UI that goes away mid-run
+# ---------------------------------------------------------------------------
+
+def test_apply_many_saves_the_ledger_even_if_progress_explodes(steam_library, png,
+                                                               ledger, art):
+    """Closing the review window mid-apply used to abort apply_many before
+    ledger.save(), leaving applications customised with no record - invisible
+    in Changes and impossible to Restore All."""
+    steam = SteamProvider()
+    source = StubSource(png)
+    plans = [(app, source, art) for app in steam.scan()]
+
+    def boom(index, total, plan):
+        raise RuntimeError("window destroyed")
+
+    summary = actions.apply_many(plans, default_registry(), ledger=ledger,
+                                 on_progress=boom)
+
+    assert summary.succeeded == 2
+    assert len(Ledger().load()) == 2
+
+
+def test_restore_all_saves_the_ledger_even_if_progress_explodes(three_changes):
+    def boom(index, total, record):
+        raise RuntimeError("window destroyed")
+
+    actions.restore_all(three_changes, default_registry(), on_progress=boom)
+    assert len(Ledger().load()) == 0
+
+
+def test_apply_many_records_every_success_before_returning(steam_library, png,
+                                                           ledger, art):
+    steam = SteamProvider()
+    good, bad = StubSource(png), StubSource(png, fail=True)
+    apps = steam.scan()
+    actions.apply_many([(apps[0], good, art), (apps[1], bad, art)],
+                       default_registry(), ledger=ledger)
+    on_disk = Ledger().load()
+    assert len(on_disk) == 1
+    assert on_disk.get(apps[0].key) is not None

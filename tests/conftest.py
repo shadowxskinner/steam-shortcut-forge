@@ -19,6 +19,10 @@ def fake_home(tmp_path, monkeypatch):
     (home / ".local" / "share" / "applications").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_DATA_DIRS", str(tmp_path / "nonexistent-share"))
+    # Kairo honours these; unset them so the fixture home is the only thing
+    # deciding where files go, whatever the developer's environment does.
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     monkeypatch.delenv("XDG_CURRENT_DESKTOP", raising=False)
     monkeypatch.delenv("DESKTOP_SESSION", raising=False)
 

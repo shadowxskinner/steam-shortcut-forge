@@ -8,6 +8,7 @@ against a fixture home instead of the developer's real desktop.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 #: Directory name under ~/.config and ~/.local/share.
@@ -30,8 +31,30 @@ def home() -> Path:
     return Path(os.environ.get("HOME") or Path.home())
 
 
+def _xdg_base(variable: str, fallback: str) -> Path:
+    """An XDG base directory, honouring the environment.
+
+    Hardcoding ~/.config and ~/.local/share is wrong on any machine where
+    these are set: Kairo would write launcher entries into a directory the
+    desktop is not reading, and the entries would simply never appear. The
+    spec requires relative values to be ignored, hence the absolute check.
+    """
+    raw = os.environ.get(variable, "").strip()
+    if raw.startswith("/"):
+        return Path(raw)
+    return home() / fallback
+
+
+def config_home() -> Path:
+    return _xdg_base("XDG_CONFIG_HOME", ".config")
+
+
+def data_home() -> Path:
+    return _xdg_base("XDG_DATA_HOME", ".local/share")
+
+
 def config_dir() -> Path:
-    return home() / ".config" / APP_DIRNAME
+    return config_home() / APP_DIRNAME
 
 
 def config_file() -> Path:
@@ -43,7 +66,7 @@ def cache_dir() -> Path:
 
 
 def data_dir() -> Path:
-    return home() / ".local" / "share" / APP_DIRNAME
+    return data_home() / APP_DIRNAME
 
 
 def icon_store() -> Path:
@@ -57,15 +80,15 @@ def icon_store() -> Path:
 
 def applications_dir() -> Path:
     """The only directory Kairo ever writes launcher entries into."""
-    return home() / ".local" / "share" / "applications"
+    return data_home() / "applications"
 
 
 def legacy_config_dir(name: str) -> Path:
-    return home() / ".config" / name
+    return config_home() / name
 
 
 def legacy_data_dir(name: str) -> Path:
-    return home() / ".local" / "share" / name
+    return data_home() / name
 
 
 def legacy_icon_store(name: str) -> Path:
@@ -83,7 +106,7 @@ def system_application_dirs() -> list[Path]:
         Path("/usr/share/applications"),
         Path("/usr/local/share/applications"),
         Path("/var/lib/flatpak/exports/share/applications"),
-        home() / ".local" / "share" / "flatpak" / "exports" / "share" / "applications",
+        data_home() / "flatpak" / "exports" / "share" / "applications",
         applications_dir(),
     ]
 
@@ -106,6 +129,36 @@ def strip_generated_prefix(name: str) -> str:
     return ""
 
 
+_UNSAFE_COMPONENT = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_component(text: str, fallback: str = "icon") -> str:
+    """Reduce arbitrary text to one harmless filename component.
+
+    Artwork identifiers come from remote services, and they end up in the name
+    of a file Kairo writes. An id of "../../evil" would otherwise escape the
+    icon store entirely, because the writers create missing parent
+    directories. Everything outside a conservative allowlist is collapsed, and
+    leading dots are stripped so no result can be "." or "..".
+    """
+    cleaned = _UNSAFE_COMPONENT.sub("_", str(text)).strip("._")
+    return cleaned[:64] or fallback
+
+
+def icon_stem(provider_id: str, local_id: str, artwork_id: str = "") -> str:
+    """The filename stem for stored artwork.
+
+    Namespaced by provider for the same reason AppEntry.key is: without it a
+    Steam appid and a .desktop basename that happen to match would share a
+    file in the icon store, and restoring one would delete artwork the other
+    still points at.
+    """
+    parts = [safe_component(provider_id, "app"), safe_component(local_id, "id")]
+    if artwork_id:
+        parts.append(safe_component(artwork_id, "art"))
+    return "_".join(parts)
+
+
 def icon_roots() -> list[Path]:
     roots: list[Path] = []
     raw_dirs = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
@@ -118,7 +171,7 @@ def icon_roots() -> list[Path]:
 def theme_roots() -> list[Path]:
     """Every directory that can contain installed icon themes."""
     roots = list(icon_roots())
-    roots += [home() / ".icons", home() / ".local" / "share" / "icons"]
+    roots += [home() / ".icons", data_home() / "icons"]
     seen: set[str] = set()
     out: list[Path] = []
     for root in roots:

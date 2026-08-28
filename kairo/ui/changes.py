@@ -161,6 +161,9 @@ class ChangesWindow(ctk.CTkToplevel):
                                    ledger=self.ledger, refresh=True)
         except Exception as exc:
             messagebox.showerror("Could not restore", str(exc), parent=self)
+            self.status.configure(text=f"Could not restore {record.name}.")
+            self.refresh()
+            return
         self.status.configure(text=f"Restored {record.name}.")
         self.refresh()
         self._notify()
