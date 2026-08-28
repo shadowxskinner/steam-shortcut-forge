@@ -79,3 +79,29 @@ def ellipsize(text: str, limit: int) -> str:
     """
     text = text.strip()
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def confidence_label(confidence: float) -> str:
+    """Plain words for a match score.
+
+    A number between 0 and 1 means nothing to someone who just wants nicer
+    icons, and showing one invites the question of what 0.75 is supposed to
+    mean.
+    """
+    if confidence >= 1.0:
+        return "Exact match"
+    if confidence >= 0.9:
+        return "Exact name"
+    if confidence >= 0.75:
+        return "Strong match"
+    return "Good match"
+
+
+def format_date(iso: str) -> str:
+    """2026-08-27T14:02:11Z -> 27 Aug 2026."""
+    import time
+    try:
+        parsed = time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, TypeError):
+        return iso or ""
+    return time.strftime("%d %b %Y", parsed)

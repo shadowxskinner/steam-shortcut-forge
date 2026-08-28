@@ -3,31 +3,36 @@
 from __future__ import annotations
 
 import threading
-import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+from kairo import APP_NAME, actions
 from kairo import config as config_store
-from kairo import migration, paths
+from kairo import migration
 from kairo.artwork.local import LocalFileSource
 from kairo.artwork.registry import default_registry as artwork_registry
 from kairo.artwork.steamgriddb import CONFIG_KEY as SGDB_KEY
-from kairo.desktop import database
+from kairo.ledger import Ledger
+from kairo.matching import Matcher
 from kairo.models import AppEntry, Artwork
 from kairo.providers.registry import default_registry as provider_registry
+from kairo.tasks import ActivityTokens
 from kairo.ui import theme as T
+from kairo.ui.changes import ChangesWindow
+from kairo.ui.review import ReviewWindow
 from kairo.ui.settings import SettingsDialog
 from kairo.ui.widgets import AppRow, ArtworkTile
-
-from kairo import APP_NAME
 
 WINDOW_TITLE = APP_NAME
 SEARCH_DEBOUNCE_MS = 400
 GRID_GUTTER = 12
 DEFAULT_COLS = 3
+
+ACTIVITY_ARTWORK = "artwork"
+ACTIVITY_BULK = "bulk"
 
 
 class KairoApp(ctk.CTk):
@@ -48,6 +53,8 @@ class KairoApp(ctk.CTk):
         self.config_data = config_store.load()
         self.providers = provider_registry()
         self.sources = artwork_registry(self.config_data)
+        self.ledger = Ledger().load()
+        self.tokens = ActivityTokens()
 
         self.entries: dict[str, list[AppEntry]] = {}
         self.rows: list[AppRow] = []
@@ -66,10 +73,14 @@ class KairoApp(ctk.CTk):
         self.query_var = ctk.StringVar()
         self.search_var = ctk.StringVar()
 
+        self.protocol("WM_DELETE_WINDOW", self._quit)
         self._build(available)
         self._announce_migration()
         self._first_run()
         self.scan()
+
+    def matcher(self) -> Matcher:
+        return Matcher(self.providers, self.sources, self.config_data)
 
     # -- current selection ------------------------------------------------
 
@@ -86,6 +97,10 @@ class KairoApp(ctk.CTk):
     def current_entries(self) -> list[AppEntry]:
         return self.entries.get(self.provider().id, [])
 
+    def all_entries(self) -> list[AppEntry]:
+        return [e for provider in self.providers.all()
+                for e in self.entries.get(provider.id, [])]
+
     # -- layout -----------------------------------------------------------
 
     def _build(self, available):
@@ -101,7 +116,7 @@ class KairoApp(ctk.CTk):
 
         header = ctk.CTkFrame(sidebar, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=16, pady=(18, 6))
-        ctk.CTkLabel(header, text="Apps", font=T.F_LOGO,
+        ctk.CTkLabel(header, text=APP_NAME, font=T.F_LOGO,
                      text_color=T.C_TEXT).pack(side="left")
         self.count_pill = ctk.CTkLabel(header, text="0", font=T.F_SMALL,
                                        text_color=T.C_TEXT2, fg_color=T.C_ROW,
@@ -148,6 +163,11 @@ class KairoApp(ctk.CTk):
 
         bottom = ctk.CTkFrame(sidebar, fg_color="transparent")
         bottom.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 16))
+        self.changes_btn = ctk.CTkButton(
+            bottom, text="↺  Changes", height=36, corner_radius=18,
+            fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT2,
+            font=T.F_BUTTON, anchor="w", command=self._open_changes)
+        self.changes_btn.pack(fill="x", pady=(0, 6))
         ctk.CTkButton(bottom, text="⚙  Settings", height=36, corner_radius=18,
                       fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER,
                       text_color=T.C_TEXT2, font=T.F_BUTTON, anchor="w",
@@ -207,28 +227,37 @@ class KairoApp(ctk.CTk):
         # stale and the mouse wheel silently stops working.
         self.grid_area.bind("<Configure>", self._on_resize, add="+")
 
-        actions = ctk.CTkFrame(main, fg_color="transparent")
-        actions.grid(row=5, column=0, sticky="ew", padx=28, pady=(8, 16))
+        actions_row = ctk.CTkFrame(main, fg_color="transparent")
+        actions_row.grid(row=5, column=0, sticky="ew", padx=28, pady=(8, 8))
         self.browse_btn = ctk.CTkButton(
-            actions, text="📁  Browse local file", height=42, corner_radius=21,
+            actions_row, text="📁  Browse local file", height=42, corner_radius=21,
             fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
             font=T.F_BUTTON, command=self._on_browse, state="disabled")
         self.browse_btn.pack(side="left", padx=(0, 8))
         self.restore_btn = ctk.CTkButton(
-            actions, text="Restore original", height=42, corner_radius=21,
+            actions_row, text="Restore original", height=42, corner_radius=21,
             fg_color=T.C_DANGER_BG, hover_color="#3a2020", text_color=T.C_DANGER,
             font=T.F_BUTTON, command=self._on_restore, state="disabled")
         self.restore_btn.pack(side="left", padx=(0, 8))
-        self.bulk_btn = ctk.CTkButton(
-            actions, text="⬇  Auto-assign all", height=42, corner_radius=21,
-            fg_color=T.C_ACCENT_DIM, hover_color=T.C_CARD_HOVER, text_color=T.C_ACCENT,
-            font=T.F_BUTTON, command=self._on_bulk)
-        self.bulk_btn.pack(side="right")
+
+        self.match_btn = ctk.CTkButton(
+            actions_row, text="⚡  Auto Match", height=42, corner_radius=21,
+            fg_color=T.C_ACCENT, hover_color=T.C_ACCENT_HOVER,
+            font=T.F_BUTTON, command=self._on_auto_match)
+        self.match_btn.pack(side="right")
+        self.cancel_btn = ctk.CTkButton(
+            actions_row, text="Cancel", height=42, corner_radius=21,
+            fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
+            font=T.F_BUTTON, command=self._cancel_bulk)
+
+        self.progress = ctk.CTkProgressBar(main, height=6,
+                                           progress_color=T.C_ACCENT)
+        self.progress.set(0)
 
         self.status = ctk.CTkLabel(main, text="", font=T.F_TINY, text_color=T.C_TEXT3)
-        self.status.grid(row=6, column=0, sticky="w", padx=28, pady=(0, 12))
+        self.status.grid(row=7, column=0, sticky="w", padx=28, pady=(0, 12))
 
-    # -- scanning ---------------------------------------------------------
+    # -- startup ----------------------------------------------------------
 
     def _announce_migration(self):
         """Tell the user once that their files moved.
@@ -243,10 +272,10 @@ class KairoApp(ctk.CTk):
         body = (f"{report.summary()}\n\n"
                 "Your original Steam Shortcut Forge files have been left where "
                 "they were, so nothing is lost.")
-        if report.failures:
-            body += ("\n\nCould not migrate:\n"
-                     + "\n".join(report.failures[:10]))
-        messagebox.showinfo("Welcome to Kairo", body)
+        detail = report.collisions + report.failures
+        if detail:
+            body += "\n\nNeeds your attention:\n" + "\n".join(detail[:10])
+        messagebox.showinfo(f"Welcome to {APP_NAME}", body)
 
     def _first_run(self):
         steam = self.providers.get("steam")
@@ -267,6 +296,8 @@ class KairoApp(ctk.CTk):
             except Exception as exc:
                 self.entries[provider.id] = []
                 messagebox.showerror("Scan failed", f"{provider.label}: {exc}")
+        # Drop history for entries the user has since deleted or taken over.
+        self.ledger.prune()
         self._filter()
         self._update_summary()
 
@@ -306,6 +337,7 @@ class KairoApp(ctk.CTk):
         self.count_pill.configure(text=str(len(entries)))
 
     def _on_provider_changed(self, _value=None):
+        self.tokens.cancel(ACTIVITY_ARTWORK)
         self.search_var.set("")
         self.selected_row = None
         self._set_actions(False)
@@ -334,19 +366,20 @@ class KairoApp(ctk.CTk):
         state = "normal" if enabled else "disabled"
         self.browse_btn.configure(state=state)
         self.restore_btn.configure(state=state)
-        # Bulk assignment needs a source that can match without user input.
-        if self.provider().id == "steam":
-            if not self.bulk_btn.winfo_ismapped():
-                self.bulk_btn.pack(side="right")
-        else:
-            self.bulk_btn.pack_forget()
 
     def _update_summary(self):
         entries = self.current_entries()
         done = sum(1 for e in entries if e.customized)
         self.status.configure(
-            text=f"{len(entries)} {self.provider().noun}  ·  {done} customized")
+            text=f"{len(entries)} {self.provider().noun}  ·  {done} customized"
+                 f"  ·  {len(self.ledger)} change(s) recorded")
         self.count_pill.configure(text=str(len(self.rows)))
+
+    def _row_for(self, entry: AppEntry) -> AppRow | None:
+        for row in self.rows:
+            if row.entry.key == entry.key:
+                return row
+        return None
 
     # -- sources ----------------------------------------------------------
 
@@ -360,7 +393,6 @@ class KairoApp(ctk.CTk):
         if self.source_var.get() not in labels:
             self.source_var.set(labels[0] if labels else "")
 
-        # A picker with one option is just a label taking up space.
         if len(labels) > 1:
             self.source_row.grid()
         else:
@@ -464,9 +496,15 @@ class KairoApp(ctk.CTk):
                 self._sub_if_current(entry, f"Type a term to search {source.label}.")
                 return
 
+        # Selecting another application cancels this one's fetch rather than
+        # merely ignoring its results when they eventually arrive.
+        token = self.tokens.start(ACTIVITY_ARTWORK)
+
         def work():
             try:
                 results = source.find(query)
+                if token.cancelled:
+                    return
                 if not results:
                     self.after(0, self._sub_if_current, entry,
                                f"{entry.subtitle}  ·  Nothing found in {source.label}")
@@ -477,13 +515,18 @@ class KairoApp(ctk.CTk):
                 # shape, then stream artwork into the placeholders.
                 self.after(0, self._build_tiles, results, entry)
                 for index, art in enumerate(results):
+                    if token.cancelled:
+                        return
                     try:
                         data = source.preview(art)
                     except Exception:
                         continue
+                    if token.cancelled:
+                        return
                     self.after(0, self._fill_tile, index, data, entry)
             except Exception as exc:
-                self.after(0, self._sub_if_current, entry, str(exc))
+                if not token.cancelled:
+                    self.after(0, self._sub_if_current, entry, str(exc))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -556,38 +599,26 @@ class KairoApp(ctk.CTk):
         source = self.sources.get(art.source_id)
         if source is None:
             return
+        provider = self.providers.for_entry(entry)
         self.sub.configure(text="Downloading icon…")
 
         def work():
             try:
-                stem = f"{entry.local_id.replace('/', '_')}_{art.id}"
-                path = source.fetch(art, paths.icon_store(), stem)
-                self.after(0, self._apply, entry, path)
+                actions.fetch_and_apply(entry, provider, source, art,
+                                        ledger=self.ledger)
+                self.after(0, self._after_apply, entry)
             except Exception as exc:
-                self.after(0, self._sub_if_current, entry, f"Download failed: {exc}")
+                self.after(0, self._sub_if_current, entry, f"Could not apply: {exc}")
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _apply(self, entry: AppEntry, icon: Path):
-        provider = self.providers.for_entry(entry)
-        try:
-            provider.writer().apply(entry, icon)
-        except Exception as exc:
-            messagebox.showerror("Could not apply icon", str(exc))
-            return
-        database.refresh()
+    def _after_apply(self, entry: AppEntry):
         row = self._row_for(entry)
         if row:
             row.refresh()
         if self._showing(entry):
             self.sub.configure(text=f"{entry.subtitle}  ·  Icon applied")
         self._update_summary()
-
-    def _row_for(self, entry: AppEntry) -> AppRow | None:
-        for row in self.rows:
-            if row.entry.key == entry.key:
-                return row
-        return None
 
     def _on_browse(self):
         if not self.selected_row:
@@ -598,98 +629,104 @@ class KairoApp(ctk.CTk):
             filetypes=[("Icon images", "*.ico *.png *.svg *.xpm"), ("All", "*.*")])
         if not chosen:
             return
-        art = LocalFileSource.artwork_for(Path(chosen))
-        self._pick(art)
+        self._pick(LocalFileSource.artwork_for(Path(chosen)))
 
     def _on_restore(self):
         if not self.selected_row:
             return
         entry = self.selected_row.entry
         provider = self.providers.for_entry(entry)
-        writer = provider.writer()
 
-        allowed, reason = writer.can_restore(entry)
+        allowed, reason = provider.writer().can_restore(entry)
         if not allowed:
             messagebox.showinfo("Nothing to restore", reason)
             return
         if not messagebox.askyesno("Restore original",
-                                   f"Restore the original icon for {entry.name}?"):
+                                   f"Put back the original icon for {entry.name}?"):
             return
         try:
-            writer.restore(entry)
+            actions.restore_entry(entry, provider, ledger=self.ledger)
         except Exception as exc:
-            messagebox.showerror("Restore refused", str(exc))
+            messagebox.showerror("Could not restore", str(exc))
             return
-        database.refresh()
-        provider.refresh(entry)
         row = self._row_for(entry)
         if row:
             row.refresh()
         self.sub.configure(text=f"{entry.subtitle}  ·  Restored")
         self._update_summary()
 
-    # -- bulk -------------------------------------------------------------
+    # -- auto match -------------------------------------------------------
 
-    def _on_bulk(self):
-        provider = self.provider()
-        source = self.sources.get("steamgriddb")
-        if provider.id != "steam" or source is None:
-            self.status.configure(text="Auto-assign is only available for Steam games.")
-            return
-        if not source.available(self.config_data):
-            messagebox.showinfo("API key required",
-                                source.unavailable_reason(self.config_data))
-            return
+    def _on_auto_match(self):
+        """Match across every provider, then hand the result to review.
 
-        todo = [e for e in self.current_entries() if not e.customized]
-        if not todo:
-            self.status.configure(text="Every game already has artwork.")
-            return
-        if not messagebox.askyesno(
-                "Auto-assign", f"Fetch the best icon for {len(todo)} game(s)?"):
+        Nothing is written here. The match pass only decides what Kairo would
+        propose; the review window is where the user agrees.
+        """
+        entries = self.all_entries()
+        if not entries:
+            self.status.configure(text="Nothing to match — try Rescan first.")
             return
 
-        self.bulk_btn.configure(state="disabled", text="Working…")
-        writer = provider.writer()
+        token = self.tokens.start(ACTIVITY_BULK)
+        self._bulk_running(True)
+        matcher = self.matcher()
+
+        def progress(index, total, entry):
+            self.after(0, lambda: (
+                self.progress.set((index + 1) / max(total, 1)),
+                self.status.configure(text=f"Matching ({index + 1}/{total}) {entry.name}…"),
+            ))
 
         def work():
-            done = 0
-            failures: list[str] = []
-            for index, entry in enumerate(todo):
-                self.after(0, lambda e=entry, n=index: self.status.configure(
-                    text=f"({n + 1}/{len(todo)}) {e.name}…"))
-                try:
-                    results = source.find(provider.artwork_query(entry))
-                    if not results:
-                        failures.append(f"{entry.name}: no artwork found")
-                        continue
-                    best = results[0]
-                    stem = f"{entry.local_id}_{best.id}"
-                    path = source.fetch(best, paths.icon_store(), stem)
-                    writer.apply(entry, path)
-                    done += 1
-                except Exception as exc:
-                    failures.append(f"{entry.name}: {exc}")
-                finally:
-                    time.sleep(0.3)      # stay under the API rate limit
-
-            database.refresh()
+            report = matcher.match_all(entries, token=token, on_progress=progress)
 
             def finish():
-                self.bulk_btn.configure(state="normal", text="⬇  Auto-assign all")
-                self.status.configure(
-                    text=f"Done — {done} assigned, {len(failures)} skipped")
-                self._filter()
-                self._update_summary()
-                if failures:
-                    messagebox.showwarning(
-                        "Some games were skipped",
-                        "\n".join(failures[:40])
-                        + ("\n…" if len(failures) > 40 else ""))
+                self._bulk_running(False)
+                if report.cancelled:
+                    self.status.configure(
+                        text=f"Matching cancelled — {report.matched} match(es) found "
+                             "before stopping.")
+                else:
+                    self.status.configure(text=report.headline())
+                if not report.matches and not report.cancelled:
+                    messagebox.showinfo(
+                        "No confident matches",
+                        "Kairo did not find artwork it is confident about.\n\n"
+                        "It would rather find nothing than put the wrong icon on "
+                        "an application. You can still pick artwork yourself from "
+                        "the main list.")
+                    return
+                ReviewWindow(self, report, self.providers, self.sources,
+                             self.ledger, on_applied=self._after_bulk)
 
             self.after(0, finish)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _bulk_running(self, running: bool):
+        if running:
+            self.match_btn.pack_forget()
+            self.cancel_btn.pack(side="right")
+            self.progress.grid(row=6, column=0, sticky="ew", padx=28, pady=(0, 4))
+            self.progress.set(0)
+        else:
+            self.cancel_btn.pack_forget()
+            self.match_btn.pack(side="right")
+            self.progress.grid_remove()
+
+    def _cancel_bulk(self):
+        self.tokens.cancel(ACTIVITY_BULK)
+        self.status.configure(text="Stopping…")
+
+    def _after_bulk(self):
+        self.scan()
+
+    # -- changes ----------------------------------------------------------
+
+    def _open_changes(self):
+        ChangesWindow(self, self.ledger, self.providers,
+                      on_finished=self._after_bulk)
 
     # -- settings ---------------------------------------------------------
 
@@ -702,3 +739,8 @@ class KairoApp(ctk.CTk):
         self.config_data = config_store.load()
         self.sources = artwork_registry(self.config_data)
         self._refresh_sources()
+
+    def _quit(self):
+        """Stop every worker before tearing the window down."""
+        self.tokens.cancel_all()
+        self.destroy()

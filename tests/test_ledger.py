@@ -6,8 +6,8 @@ import pytest
 
 from kairo import paths
 from kairo.desktop import entry as de
-from kairo.ledger import (ACTION_CREATED, ACTION_OVERRODE, LEDGER_VERSION,
-                          ChangeRecord, Ledger)
+from kairo.ledger import (ACTION_CREATED, LEDGER_VERSION, ChangeRecord,
+                          Ledger)
 
 
 def make_record(tmp_path, key="steam:440", name="Team Fortress 2",

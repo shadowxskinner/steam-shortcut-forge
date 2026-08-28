@@ -1,11 +1,9 @@
 """The match pass and its confidence model."""
 
-import pytest
-
 from kairo.artwork.base import ArtworkSource
 from kairo.artwork.registry import ArtworkRegistry
 from kairo.artwork.themes import IconThemeSource
-from kairo.matching import Match, Matcher, MatchReport
+from kairo.matching import Matcher
 from kairo.models import (AUTO_APPLY_THRESHOLD, CONFIDENCE_EXACT_NAME,
                           CONFIDENCE_FUZZY, CONFIDENCE_ID, AppEntry, Artwork,
                           ArtQuery, Suggestion)

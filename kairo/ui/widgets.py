@@ -3,12 +3,44 @@
 from __future__ import annotations
 
 import tkinter as tk
+from pathlib import Path
 
 import customtkinter as ctk
 
 from kairo import imaging
 from kairo.models import AppEntry, Artwork
 from kairo.ui import theme as T
+
+
+class IconWell(ctk.CTkFrame):
+    """A fixed-footprint rounded square holding one icon.
+
+    Used wherever icons sit beside each other and must line up: the sidebar,
+    the Changes list, and the current-to-suggested pairs in review.
+    """
+
+    def __init__(self, master, size: int = 48, **kw):
+        super().__init__(master, width=size, height=size,
+                         corner_radius=T.R_WELL, fg_color=T.C_CARD, **kw)
+        self.size = size
+        self._photo = None
+        self.grid_propagate(False)
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.label = ctk.CTkLabel(self, text="", width=1, height=1)
+        self.label.grid(row=0, column=0)
+
+    def show(self, path=None, placeholder: str = "○") -> None:
+        if path is None or not Path(str(path)).is_file():
+            self.label.configure(image=None, text=placeholder,
+                                 font=("Inter", max(14, self.size // 3)),
+                                 text_color=T.C_TEXT3)
+            return
+        try:
+            self._photo = imaging.load_icon(self.size - 12, path=Path(str(path)))
+            self.label.configure(image=self._photo, text="")
+        except (tk.TclError, OSError, ValueError):
+            self.label.configure(image=None, text="?", text_color=T.C_TEXT3)
 
 
 class AppRow(ctk.CTkFrame):

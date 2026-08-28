@@ -17,8 +17,14 @@ application you care about.
 Kairo does that part.
 
 ```
-Scan system  →  63 applications found  →  51 with artwork available  →  Apply
+Scan  →  Match  →  Review  →  Apply
+
+63 applications discovered  ·  51 artwork matches found
 ```
+
+Matching never writes anything. Kairo works out what it thinks each
+application should have, shows you **current → suggested** for every one, and
+waits. You tick what you want and press Apply.
 
 You should never need to know what a `.desktop` file is, where your
 distribution keeps launcher entries, or what a Flatpak app id looks like.
@@ -33,6 +39,30 @@ distribution keeps launcher entries, or what a Flatpak app id looks like.
   themes or from [Iconify](https://iconify.design)'s ~275,000 open source
   icons.
 - **Your own images** — any `.png`, `.svg`, `.ico` or `.xpm`.
+
+## Matching you can trust
+
+Kairo would rather find nothing than put the wrong icon on an application. A
+wrong icon applied silently has to be noticed before it can be undone, and one
+bad guess costs more trust than ten missing matches.
+
+So every source says how confident it is, and anything below the threshold
+leaves the application unmatched rather than guessing:
+
+| | |
+| --- | --- |
+| Matched on the Steam app ID | cannot be the wrong game |
+| The app's own icon name hit a theme exactly | unambiguous |
+| An icon set has an icon named exactly what we searched | strong |
+| `org.kde.dolphin` → `dolphin` | strong |
+| A substring or search-relevance hit | **never applied automatically** |
+
+That last row is why `dolphin` is never matched by `dolphin-emulator`, and why
+searching Iconify for "steam" does not put a locomotive on your games.
+
+For Steam, SteamGridDB comes first because it matches on the actual app ID.
+Installed themes and Iconify follow, for titles it does not index and for users
+with no API key. When browsing manually you can use any source you like.
 
 ## Safety
 
@@ -50,6 +80,16 @@ Kairo changes how your launcher looks. That has to be reversible.
 - **Desktop integration survives.** `MimeType`, `StartupWMClass`, `Actions`,
   translated names and vendor keys are copied byte for byte. Only `Icon=` in
   `[Desktop Entry]` changes — never an icon inside a `[Desktop Action]` group.
+
+### Changes
+
+Everything Kairo has done is listed under **Changes**: the application, the
+icon that was there before, what Kairo applied, where it came from, and when.
+Restore any one of them, or all of them at once.
+
+If Kairo no longer recognises a launcher entry as its own — because you edited
+it, or a package update replaced it — it refuses to remove it and says so. The
+marker inside the file decides that, never the history.
 
 ## Install
 
