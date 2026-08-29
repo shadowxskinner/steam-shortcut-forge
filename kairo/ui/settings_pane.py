@@ -8,6 +8,7 @@ from kairo import APP_ID, APP_NAME, TAGLINE, __version__
 from kairo import config as config_store
 from kairo import migration, paths
 from kairo.artwork.steamgriddb import CONFIG_KEY as SGDB_KEY
+from kairo.ui import ambience
 from kairo.ui import theme as T
 from kairo.ui.context import UIContext
 
@@ -15,6 +16,7 @@ from kairo.ui.context import UIContext
 class SettingsPane(ctk.CTkFrame):
     def __init__(self, master, context: UIContext, **kw):
         super().__init__(master, fg_color=T.C_BG, corner_radius=0, **kw)
+        ambience.attach(self)
         self.ctx = context
         self.grid_columnconfigure(0, weight=1)
 
@@ -22,7 +24,8 @@ class SettingsPane(ctk.CTkFrame):
                      text_color=T.C_TEXT, anchor="w"
                      ).grid(row=0, column=0, sticky="w", padx=T.PAD_WINDOW, pady=(T.S5, T.S4))
 
-        card = ctk.CTkFrame(self, fg_color=T.C_PANEL, corner_radius=T.R_LG)
+        card = ctk.CTkFrame(self, fg_color=T.C_PANEL, corner_radius=T.R_LG,
+                            border_width=1, border_color=T.C_BORDER)
         card.grid(row=1, column=0, sticky="ew", padx=T.PAD_WINDOW, pady=(0, T.S4))
         card.grid_columnconfigure(0, weight=1)
 
@@ -49,14 +52,15 @@ class SettingsPane(ctk.CTkFrame):
         buttons = ctk.CTkFrame(card, fg_color="transparent")
         buttons.grid(row=4, column=0, sticky="e", padx=T.PAD_CARD, pady=(0, T.PAD_CARD))
         ctk.CTkButton(buttons, text="Save", height=36, width=110,
-                      corner_radius=T.R_WELL, fg_color=T.C_ACCENT,
+                      corner_radius=T.R_WELL, fg_color=T.C_ACCENT_BRIGHT,
                       hover_color=T.C_ACCENT_HOVER, font=T.F_BUTTON,
                       command=self._save).pack(side="right")
         self.saved = ctk.CTkLabel(buttons, text="", font=T.F_META,
                                   text_color=T.C_SUCCESS)
         self.saved.pack(side="right", padx=(0, 12))
 
-        where = ctk.CTkFrame(self, fg_color=T.C_PANEL, corner_radius=T.R_LG)
+        where = ctk.CTkFrame(self, fg_color=T.C_PANEL, corner_radius=T.R_LG,
+                            border_width=1, border_color=T.C_BORDER)
         where.grid(row=2, column=0, sticky="ew", padx=T.PAD_WINDOW, pady=(0, T.S4))
         ctk.CTkLabel(where, text="WHERE THINGS LIVE", font=T.F_MICRO,
                      text_color=T.C_TEXT3, anchor="w"

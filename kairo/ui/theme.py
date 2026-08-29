@@ -25,11 +25,14 @@ UI_SCALE = 1.0
 # Colour
 # ---------------------------------------------------------------------------
 
-C_BG = "#0B0918"             # window
-C_NAV = "#100D22"            # navigation column
-C_LIST = "#13102C"           # entry column
-C_PANEL = "#171334"          # workspace surfaces
-C_CARD = "#1E1943"           # rows, wells, fields
+# Seven steps, each a small lift on the last. Depth is carried by value
+# because Tk cannot composite translucency, so the gaps between these numbers
+# are the only thing separating one surface from another.
+C_BG = "#08061A"             # window
+C_NAV = "#0D0A22"            # navigation column
+C_LIST = "#12102E"           # entry column
+C_PANEL = "#171438"          # workspace surfaces
+C_CARD = "#1F1A48"           # rows, wells, fields
 C_CARD_HOVER = "#262052"
 # Selection in the reference is a lighter panel with a faint border, not a
 # saturated fill. A solid accent block draws the eye harder than the content
@@ -39,8 +42,12 @@ C_SELECTED_NAV = "#221C50"   # nav sits one step quieter still
 C_BORDER = "#231E4C"         # barely there, on purpose
 C_BORDER_STRONG = "#2E2865"
 
-C_ACCENT = "#5B3DF5"
-C_ACCENT_HOVER = "#6E52FF"
+# The everyday accent is muted; the brightest purple is kept for controls
+# that are actually active - Apply, the selected pill, the chosen tile - so
+# that brightness means something rather than being the ambient level.
+C_ACCENT = "#5540D6"
+C_ACCENT_BRIGHT = "#6C4CFF"
+C_ACCENT_HOVER = "#7E60FF"
 C_ACCENT_SOFT = "#211B52"    # accent at rest, for quiet fills
 C_ACCENT_TEXT = "#B9AAFF"
 

@@ -18,6 +18,7 @@ import customtkinter as ctk
 from kairo import actions
 from kairo.artwork.local import LocalFileSource
 from kairo.models import AppEntry, Artwork
+from kairo.ui import ambience
 from kairo.ui import theme as T
 from kairo.ui.context import UIContext
 from kairo.ui.widgets import (AppRow, ArtworkTile, IconWell, SearchField,
@@ -114,6 +115,10 @@ class LibraryPane(ctk.CTkFrame):
     def _build_workspace(self):
         space = ctk.CTkFrame(self, fg_color=T.C_BG, corner_radius=0)
         space.grid(row=0, column=1, sticky="nsew")
+        # Before any child: Tk stacks later siblings above earlier ones, and
+        # this has to sit underneath. Only the margins and the gaps between
+        # cards will show it, because CustomTkinter has no real transparency.
+        ambience.attach(space)
         space.grid_rowconfigure(2, weight=1)
         space.grid_columnconfigure(0, weight=1)
 
@@ -133,7 +138,8 @@ class LibraryPane(ctk.CTkFrame):
         # Current versus proposed, side by side. Choosing artwork below only
         # proposes it; nothing is written until Apply.
         compare = ctk.CTkFrame(space, fg_color=T.C_PANEL,
-                               corner_radius=T.R_CARD)
+                               corner_radius=T.R_LG, border_width=1,
+                               border_color=T.C_BORDER)
         compare.grid(row=1, column=0, sticky="ew",
                      padx=T.PAD_WINDOW, pady=(T.S4, T.S3))
         for column_index in (0, 1, 2):
@@ -168,7 +174,8 @@ class LibraryPane(ctk.CTkFrame):
         # One surface holding the source controls and the results they
         # produce. Floating the picker above a separate panel made it read as
         # unrelated chrome; the controls belong to the browser they filter.
-        panel = ctk.CTkFrame(space, fg_color=T.C_PANEL, corner_radius=T.R_LG)
+        panel = ctk.CTkFrame(space, fg_color=T.C_PANEL, corner_radius=T.R_LG,
+                             border_width=1, border_color=T.C_BORDER)
         panel.grid(row=2, column=0, sticky="nsew",
                    padx=T.PAD_WINDOW, pady=(0, T.S4))
         panel.grid_rowconfigure(1, weight=1)
@@ -224,7 +231,7 @@ class LibraryPane(ctk.CTkFrame):
             font=T.F_BUTTON, command=self._on_remove)
         self.apply_btn = ctk.CTkButton(
             bar, text="Apply", height=T.H_ACTION, width=132,
-            corner_radius=T.R_WELL, fg_color=T.C_ACCENT,
+            corner_radius=T.R_WELL, fg_color=T.C_ACCENT_BRIGHT,
             hover_color=T.C_ACCENT_HOVER, font=T.F_BUTTON,
             command=self._on_apply, state="disabled")
         self.apply_btn.pack(side="right")

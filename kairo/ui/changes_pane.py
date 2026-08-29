@@ -12,6 +12,7 @@ from kairo import actions, housekeeping
 from kairo.desktop.lookup import resolve_icon
 from kairo.ledger import ChangeRecord, Ledger, deletes_launcher
 from kairo.tasks import CancelToken
+from kairo.ui import ambience
 from kairo.ui import theme as T
 from kairo.ui.context import UIContext
 from kairo.ui.widgets import IconWell
@@ -75,6 +76,7 @@ class ChangeRow(ctk.CTkFrame):
 class ChangesPane(ctk.CTkFrame):
     def __init__(self, master, context: UIContext, **kw):
         super().__init__(master, fg_color=T.C_BG, corner_radius=0, **kw)
+        ambience.attach(self)
         self.ctx = context
         self._token: CancelToken | None = None
 
@@ -109,7 +111,8 @@ class ChangesPane(ctk.CTkFrame):
             text_color=T.C_DANGER, font=T.F_BUTTON, command=self._cancel)
 
         self.list = ctk.CTkScrollableFrame(
-            self, fg_color=T.C_PANEL, corner_radius=T.R_CARD,
+            self, fg_color=T.C_PANEL, corner_radius=T.R_LG,
+            border_width=1, border_color=T.C_BORDER,
             scrollbar_fg_color="transparent", scrollbar_button_color=T.C_CARD)
         self.list.grid(row=1, column=0, sticky="nsew",
                        padx=T.PAD_WINDOW - T.S1, pady=(0, T.S3))

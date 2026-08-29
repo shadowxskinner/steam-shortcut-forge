@@ -202,7 +202,7 @@ class SegmentedPills(ctk.CTkFrame):
         for value, button in self._buttons.items():
             active = value == selected
             button.configure(
-                fg_color=T.C_ACCENT if active else "transparent",
+                fg_color=T.C_ACCENT_BRIGHT if active else "transparent",
                 hover_color=T.C_ACCENT_HOVER if active else T.C_CARD_HOVER,
                 text_color=T.C_TEXT if active else T.C_TEXT3)
 
@@ -477,7 +477,7 @@ class ArtworkTile(ctk.CTkFrame):
         """The tile currently proposed. Selection has to be unmistakable when
         choosing artwork is separate from applying it."""
         self._chosen = chosen
-        self.configure(border_color=T.C_ACCENT if chosen else T.C_CARD,
+        self.configure(border_color=T.C_ACCENT_BRIGHT if chosen else T.C_CARD,
                        fg_color=T.C_ACCENT_SOFT if chosen else T.C_CARD)
 
     def _bind_hover(self):
