@@ -14,12 +14,32 @@ from dataclasses import dataclass
 import customtkinter as ctk
 
 from kairo.ui import theme as T
-from kairo.ui.widgets import NavChip
+from kairo.ui.widgets import NavIcon
 
 VIEW_CHANGES = "view:changes"
 VIEW_SETTINGS = "view:settings"
 
 GROUP_MANAGEMENT = "Management"
+
+#: Icons for the destinations this module owns.
+VIEW_ICONS = {VIEW_CHANGES: "history", VIEW_SETTINGS: "sliders"}
+
+#: Icons for providers that shipped before nav_icon existed. A provider may
+#: name its own through a ``nav_icon`` attribute; anything unrecognised falls
+#: back by group, so a future emulator gets the chip without supplying
+#: anything at all.
+PROVIDER_ICONS = {"steam": "steam", "desktop": "grid"}
+GROUP_ICONS = {"Emulators": "chip"}
+
+
+def icon_for(item: "NavItem") -> str:
+    if item.provider is not None:
+        named = getattr(item.provider, "nav_icon", None)
+        if named:
+            return named
+        return PROVIDER_ICONS.get(item.provider.id,
+                                  GROUP_ICONS.get(item.group, "chip"))
+    return VIEW_ICONS.get(item.key, "chip")
 
 
 @dataclass(frozen=True)
@@ -65,18 +85,21 @@ class NavButton(ctk.CTkFrame):
         self.grid_rowconfigure(0, weight=1)
         self.configure(cursor="hand2")
 
-        self.chip = NavChip(self, item.label)
-        self.chip.grid(row=0, column=0, padx=(T.S2, T.S2))
+        self.icon = NavIcon(self, kind=icon_for(item), bg=T.C_NAV)
+        self.icon.grid(row=0, column=0, padx=(T.S3, T.S3))
+        # Kept for callers that referred to the old lettered chip.
+        self.chip = self.icon
 
         self.label = ctk.CTkLabel(self, text=item.label, anchor="w",
                                   font=T.F_ROW, text_color=T.C_TEXT2)
         self.label.grid(row=0, column=1, sticky="w")
 
+        # Fixed width so every count in the column shares one right edge.
         self.count = ctk.CTkLabel(self, text="", font=T.F_META,
-                                  text_color=T.C_TEXT3, anchor="e")
+                                  text_color=T.C_TEXT3, anchor="e", width=26)
         self.count.grid(row=0, column=2, sticky="e", padx=(0, T.S3))
 
-        for widget in (self, self.chip, self.label, self.count):
+        for widget in (self, self.icon, self.label, self.count):
             widget.bind("<Button-1>", lambda _event: self._on_click(self.item))
             widget.bind("<Enter>", self._enter)
             widget.bind("<Leave>", self._leave)
@@ -87,18 +110,22 @@ class NavButton(ctk.CTkFrame):
     def _enter(self, _event=None):
         if not self._selected:
             self.configure(fg_color=T.C_CARD)
+            self.icon.set_state(T.C_TEXT2, T.C_CARD)
 
     def _leave(self, _event=None):
         if not self._selected:
             self.configure(fg_color="transparent")
+            self.icon.set_state(T.C_TEXT3, T.C_NAV)
 
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
-        self.configure(fg_color=T.C_SELECTED if selected else "transparent")
+        fill = T.C_SELECTED_NAV if selected else "transparent"
+        self.configure(fg_color=fill)
         self.label.configure(text_color=T.C_TEXT if selected else T.C_TEXT2,
                              font=T.F_ROW_STRONG if selected else T.F_ROW)
-        self.count.configure(text_color=T.C_TEXT if selected else T.C_TEXT3)
-        self.chip.set_selected(selected)
+        self.count.configure(text_color=T.C_TEXT2 if selected else T.C_TEXT3)
+        self.icon.set_state(T.C_ACCENT_TEXT if selected else T.C_TEXT3,
+                            T.C_SELECTED_NAV if selected else T.C_NAV)
 
 
 class NavColumn(ctk.CTkFrame):
@@ -126,11 +153,12 @@ class NavColumn(ctk.CTkFrame):
         for item in items:
             if item.group != current_group:
                 current_group = item.group
-                ctk.CTkLabel(self, text=item.group.upper(), anchor="w",
+                heading = "  ".join(item.group.upper())   # airy letterspacing
+                ctk.CTkLabel(self, text=heading, anchor="w",
                              font=T.F_MICRO, text_color=T.C_TEXT3
                              ).grid(row=row, column=0, sticky="ew",
-                                    padx=T.PAD_COLUMN + T.S1,
-                                    pady=(T.S4, T.S1))
+                                    padx=T.PAD_COLUMN + T.S2,
+                                    pady=(T.S5, T.S1))
                 row += 1
             button = NavButton(self, item, on_click=self._select)
             button.grid(row=row, column=0, sticky="ew",

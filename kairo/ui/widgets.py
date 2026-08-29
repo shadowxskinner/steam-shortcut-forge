@@ -38,6 +38,94 @@ def apply_image(label, owner, attribute: str, photo, **options) -> None:
     setattr(owner, attribute, photo)
 
 
+def _glyph_steam(canvas, colour):
+    canvas.create_oval(2, 2, 16, 16, outline=colour, width=1.4)
+    canvas.create_oval(9, 9, 14, 14, fill=colour, outline=colour)
+
+
+def _glyph_grid(canvas, colour):
+    for x, y in ((2, 2), (10, 2), (2, 10), (10, 10)):
+        canvas.create_rectangle(x, y, x + 6, y + 6, outline=colour, width=1.3)
+
+
+def _glyph_history(canvas, colour):
+    canvas.create_arc(2, 2, 16, 16, start=40, extent=280, style="arc",
+                      outline=colour, width=1.4)
+    canvas.create_polygon(13, 1, 17, 5, 12, 6, fill=colour, outline=colour)
+
+
+def _glyph_sliders(canvas, colour):
+    for index, y in enumerate((4, 9, 14)):
+        canvas.create_line(2, y, 16, y, fill=colour, width=1.3)
+        knob = (11, 5, 13)[index]
+        canvas.create_oval(knob - 2, y - 2, knob + 2, y + 2,
+                           fill=colour, outline=colour)
+
+
+def _glyph_chip(canvas, colour):
+    canvas.create_rectangle(4, 4, 14, 14, outline=colour, width=1.3)
+    for offset in (6, 12):
+        canvas.create_line(offset, 1, offset, 4, fill=colour, width=1.2)
+        canvas.create_line(offset, 14, offset, 17, fill=colour, width=1.2)
+        canvas.create_line(1, offset, 4, offset, fill=colour, width=1.2)
+        canvas.create_line(14, offset, 17, offset, fill=colour, width=1.2)
+
+
+GLYPHS = {
+    "steam": _glyph_steam,
+    "grid": _glyph_grid,
+    "history": _glyph_history,
+    "sliders": _glyph_sliders,
+    "chip": _glyph_chip,
+}
+
+
+class NavIcon(ctk.CTkCanvas):
+    """A small monochrome pictogram, drawn rather than shipped or fonted.
+
+    Eighteen pixels of canvas primitives: no image assets to package, no glyph
+    font to be missing on someone's machine, and no dependency beyond what Tk
+    already provides. A provider may name one through ``nav_icon``; anything
+    that does not gets a neutral chip.
+    """
+
+    SIZE = 18
+
+    def __init__(self, master, kind: str = "chip", bg: str = T.C_NAV, **kw):
+        super().__init__(master, width=self.SIZE, height=self.SIZE,
+                         highlightthickness=0, borderwidth=0, bg=bg, **kw)
+        self._kind = kind if kind in GLYPHS else "chip"
+        self._colour = T.C_TEXT3
+        self.redraw()
+
+    def set_state(self, colour: str, bg: str) -> None:
+        self._colour = colour
+        try:
+            self.configure(bg=bg)
+        except Exception:
+            pass
+        self.redraw()
+
+    def redraw(self) -> None:
+        try:
+            self.delete("all")
+        except Exception:
+            return
+        GLYPHS.get(self._kind, _glyph_chip)(self, self._colour)
+
+
+#: Roughly the advertised width of one character of the pill font, plus the
+#: padding either side. CTkButton defaults to 140px regardless of its label,
+#: which is how three filter pills came to need more room than the column had
+#: and clipped "Untouched" to "touch...".
+PILL_CHAR_WIDTH = 7
+PILL_PADDING = 22
+
+
+def pill_width(text: str) -> int:
+    return max(44, len(text) * PILL_CHAR_WIDTH + PILL_PADDING)
+
+
 class SegmentedPills(ctk.CTkFrame):
     """A rounded pill group.
 
@@ -72,7 +160,8 @@ class SegmentedPills(ctk.CTkFrame):
 
         for value in values:
             button = ctk.CTkButton(
-                self, text=value, height=T.H_PILL - 6, corner_radius=T.R_PILL,
+                self, text=value, width=pill_width(value),
+                height=T.H_PILL - 6, corner_radius=T.R_PILL,
                 fg_color="transparent", hover_color=T.C_CARD_HOVER,
                 text_color=T.C_TEXT3, font=self._font,
                 command=lambda v=value: self._pick(v))
@@ -204,7 +293,7 @@ class IconWell(ctk.CTkFrame):
 
     def show_placeholder(self, text: str = "○") -> None:
         self.text_label.configure(text=text,
-                                  font=("Inter", max(14, self._size // 3)),
+                                  font=("Inter", max(11, self._size // 5)),
                                   text_color=T.C_TEXT3)
         if self._showing_image:
             self.image_label.grid_remove()
@@ -330,12 +419,14 @@ class AppRow(ctk.CTkFrame):
 
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
-        self.configure(fg_color=T.C_SELECTED if selected else T.C_CARD)
-        self.well.configure(fg_color=T.C_CARD if selected else T.C_PANEL)
+        self.configure(fg_color=T.C_SELECTED if selected else T.C_CARD,
+                       border_width=1 if selected else 0,
+                       border_color=T.C_ACCENT if selected else T.C_CARD)
+        self.well.configure(fg_color=T.C_PANEL)
         self.name_lbl.configure(font=T.F_ROW_STRONG if selected else T.F_ROW,
                                 text_color=T.C_TEXT)
         self.sub_lbl.configure(
-            text_color="#D6CEFF" if selected else T.C_TEXT3)
+            text_color=T.C_ACCENT_TEXT if selected else T.C_TEXT3)
 
 
 class ArtworkTile(ctk.CTkFrame):

@@ -114,7 +114,7 @@ class LibraryPane(ctk.CTkFrame):
     def _build_workspace(self):
         space = ctk.CTkFrame(self, fg_color=T.C_BG, corner_radius=0)
         space.grid(row=0, column=1, sticky="nsew")
-        space.grid_rowconfigure(3, weight=1)
+        space.grid_rowconfigure(2, weight=1)
         space.grid_columnconfigure(0, weight=1)
 
         header = ctk.CTkFrame(space, fg_color="transparent")
@@ -165,33 +165,44 @@ class LibraryPane(ctk.CTkFrame):
         self.proposal_label.grid(row=0, column=3, sticky="w",
                                  padx=(T.S1, T.PAD_CARD))
 
-        # Source picker and its search box.
-        controls = ctk.CTkFrame(space, fg_color="transparent")
-        controls.grid(row=2, column=0, sticky="ew",
-                      padx=T.PAD_WINDOW, pady=(0, T.S3))
+        # One surface holding the source controls and the results they
+        # produce. Floating the picker above a separate panel made it read as
+        # unrelated chrome; the controls belong to the browser they filter.
+        panel = ctk.CTkFrame(space, fg_color=T.C_PANEL, corner_radius=T.R_LG)
+        panel.grid(row=2, column=0, sticky="nsew",
+                   padx=T.PAD_WINDOW, pady=(0, T.S4))
+        panel.grid_rowconfigure(1, weight=1)
+        panel.grid_columnconfigure(0, weight=1)
+
+        controls = ctk.CTkFrame(panel, fg_color="transparent")
+        controls.grid(row=0, column=0, sticky="ew",
+                      padx=T.PAD_CARD, pady=(T.PAD_CARD_TIGHT, T.S2))
+        ctk.CTkLabel(controls, text="A R T W O R K", font=T.F_MICRO,
+                     text_color=T.C_TEXT3).pack(side="left", padx=(0, T.S4))
         self.source_selector = SegmentedPills(
             controls, values=[], variable=self.source_var,
             command=self._on_source_changed)
         self.source_selector.pack(side="left")
         self.query_field = SearchField(controls, textvariable=self.query_var,
-                                       placeholder="Search artwork…", width=280)
+                                       placeholder="Search artwork…", width=250)
         self.query_field.bind_entry("<KeyRelease>", self._schedule_query)
         self.query_field.bind_entry("<Return>", self._run_query_now)
 
         self.grid_area = ctk.CTkScrollableFrame(
-            space, fg_color=T.C_PANEL, corner_radius=T.R_CARD,
+            panel, fg_color="transparent", corner_radius=0,
             scrollbar_fg_color="transparent", scrollbar_button_color=T.C_CARD,
             scrollbar_button_hover_color=T.C_TEXT3)
-        self.grid_area.grid(row=3, column=0, sticky="nsew",
-                            padx=T.PAD_WINDOW - T.S1, pady=(0, T.S3))
+        self.grid_area.grid(row=1, column=0, sticky="nsew",
+                            padx=T.S2, pady=(0, T.S2))
         # add="+" is essential: CTkScrollableFrame binds <Configure> on itself
         # to recompute the scrollregion; replacing it stops the wheel working.
         self.grid_area.bind("<Configure>", self._on_resize, add="+")
+        self._grid_note = None
 
         # Three tiers, left to right: secondary actions, then a gap, then the
         # destructive one, then the primary alone on the right.
         bar = ctk.CTkFrame(space, fg_color="transparent")
-        bar.grid(row=4, column=0, sticky="ew",
+        bar.grid(row=3, column=0, sticky="ew",
                  padx=T.PAD_WINDOW, pady=(0, T.S5))
         self.browse_btn = ctk.CTkButton(
             bar, text="Browse local file…", height=T.H_ACTION,
@@ -228,7 +239,7 @@ class LibraryPane(ctk.CTkFrame):
             self.entries = []
             messagebox.showerror("Scan failed", f"{self.provider.label}: {exc}")
         self._probe_cache.clear()
-        self._filter()
+        self._filter(auto_select=True)
 
     def _set_filter(self, mode: str):
         self._filter_mode = mode
@@ -245,7 +256,7 @@ class LibraryPane(ctk.CTkFrame):
             entries = [e for e in entries if not e.customized]
         return entries
 
-    def _filter(self):
+    def _filter(self, auto_select: bool = False):
         """Repoint the row pool at the visible entries.
 
         Rows are reused rather than rebuilt. Destroying and recreating them on
@@ -253,6 +264,7 @@ class LibraryPane(ctk.CTkFrame):
         character typed once a library got large.
         """
         entries = self.visible_entries()
+        previous = self.selected_row.entry.key if self.selected_row else None
 
         while len(self.rows) < len(entries):
             self.rows.append(AppRow(self.list, on_click=self._select))
@@ -268,9 +280,26 @@ class LibraryPane(ctk.CTkFrame):
 
         self._visible = len(entries)
         self.selected_row = None
-        self._clear_proposal()
-        self._set_actions(False)
         self.count_pill.configure(text=str(len(entries)))
+
+        # Keep the user where they were if their entry survived the filter.
+        # Re-selecting without reloading avoids a fetch on every keystroke.
+        if previous is not None:
+            for row in self.visible_rows():
+                if row.entry.key == previous:
+                    self._select(row, load=False)
+                    break
+
+        if self.selected_row is None:
+            if auto_select and entries:
+                # Never open onto an empty workspace when there is something
+                # to show.
+                self._select(self.rows[0])
+            else:
+                self._clear_proposal()
+                self._set_actions(False)
+                self._show_empty_workspace()
+
         self.ctx.on_changed()
 
     def visible_rows(self):
@@ -285,21 +314,40 @@ class LibraryPane(ctk.CTkFrame):
                 return row
         return None
 
-    def _select(self, row: AppRow):
+    def _select(self, row: AppRow, load: bool = True):
         if self.selected_row:
             self.selected_row.set_selected(False)
         row.set_selected(True)
         self.selected_row = row
 
         entry = row.entry
-        self.title.configure(text=entry.name)
+        self.title.configure(text=T.ellipsize(entry.name, 46),
+                             text_color=T.C_TEXT)
         self.subtitle.configure(text=entry.subtitle)
         self.current_well.show(entry.current_icon, placeholder="—")
-        self._clear_proposal()
         self._set_actions(True)
         self._refresh_sources()
-        self._seed_query(entry)
-        self._load_artwork(entry)
+        if load:
+            self._clear_proposal()
+            self._seed_query(entry)
+            self._load_artwork(entry)
+
+    def _show_empty_workspace(self):
+        """An intentional empty state, not an accident of nothing being set."""
+        if self.entries:
+            term = self.search_var.get().strip()
+            title = "No matches"
+            note = (f"Nothing here matches “{term}”."
+                    if term else "Nothing matches the current filter.")
+        else:
+            title = f"No {self.provider.noun} found"
+            note = (f"Kairo could not find any {self.provider.noun} for "
+                    f"{self.provider.label} on this machine.")
+        self.title.configure(text=title, text_color=T.C_TEXT2)
+        self.subtitle.configure(text="")
+        self.current_well.show(None, placeholder="—")
+        self._clear_grid()
+        self._grid_note_text(note)
 
     def _set_actions(self, enabled: bool):
         state = "normal" if enabled else "disabled"
@@ -444,23 +492,44 @@ class LibraryPane(ctk.CTkFrame):
             widget.destroy()
         self._tiles.clear()
         self._chosen_tile = None
+        self._grid_note = None
         self._grid_cols = 0
+
+    def _grid_note_text(self, text: str):
+        """A quiet line inside the artwork surface.
+
+        Loading, empty and error states all belong here rather than as a
+        decorative graphic: the panel keeps its shape and the message sits
+        where the results will be.
+        """
+        if self._grid_note is not None:
+            try:
+                self._grid_note.configure(text=text)
+                return
+            except tk.TclError:
+                self._grid_note = None
+        self._grid_note = ctk.CTkLabel(
+            self.grid_area, text=text, font=T.F_BODY, text_color=T.C_TEXT3,
+            justify="left", anchor="w")
+        self._grid_note.grid(row=0, column=0, sticky="w",
+                             padx=T.PAD_CARD, pady=T.S6)
 
     def _load_artwork(self, entry: AppEntry):
         self._clear_grid()
         source = self.source()
         if source is None:
-            self._status_if_current(
-                entry, "No online source has artwork for this one — "
-                       "use Browse local file.")
+            self._grid_note_text(
+                "No online source has artwork for this one.\n"
+                "Use Browse local file to choose your own image.")
             return
         query = self.provider.artwork_query(entry)
         if source.needs_query:
             query = query.with_text(self.query_var.get().strip())
             if not query.text:
-                self._status_if_current(entry, f"Type a term to search {source.label}.")
+                self._grid_note_text(f"Type a term to search {source.label}.")
                 return
 
+        self._grid_note_text(f"Looking for artwork in {source.label}…")
         token = self.ctx.tokens.start(ACTIVITY_ARTWORK)
 
         def work():
@@ -470,8 +539,8 @@ class LibraryPane(ctk.CTkFrame):
                     return
                 if not results:
                     self._probe_cache[(entry.key, source.id)] = False
-                    self.after(0, self._status_if_current, entry,
-                               f"{entry.subtitle}  ·  nothing in {source.label}")
+                    self.after(0, self._grid_note_text,
+                               f"{source.label} has nothing for {entry.name}.")
                     self.after(0, self._sources_changed, entry)
                     return
                 self._probe_cache[(entry.key, source.id)] = True
@@ -490,7 +559,8 @@ class LibraryPane(ctk.CTkFrame):
                     self.after(0, self._fill_tile, index, data, entry)
             except Exception as exc:
                 if not token.cancelled:
-                    self.after(0, self._status_if_current, entry, str(exc))
+                    self.after(0, self._grid_note_text,
+                               f"Could not load artwork: {exc}")
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -527,6 +597,9 @@ class LibraryPane(ctk.CTkFrame):
     def _build_tiles(self, results, entry: AppEntry):
         if not self._showing(entry):
             return
+        if self._grid_note is not None:
+            self._grid_note.destroy()
+            self._grid_note = None
         self._tiles = []
         cols = self._fit_columns()
         self._grid_cols = cols

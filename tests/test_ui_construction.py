@@ -817,3 +817,185 @@ def test_a_changed_file_is_not_served_from_cache(toolkit, furnished, tmp_path):
     Image.new("RGBA", (16, 16), (200, 30, 90, 255)).save(path)
     os.utime(path, (0, 0))
     assert imaging.load_icon(32, path=path) is not first
+
+
+# -- opening onto real content ----------------------------------------------
+
+def test_a_provider_with_entries_opens_with_one_selected(toolkit, furnished):
+    """Landing on 'Select something' beside an empty panel wastes the whole
+    right-hand side when there is obviously something to show."""
+    pane = _library_pane()
+    assert pane.selected_row is not None
+    assert pane.selected_row.entry is pane.visible_entries()[0]
+    assert pane.selected_row._selected is True
+
+
+def test_the_shell_opens_on_a_selected_entry(toolkit, furnished):
+    from kairo.ui.library import LibraryPane
+    from kairo.ui.shell import KairoShell
+
+    shell = KairoShell()
+    pane = shell.panes[shell.current_key]
+    assert isinstance(pane, LibraryPane)
+    assert pane.selected_row is not None
+
+
+def test_selection_survives_filtering(toolkit, furnished):
+    """Typing must not throw away where the user was."""
+    pane = _library_pane()
+    chosen = pane.selected_row.entry
+    assert chosen.name == "Portal 2"
+
+    pane.search_var.set("portal")
+    pane._filter()
+    assert pane.selected_row is not None
+    assert pane.selected_row.entry.key == chosen.key
+
+
+def test_filtering_does_not_auto_select_a_different_entry(toolkit, furnished):
+    """Auto-selection belongs to load and rescan. Doing it per keystroke would
+    fire an artwork lookup for every character typed."""
+    pane = _library_pane()
+    pane.search_var.set("team")            # excludes the selected Portal 2
+    pane._filter()
+    assert pane.selected_row is None
+
+
+def test_an_empty_search_gets_a_designed_empty_state(toolkit, furnished):
+    pane = _library_pane()
+    pane.search_var.set("zzzz-nothing")
+    pane._filter()
+    assert pane.selected_row is None
+    assert pane.title.cget("text") in ("No matches", None)
+
+
+def test_rescan_reselects_rather_than_leaving_it_blank(toolkit, furnished):
+    pane = _library_pane()
+    pane.search_var.set("zzzz-nothing")
+    pane._filter()
+    assert pane.selected_row is None
+
+    pane.search_var.set("")
+    pane.refresh_entries()
+    assert pane.selected_row is not None
+
+
+def test_rescan_respects_an_active_search(toolkit, furnished):
+    """Auto-selection must not override a filter the user is still using."""
+    pane = _library_pane()
+    pane.search_var.set("zzzz-nothing")
+    pane._filter()
+    pane.refresh_entries()
+    assert pane.selected_row is None
+    assert pane.visible_rows() == []
+
+
+def test_a_provider_with_no_entries_still_looks_intentional(toolkit, furnished,
+                                                            monkeypatch):
+    from kairo.providers.steam import SteamProvider
+
+    monkeypatch.setattr(SteamProvider, "scan", lambda self: [])
+    pane = _library_pane()
+    assert pane.entries == []
+    assert pane.selected_row is None
+    assert pane.title.cget("text") in ("No games found", None)
+
+
+# -- pills fit their labels -------------------------------------------------
+
+def test_pill_width_tracks_its_label(toolkit, furnished):
+    """CTkButton defaults to 140px whatever the text says, which is how three
+    filter pills came to need more room than the column had."""
+    from kairo.ui.widgets import pill_width
+
+    assert pill_width("All") < pill_width("Customized")
+    assert pill_width("Customized") >= pill_width("Untouched")
+    assert pill_width("All") >= 44
+
+
+def test_the_filter_pills_fit_the_entry_column(toolkit, furnished):
+    from kairo.ui import theme as T
+    from kairo.ui.widgets import pill_width
+
+    labels = ["All", "Customized", "Untouched"]
+    total = sum(pill_width(label) + 4 for label in labels) + 2 * T.S2
+    assert total <= T.W_LIST - 2 * T.PAD_COLUMN, (
+        f"{total}px of pills does not fit a {T.W_LIST}px column")
+
+
+def test_the_source_pills_fit_the_workspace(toolkit, furnished):
+
+    from kairo.ui.widgets import pill_width
+
+    labels = ["SteamGridDB", "Icon themes", "Iconify"]
+    total = sum(pill_width(label) + 4 for label in labels)
+    assert total <= 420, f"{total}px of source pills is too wide"
+
+
+# -- navigation icons -------------------------------------------------------
+
+def test_known_providers_get_their_own_icon(toolkit, furnished):
+    from kairo.providers.registry import default_registry
+    from kairo.ui import nav
+
+    items = {item.key: item for item in nav.build_items(default_registry())}
+    assert nav.icon_for(items["provider:steam"]) == "steam"
+    assert nav.icon_for(items["provider:desktop"]) == "grid"
+    assert nav.icon_for(items[nav.VIEW_CHANGES]) == "history"
+    assert nav.icon_for(items[nav.VIEW_SETTINGS]) == "sliders"
+
+
+def test_a_provider_may_name_its_own_icon(toolkit, furnished):
+    from kairo.providers.base import AppProvider
+    from kairo.ui import nav
+
+    class Named(AppProvider):
+        id = "pcsx2"
+        label = "PCSX2"
+        group = "Emulators"
+        nav_icon = "chip"
+
+        def scan(self):
+            return []
+
+        def artwork_query(self, entry):
+            raise NotImplementedError
+
+        def writer(self):
+            raise NotImplementedError
+
+    item = nav.NavItem(key="provider:pcsx2", label="PCSX2", group="Emulators",
+                       provider=Named())
+    assert nav.icon_for(item) == "chip"
+
+
+def test_an_unknown_provider_falls_back_by_group(toolkit, furnished):
+    from kairo.providers.base import AppProvider
+    from kairo.ui import nav
+
+    class Anonymous(AppProvider):
+        id = "mystery"
+        label = "Mystery"
+        group = "Emulators"
+
+        def scan(self):
+            return []
+
+        def artwork_query(self, entry):
+            raise NotImplementedError
+
+        def writer(self):
+            raise NotImplementedError
+
+    item = nav.NavItem(key="provider:mystery", label="Mystery",
+                       group="Emulators", provider=Anonymous())
+    assert nav.icon_for(item) == "chip"
+
+
+def test_every_named_glyph_can_be_drawn(toolkit, furnished):
+    from kairo.ui.widgets import GLYPHS, NavIcon
+
+    for kind in GLYPHS:
+        icon = NavIcon(None, kind=kind)
+        icon.set_state("#ffffff", "#000000")
+    NavIcon(None, kind="does-not-exist")     # falls back rather than raising

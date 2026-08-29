@@ -31,7 +31,11 @@ C_LIST = "#13102C"           # entry column
 C_PANEL = "#171334"          # workspace surfaces
 C_CARD = "#1E1943"           # rows, wells, fields
 C_CARD_HOVER = "#262052"
-C_SELECTED = "#4B32E0"       # selected row surface
+# Selection in the reference is a lighter panel with a faint border, not a
+# saturated fill. A solid accent block draws the eye harder than the content
+# inside it, which is the opposite of what a selected row should do.
+C_SELECTED = "#272058"       # selected row surface
+C_SELECTED_NAV = "#221C50"   # nav sits one step quieter still
 C_BORDER = "#231E4C"         # barely there, on purpose
 C_BORDER_STRONG = "#2E2865"
 
