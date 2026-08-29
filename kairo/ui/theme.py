@@ -1,4 +1,15 @@
-"""Visual tokens. One place to change how Kairo looks."""
+"""Every visual value Kairo uses.
+
+Widgets read tokens from here rather than carrying numbers of their own. That
+is not tidiness for its own sake: things at the same level of the hierarchy
+line up only if they are literally the same constant, and a one-off 14 next to
+a 16 is exactly how an interface starts looking accidental.
+
+The palette is layered rather than translucent. Tk cannot composite panels, so
+depth is carried by value: the window is darkest, each column sits a step
+above it, cards a step above that. One indigo accent carries selection and
+primary action; pink appears only where something is destroyed.
+"""
 
 from __future__ import annotations
 
@@ -7,95 +18,140 @@ try:
 except ImportError:                                     # pragma: no cover
     ctk = None
 
-#: Global size multiplier for every widget.
-UI_SCALE = 1.1
+#: Global widget scaling.
+UI_SCALE = 1.0
 
-# Fonts
-F_LOGO = ("Inter", 20, "bold")
-F_TITLE = ("Inter", 18, "bold")
-F_HEADING = ("Inter", 15, "bold")
-F_BODY = ("Inter", 13)
-F_BODY_B = ("Inter", 13, "bold")
-F_SMALL = ("Inter", 11)
-F_TINY = ("Inter", 10)
-F_BUTTON = ("Inter", 12, "bold")
-F_ITEM = ("Inter", 15, "bold")
-F_ITEM_SUB = ("Inter", 12)
+# ---------------------------------------------------------------------------
+# Colour
+# ---------------------------------------------------------------------------
 
-# Colours
-#
-# Deep navy surfaces at distinct elevations rather than transparency, because
-# Tk cannot composite translucent panels. Elevation is carried by value
-# instead: the window is darkest, each column sits a step above it, and cards
-# a step above that. One indigo accent for selection and primary actions, one
-# pink for destructive ones, and three levels of text so secondary
-# information recedes without disappearing.
-C_BG = "#0E0B1E"            # window
-C_NAV = "#14102C"           # left column
-C_LIST = "#171332"          # middle column
-C_PANEL = "#1B1640"         # workspace surface
-C_CARD = "#221C4E"          # rows, wells, fields
-C_CARD_HOVER = "#2A2360"
-C_SELECTED = "#2E2668"
-C_BORDER = "#2C2657"
-C_BORDER_ACCENT = "#5B3DF5"
+C_BG = "#0B0918"             # window
+C_NAV = "#100D22"            # navigation column
+C_LIST = "#13102C"           # entry column
+C_PANEL = "#171334"          # workspace surfaces
+C_CARD = "#1E1943"           # rows, wells, fields
+C_CARD_HOVER = "#262052"
+C_SELECTED = "#4B32E0"       # selected row surface
+C_BORDER = "#231E4C"         # barely there, on purpose
+C_BORDER_STRONG = "#2E2865"
 
-C_ACCENT = "#5B3DF5"        # primary actions, selection
-C_ACCENT_HOVER = "#7059FF"
-C_ACCENT_DIM = "#241B54"
-C_DANGER = "#FF2D6F"        # destructive only
-C_DANGER_BG = "#3A1030"
-C_DANGER_HOVER = "#4A1540"
-C_SUCCESS = "#35D6A0"
+C_ACCENT = "#5B3DF5"
+C_ACCENT_HOVER = "#6E52FF"
+C_ACCENT_SOFT = "#211B52"    # accent at rest, for quiet fills
+C_ACCENT_TEXT = "#B9AAFF"
 
-C_TEXT = "#FFFFFF"
-C_TEXT2 = "#A9A3C9"
-C_TEXT3 = "#6F6A93"
+C_DANGER = "#FF3D74"         # destructive only
+C_DANGER_BG = "#2E1230"
+C_DANGER_HOVER = "#3D1840"
+C_SUCCESS = "#3DD8A0"
 
-# Kept so the classic window keeps working while the new shell is proven.
+C_TEXT = "#F4F2FF"           # primary
+C_TEXT2 = "#A79FD0"          # secondary, clearly quieter
+C_TEXT3 = "#6B6499"          # tertiary: labels, metadata, placeholders
+
+# Aliases kept so the classic window keeps working unchanged.
 C_SIDEBAR = C_NAV
 C_ROW = C_CARD
-C_CARD_SELECTED = C_ACCENT
+C_CARD_SELECTED = C_SELECTED
+C_BORDER_ACCENT = C_ACCENT
+C_ACCENT_DIM = C_ACCENT_SOFT
 
-# Geometry
-R_CARD = 16
-R_WELL = 12
-R_FIELD = 10
+# ---------------------------------------------------------------------------
+# Spacing
+#
+# A single 4px scale. Everything below is chosen from it; nothing in a widget
+# should invent a value that is not here.
+# ---------------------------------------------------------------------------
+
+S1, S2, S3, S4, S5, S6, S8 = 4, 8, 12, 16, 20, 24, 32
+
+PAD_WINDOW = S6              # outer margin of the workspace
+PAD_COLUMN = S4              # inside the nav and entry columns
+PAD_CARD = S4                # inside a card
+PAD_CARD_TIGHT = S3
+GAP_ROW = S1                 # between list rows
+GAP_CONTROL = S2             # between adjacent controls
+GAP_SECTION = S5             # between blocks of a pane
+GAP_GROUP = S6               # between unrelated groups
+
+# ---------------------------------------------------------------------------
+# Shape and size
+# ---------------------------------------------------------------------------
+
+R_SM = 8
+R_MD = 12
+R_LG = 16
 R_PILL = 999
-THUMB_SIZE = 56
-TILE_SIZE = 124
-ROW_HEIGHT = 68
 
-# Column widths. The middle column carries the longest strings in the
-# application - full game titles - so it gets the space, taken from the
-# navigation, which only ever holds short labels.
-W_NAV = 206
-W_LIST = 398
+R_CARD = R_LG                # aliases used by the classic window
+R_WELL = R_MD
+R_FIELD = R_MD
 
-#: Characters before an entry name is ellipsized in the middle column.
-LIST_NAME_CHARS = 34
+H_CONTROL = 34               # search fields, pills, toolbar buttons
+H_ACTION = 40                # action-bar buttons
+H_NAV_ITEM = 34
+H_ROW = 62                   # entry row
 
-# Control heights, so fields and pills line up wherever they appear.
-H_FIELD = 36
-H_PILL = 30
-H_ACTION = 40
+THUMB_SIZE = 40              # icon inside an entry row
+WELL_SIZE = 62               # current / proposed wells
+TILE_SIZE = 112              # artwork tile
+ROW_HEIGHT = H_ROW           # classic alias
 
-# Fonts specific to the shell
-F_NAV_GROUP = ("Inter", 10, "bold")
-F_NAV_ITEM = ("Inter", 13)
-F_WORKSPACE_TITLE = ("Inter", 24, "bold")
-F_SECTION = ("Inter", 10, "bold")
-F_PILL = ("Inter", 11, "bold")
+W_NAV = 212
+W_LIST = 392
+LIST_NAME_CHARS = 32
 
+#: Roughly four across at the default window width.
+GRID_GUTTER = S2
+
+# Aliases kept so the existing panes and the classic window keep working.
+H_FIELD = H_CONTROL
+H_PILL = H_CONTROL - 4
+
+# ---------------------------------------------------------------------------
+# Typography
+#
+# Bold carries hierarchy, not emphasis. Row titles are regular weight; only
+# titles, primary values and controls are bold, which is what stops a dark
+# interface looking shouty.
+# ---------------------------------------------------------------------------
+
+_FAMILY = "Inter"
+
+F_LOGO = (_FAMILY, 19, "bold")          # KAIRO
+F_TITLE = (_FAMILY, 25, "bold")         # selected entry, pane title
+F_PANE = (_FAMILY, 17, "bold")          # column heading
+F_ROW = (_FAMILY, 13)                   # entry name, regular on purpose
+F_ROW_STRONG = (_FAMILY, 13, "bold")    # entry name when selected
+F_BODY = (_FAMILY, 12)
+F_BODY_B = (_FAMILY, 12, "bold")
+F_META = (_FAMILY, 11)                  # ids, counts, dates
+F_MICRO = (_FAMILY, 9, "bold")          # CURRENT / PROPOSED / LIBRARY
+F_BUTTON = (_FAMILY, 12, "bold")
+F_PILL = (_FAMILY, 11, "bold")
+
+# Aliases for the classic window.
+F_HEADING = F_PANE
+F_SMALL = F_META
+F_TINY = F_META
+F_ITEM = F_ROW
+F_ITEM_SUB = F_META
+F_NAV_GROUP = F_MICRO
+F_NAV_ITEM = F_ROW
+F_SECTION = F_MICRO
+F_WORKSPACE_TITLE = F_TITLE
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def apply() -> None:
     """Install appearance settings. Called once at startup.
 
     CustomTkinter draws rounded corners from a bundled OTF on Linux, but its
     FontManager.load_font() copies the file into ~/.fonts and returns True
-    without checking that Tk can use it, so corners silently render square.
-    polygon_shapes draws them with canvas polygons instead, which is what
-    macOS uses.
+    without checking Tk can use it, so corners silently render square.
+    polygon_shapes draws them with canvas polygons instead.
     """
     if ctk is None:
         return
@@ -112,10 +168,10 @@ def apply() -> None:
 def ellipsize(text: str, limit: int) -> str:
     """Trim a title with a trailing ellipsis.
 
-    Tk labels clip mid-glyph with no indication that text was cut, so a long
+    Tk clips mid-glyph with no indication that anything was cut, so a long
     title just looks broken. An explicit ellipsis reads as intentional.
     """
-    text = text.strip()
+    text = (text or "").strip()
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
@@ -123,8 +179,7 @@ def confidence_label(confidence: float) -> str:
     """Plain words for a match score.
 
     A number between 0 and 1 means nothing to someone who just wants nicer
-    icons, and showing one invites the question of what 0.75 is supposed to
-    mean.
+    icons, and showing one invites the question of what 0.75 means.
     """
     if confidence >= 1.0:
         return "Exact match"
@@ -143,3 +198,11 @@ def format_date(iso: str) -> str:
     except (ValueError, TypeError):
         return iso or ""
     return time.strftime("%d %b %Y", parsed)
+
+
+def initial(text: str) -> str:
+    """First letter of a provider name, for its navigation chip."""
+    for char in (text or "").strip():
+        if char.isalnum():
+            return char.upper()
+    return "•"

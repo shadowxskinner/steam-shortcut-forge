@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import tkinter as tk
 import warnings
+from collections import OrderedDict
 from pathlib import Path
 
 try:
@@ -106,9 +108,46 @@ def ctk_icon(size: int, *, path: Path | None = None, data: bytes | None = None):
         return ctk.CTkImage(light_image=fitted, dark_image=fitted, size=fitted.size)
 
 
+#: Decoded icons, keyed on source and size. Browsing a library re-selects the
+#: same icons constantly - switching back to an entry should not decode and
+#: rescale its artwork again. Entries are only ever evicted once the cache is
+#: full, and any widget still showing one keeps its own reference, so eviction
+#: can never leave a widget pointing at a freed image.
+_CACHE: "OrderedDict[tuple, object]" = OrderedDict()
+CACHE_LIMIT = 256
+
+
+def cache_key(size: int, path: Path | None, data: bytes | None):
+    if path is not None:
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        return ("path", str(path), stat.st_mtime_ns, stat.st_size, size)
+    if data is not None:
+        return ("data", hashlib.sha1(data).hexdigest(), size)
+    return None
+
+
+def clear_cache() -> None:
+    _CACHE.clear()
+
+
 def load_icon(size: int, *, path: Path | None = None, data: bytes | None = None):
-    """Best available representation, CTkImage first."""
+    """Best available representation, CTkImage first. Cached."""
+    key = cache_key(size, path, data)
+    if key is not None:
+        cached = _CACHE.get(key)
+        if cached is not None:
+            _CACHE.move_to_end(key)
+            return cached
+
     photo = ctk_icon(size, path=path, data=data)
     if photo is None:
         photo = scaled_photo(size, path=path, data=data)
+
+    if key is not None and photo is not None:
+        _CACHE[key] = photo
+        while len(_CACHE) > CACHE_LIMIT:
+            _CACHE.popitem(last=False)
     return photo

@@ -622,3 +622,198 @@ def test_rows_and_tiles_share_the_well(toolkit, furnished, png):
     assert tile.well._showing_image is True
     tile.set_image(b"not an image")
     assert tile.well._showing_image is False
+
+
+# -- row reuse --------------------------------------------------------------
+#
+# Filtering used to destroy and recreate every row on each keystroke, which
+# with a few hundred applications meant hundreds of teardowns and icon decodes
+# per character typed.
+
+def _library_pane():
+    from kairo.ledger import Ledger
+    from kairo.providers.registry import default_registry
+    from kairo.artwork.registry import default_registry as artwork_registry
+    from kairo.tasks import ActivityTokens
+    from kairo.ui.context import UIContext
+    from kairo.ui.library import LibraryPane
+
+    registry = default_registry()
+    ctx = UIContext(providers=registry, sources=artwork_registry({}), config={},
+                    ledger=Ledger().load(), tokens=ActivityTokens())
+    return LibraryPane(None, registry.get("steam"), ctx)
+
+
+def test_filtering_reuses_rows_instead_of_rebuilding_them(toolkit, furnished):
+    pane = _library_pane()
+    before = list(pane.rows)
+    assert len(before) == 2
+
+    pane.search_var.set("portal")
+    pane._filter()
+    assert pane.rows[0] is before[0], "rows must be rebound, not recreated"
+    assert len(pane.visible_rows()) == 1
+
+    pane.search_var.set("")
+    pane._filter()
+    assert pane.rows[:2] == before
+    assert len(pane.visible_rows()) == 2
+
+
+def test_the_pool_grows_but_never_shrinks(toolkit, furnished):
+    pane = _library_pane()
+    pane.search_var.set("zzzz")
+    pane._filter()
+    assert pane.visible_rows() == []
+    assert len(pane.rows) == 2          # kept, ready to be reused
+
+
+def test_row_for_only_considers_visible_rows(toolkit, furnished):
+    pane = _library_pane()
+    hidden = pane.rows[1].entry
+    pane.search_var.set("portal")
+    pane._filter()
+    assert pane._row_for(hidden) is None
+
+
+def test_rebinding_a_row_updates_everything_it_shows(toolkit, furnished, png):
+    from kairo.models import AppEntry
+    from kairo.ui.widgets import AppRow
+
+    first = AppEntry(key="steam:1", provider_id="steam", name="First",
+                     subtitle="111", current_icon=png, customized=True)
+    second = AppEntry(key="steam:2", provider_id="steam", name="Second",
+                      subtitle="222")
+
+    row = AppRow(None, first, on_click=lambda _r: None)
+    assert row.entry is first
+    assert row.well._showing_image is True
+
+    row.bind_entry(second)
+    assert row.entry is second
+    assert row.well._showing_image is False
+
+
+# -- artwork tile selection -------------------------------------------------
+
+def test_choosing_artwork_marks_exactly_one_tile(toolkit, furnished):
+    from kairo.models import Artwork
+    from kairo.ui.widgets import ArtworkTile
+
+    pane = _library_pane()
+    pane._select(pane.rows[0])
+
+    arts = [Artwork(id=str(index), source_id="stub", label="Set")
+            for index in range(3)]
+    pane._tiles = [ArtworkTile(None, art, on_pick=pane._propose) for art in arts]
+
+    pane._propose(arts[1])
+    assert pane.proposed is arts[1]
+    assert [tile._chosen for tile in pane._tiles] == [False, True, False]
+
+    pane._propose(arts[2])
+    assert [tile._chosen for tile in pane._tiles] == [False, False, True]
+
+    pane._clear_proposal()
+    assert pane.proposed is None
+    assert not any(tile._chosen for tile in pane._tiles)
+
+
+def test_apply_is_disabled_until_something_is_proposed(toolkit, furnished):
+    from kairo.models import Artwork
+
+    pane = _library_pane()
+    pane._select(pane.rows[0])
+    assert pane.proposed is None
+    pane._propose(Artwork(id="a", source_id="stub"))
+    assert pane.proposed is not None
+    pane._clear_proposal()
+    assert pane.proposed is None
+
+
+# -- navigation chips -------------------------------------------------------
+
+def test_nav_chip_letters_come_from_the_provider_name(toolkit, furnished):
+    from kairo.ui import theme
+
+    assert theme.initial("Steam") == "S"
+    assert theme.initial("PCSX2") == "P"
+    assert theme.initial("  applications") == "A"
+    assert theme.initial("") == "•"
+    assert theme.initial("…") == "•"
+
+
+def test_a_future_provider_gets_a_chip_without_supplying_artwork(toolkit,
+                                                                 furnished):
+    """Emulator providers must reach the navigation with no assets of their
+    own and no change to any UI file."""
+    from kairo.providers.base import AppProvider
+    from kairo.providers.registry import default_registry
+    from kairo.ui import nav
+
+    class PretendEmulator(AppProvider):
+        id = "pcsx2"
+        label = "PCSX2"
+        noun = "games"
+        group = "Emulators"
+
+        def scan(self):
+            return []
+
+        def artwork_query(self, entry):
+            raise NotImplementedError
+
+        def writer(self):
+            raise NotImplementedError
+
+    registry = default_registry()
+    registry.register(PretendEmulator())
+    column = nav.NavColumn(None, nav.build_items(registry), on_select=lambda _i: None)
+
+    assert "provider:pcsx2" in column.buttons
+    assert column.buttons["provider:pcsx2"].chip.cget("text") in ("P", None)
+
+
+# -- icon cache -------------------------------------------------------------
+
+def test_icons_are_decoded_once_per_size(toolkit, furnished, png):
+    from kairo import imaging
+
+    imaging.clear_cache()
+    first = imaging.load_icon(48, path=png)
+    second = imaging.load_icon(48, path=png)
+    assert first is second, "the same icon must not be decoded twice"
+
+    other = imaging.load_icon(24, path=png)
+    assert other is not first, "different sizes are different images"
+
+
+def test_the_cache_is_bounded(toolkit, furnished, tmp_path):
+    from PIL import Image
+
+    from kairo import imaging
+
+    imaging.clear_cache()
+    limit = imaging.CACHE_LIMIT
+    for index in range(limit + 8):
+        path = tmp_path / f"icon{index}.png"
+        Image.new("RGBA", (8, 8), (index % 255, 0, 0, 255)).save(path)
+        imaging.load_icon(16, path=path)
+    assert len(imaging._CACHE) <= limit
+
+
+def test_a_changed_file_is_not_served_from_cache(toolkit, furnished, tmp_path):
+    import os
+
+    from PIL import Image
+
+    from kairo import imaging
+
+    imaging.clear_cache()
+    path = tmp_path / "icon.png"
+    Image.new("RGBA", (16, 16), (10, 10, 10, 255)).save(path)
+    first = imaging.load_icon(32, path=path)
+
+    Image.new("RGBA", (16, 16), (200, 30, 90, 255)).save(path)
+    os.utime(path, (0, 0))
+    assert imaging.load_icon(32, path=path) is not first

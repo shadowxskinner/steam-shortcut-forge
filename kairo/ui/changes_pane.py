@@ -26,22 +26,24 @@ def previous_icon_path(record: ChangeRecord) -> Path | None:
 
 class ChangeRow(ctk.CTkFrame):
     def __init__(self, master, record: ChangeRecord, on_restore, on_remove, **kw):
-        super().__init__(master, corner_radius=T.R_CARD, fg_color=T.C_CARD, **kw)
+        super().__init__(master, corner_radius=T.R_MD, fg_color=T.C_CARD, **kw)
         self.record = record
         self.grid_columnconfigure(3, weight=1)
 
-        before = IconWell(self, size=44)
-        before.grid(row=0, column=0, rowspan=2, padx=(12, 4), pady=10)
+        before = IconWell(self, size=T.THUMB_SIZE)
+        before.configure(fg_color=T.C_PANEL)
+        before.grid(row=0, column=0, rowspan=2, padx=(T.S3, T.S1), pady=T.S3)
         before.show(previous_icon_path(record), placeholder="—")
-        ctk.CTkLabel(self, text="→", font=T.F_SMALL, text_color=T.C_TEXT3
-                     ).grid(row=0, column=1, rowspan=2, padx=2)
-        after = IconWell(self, size=44)
-        after.grid(row=0, column=2, rowspan=2, padx=(4, 12), pady=10)
+        ctk.CTkLabel(self, text="→", font=T.F_META, text_color=T.C_TEXT3
+                     ).grid(row=0, column=1, rowspan=2, padx=T.S1)
+        after = IconWell(self, size=T.THUMB_SIZE)
+        after.configure(fg_color=T.C_PANEL)
+        after.grid(row=0, column=2, rowspan=2, padx=(T.S1, T.S3), pady=T.S3)
         after.show(record.applied_icon_path)
 
         ctk.CTkLabel(self, text=T.ellipsize(record.name, 34), anchor="w",
-                     font=T.F_BODY_B, text_color=T.C_TEXT
-                     ).grid(row=0, column=3, sticky="sw", pady=(10, 0))
+                     font=T.F_ROW, text_color=T.C_TEXT
+                     ).grid(row=0, column=3, sticky="sw", pady=(T.S3, 0))
 
         source = ("Existing customization" if record.adopted
                   else record.source_label or record.source_id or "a local file")
@@ -49,24 +51,24 @@ class ChangeRow(ctk.CTkFrame):
         detail = (f"{source}  ·  {T.format_date(record.applied_at)}"
                   if allowed else reason)
         ctk.CTkLabel(self, text=T.ellipsize(detail, 62), anchor="w",
-                     font=T.F_ITEM_SUB,
+                     font=T.F_META,
                      text_color=T.C_TEXT3 if allowed else T.C_DANGER
-                     ).grid(row=1, column=3, sticky="nw", pady=(0, 10))
+                     ).grid(row=1, column=3, sticky="nw", pady=(0, T.S3))
 
         buttons = ctk.CTkFrame(self, fg_color="transparent")
-        buttons.grid(row=0, column=4, rowspan=2, padx=(8, 12))
+        buttons.grid(row=0, column=4, rowspan=2, padx=(T.S2, T.S3))
         state = "normal" if allowed else "disabled"
         ctk.CTkButton(
             buttons, text="Reset" if deletes_launcher(record.action) else "Restore",
-            width=92, height=28, corner_radius=T.R_WELL, fg_color=T.C_CARD_HOVER,
-            hover_color=T.C_SELECTED, text_color=T.C_TEXT, font=T.F_TINY,
-            state=state, command=lambda: on_restore(record)).pack(pady=(0, 4))
+            width=94, height=28, corner_radius=T.R_SM, fg_color=T.C_CARD_HOVER,
+            hover_color=T.C_ACCENT, text_color=T.C_TEXT, font=T.F_PILL,
+            state=state, command=lambda: on_restore(record)).pack(pady=(0, T.S1))
         if deletes_launcher(record.action):
             ctk.CTkButton(
-                buttons, text="Remove", width=92, height=28,
-                corner_radius=T.R_WELL, fg_color=T.C_DANGER_BG,
+                buttons, text="Remove", width=94, height=28,
+                corner_radius=T.R_SM, fg_color=T.C_DANGER_BG,
                 hover_color=T.C_DANGER_HOVER, text_color=T.C_DANGER,
-                font=T.F_TINY, state=state,
+                font=T.F_PILL, state=state,
                 command=lambda: on_remove(record)).pack()
 
 
@@ -80,12 +82,13 @@ class ChangesPane(ctk.CTkFrame):
         self.grid_rowconfigure(1, weight=1)
 
         head = ctk.CTkFrame(self, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=26, pady=(18, 10))
+        head.grid(row=0, column=0, sticky="ew",
+                  padx=T.PAD_WINDOW, pady=(T.S5, T.S3))
         titles = ctk.CTkFrame(head, fg_color="transparent")
         titles.pack(side="left")
-        ctk.CTkLabel(titles, text="Changes", font=T.F_WORKSPACE_TITLE,
+        ctk.CTkLabel(titles, text="Changes", font=T.F_TITLE,
                      text_color=T.C_TEXT, anchor="w").pack(anchor="w")
-        self.count = ctk.CTkLabel(titles, text="", font=T.F_SMALL,
+        self.count = ctk.CTkLabel(titles, text="", font=T.F_META,
                                   text_color=T.C_TEXT3, anchor="w")
         self.count.pack(anchor="w", pady=(1, 0))
 
@@ -99,7 +102,7 @@ class ChangesPane(ctk.CTkFrame):
             corner_radius=T.R_WELL, fg_color=T.C_CARD,
             hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT2, font=T.F_BUTTON,
             command=self._cleanup)
-        self.cleanup_btn.pack(side="right", padx=(0, 8))
+        self.cleanup_btn.pack(side="right", padx=(0, T.GAP_CONTROL))
         self.cancel_btn = ctk.CTkButton(
             head, text="Cancel", height=T.H_FIELD, corner_radius=T.R_WELL,
             fg_color=T.C_DANGER_BG, hover_color=T.C_DANGER_HOVER,
@@ -108,12 +111,14 @@ class ChangesPane(ctk.CTkFrame):
         self.list = ctk.CTkScrollableFrame(
             self, fg_color=T.C_PANEL, corner_radius=T.R_CARD,
             scrollbar_fg_color="transparent", scrollbar_button_color=T.C_CARD)
-        self.list.grid(row=1, column=0, sticky="nsew", padx=22, pady=(0, 8))
+        self.list.grid(row=1, column=0, sticky="nsew",
+                       padx=T.PAD_WINDOW - T.S1, pady=(0, T.S3))
         self.list.grid_columnconfigure(0, weight=1)
 
         self.status = ctk.CTkLabel(self, text="", font=T.F_TINY,
                                    text_color=T.C_TEXT3)
-        self.status.grid(row=2, column=0, sticky="w", padx=26, pady=(0, 16))
+        self.status.grid(row=2, column=0, sticky="w",
+                         padx=T.PAD_WINDOW, pady=(0, T.S5))
 
         self.refresh()
 
@@ -132,13 +137,14 @@ class ChangesPane(ctk.CTkFrame):
                      "Artwork you apply appears here, and you can put any of "
                      "it back.",
                 font=T.F_BODY, text_color=T.C_TEXT3, justify="left"
-            ).grid(row=0, column=0, sticky="w", padx=20, pady=28)
+            ).grid(row=0, column=0, sticky="w", padx=T.S5, pady=T.S8)
             return
 
         for index, record in enumerate(records):
             ChangeRow(self.list, record, on_restore=self._restore_one,
                       on_remove=self._remove_one
-                      ).grid(row=index, column=0, sticky="ew", padx=8, pady=4)
+                      ).grid(row=index, column=0, sticky="ew",
+                             padx=T.S2, pady=T.GAP_ROW)
 
     # -- single record ----------------------------------------------------
 
@@ -208,7 +214,7 @@ class ChangesPane(ctk.CTkFrame):
 
         self._token = CancelToken()
         self.restore_all_btn.configure(state="disabled")
-        self.cancel_btn.pack(side="right", padx=(0, 8))
+        self.cancel_btn.pack(side="right", padx=(0, T.GAP_CONTROL))
 
         def progress(index, total, record):
             self.after(0, lambda: self.status.configure(

@@ -47,6 +47,8 @@ class LibraryPane(ctk.CTkFrame):
         self._resize_job = None
         self._query_job = None
         self._filter_mode = "all"
+        self._visible = 0
+        self._chosen_tile = None
         self._source_labels: dict[str, str] = {}
         self._probe_cache: dict[tuple[str, str], bool] = {}
 
@@ -73,18 +75,20 @@ class LibraryPane(ctk.CTkFrame):
         column.grid_columnconfigure(0, weight=1)
 
         head = ctk.CTkFrame(column, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=16, pady=(20, 10))
-        ctk.CTkLabel(head, text=self.provider.label, font=T.F_TITLE,
+        head.grid(row=0, column=0, sticky="ew",
+                  padx=T.PAD_COLUMN, pady=(T.S6, T.S3))
+        ctk.CTkLabel(head, text=self.provider.label, font=T.F_PANE,
                      text_color=T.C_TEXT).pack(side="left")
-        self.count_pill = ctk.CTkLabel(head, text="0", font=T.F_TINY,
+        self.count_pill = ctk.CTkLabel(head, text="0", font=T.F_META,
                                        text_color=T.C_TEXT2, fg_color=T.C_CARD,
-                                       corner_radius=10, width=38, height=20)
+                                       corner_radius=T.R_SM, width=34, height=20)
         self.count_pill.pack(side="right")
 
         self.search_var.trace_add("write", lambda *_: self._filter())
         SearchField(column, textvariable=self.search_var,
                     placeholder=f"Search {self.provider.noun}…"
-                    ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
+                    ).grid(row=1, column=0, sticky="ew",
+                           padx=T.PAD_COLUMN, pady=(0, T.S2))
 
         # Same control as the source picker, so filters and sources read as
         # one design system rather than two.
@@ -94,13 +98,15 @@ class LibraryPane(ctk.CTkFrame):
             column, values=list(self._filter_labels),
             command=lambda label: self._set_filter(self._filter_labels[label]))
         self.filter_pills.set("All")
-        self.filter_pills.grid(row=2, column=0, sticky="w", padx=16, pady=(0, 8))
+        self.filter_pills.grid(row=2, column=0, sticky="w",
+                               padx=T.PAD_COLUMN, pady=(0, T.S3))
 
         self.list = ctk.CTkScrollableFrame(
             column, fg_color="transparent", corner_radius=0,
             scrollbar_fg_color="transparent", scrollbar_button_color=T.C_CARD,
             scrollbar_button_hover_color=T.C_TEXT3)
-        self.list.grid(row=3, column=0, sticky="nsew", padx=8, pady=(0, 10))
+        self.list.grid(row=3, column=0, sticky="nsew",
+                       padx=T.S2, pady=(0, T.S3))
         self.list.grid_columnconfigure(0, weight=1)
 
     # -- right column -----------------------------------------------------
@@ -112,7 +118,8 @@ class LibraryPane(ctk.CTkFrame):
         space.grid_columnconfigure(0, weight=1)
 
         header = ctk.CTkFrame(space, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=26, pady=(18, 0))
+        header.grid(row=0, column=0, sticky="ew",
+                    padx=T.PAD_WINDOW, pady=(T.S5, 0))
         titles = ctk.CTkFrame(header, fg_color="transparent")
         titles.pack(side="left", fill="x", expand=True)
         self.title = ctk.CTkLabel(titles, text="Select something",
@@ -127,42 +134,47 @@ class LibraryPane(ctk.CTkFrame):
         # proposes it; nothing is written until Apply.
         compare = ctk.CTkFrame(space, fg_color=T.C_PANEL,
                                corner_radius=T.R_CARD)
-        compare.grid(row=1, column=0, sticky="ew", padx=26, pady=(10, 10))
+        compare.grid(row=1, column=0, sticky="ew",
+                     padx=T.PAD_WINDOW, pady=(T.S4, T.S3))
         for column_index in (0, 1, 2):
             compare.grid_columnconfigure(column_index, weight=0)
         compare.grid_columnconfigure(3, weight=1)
 
         current_box = ctk.CTkFrame(compare, fg_color="transparent")
-        current_box.grid(row=0, column=0, padx=(18, 12), pady=12)
+        current_box.grid(row=0, column=0,
+                         padx=(T.PAD_CARD, T.S3), pady=T.PAD_CARD_TIGHT)
         ctk.CTkLabel(current_box, text="CURRENT", font=T.F_SECTION,
                      text_color=T.C_TEXT3).pack(anchor="w", pady=(0, 4))
-        self.current_well = IconWell(current_box, size=66)
+        self.current_well = IconWell(current_box, size=T.WELL_SIZE)
         self.current_well.pack()
 
         ctk.CTkLabel(compare, text="→", font=T.F_TITLE, text_color=T.C_TEXT3
-                     ).grid(row=0, column=1, padx=4)
+                     ).grid(row=0, column=1, padx=T.S1)
 
         proposed_box = ctk.CTkFrame(compare, fg_color="transparent")
-        proposed_box.grid(row=0, column=2, padx=(12, 18), pady=12)
+        proposed_box.grid(row=0, column=2,
+                          padx=(T.S3, T.PAD_CARD), pady=T.PAD_CARD_TIGHT)
         ctk.CTkLabel(proposed_box, text="PROPOSED", font=T.F_SECTION,
                      text_color=T.C_TEXT3).pack(anchor="w", pady=(0, 4))
-        self.proposed_well = IconWell(proposed_box, size=66)
+        self.proposed_well = IconWell(proposed_box, size=T.WELL_SIZE)
         self.proposed_well.pack()
 
         self.proposal_label = ctk.CTkLabel(
             compare, text="Choose artwork below", font=T.F_SMALL,
             text_color=T.C_TEXT3, anchor="w")
-        self.proposal_label.grid(row=0, column=3, sticky="w", padx=(4, 18))
+        self.proposal_label.grid(row=0, column=3, sticky="w",
+                                 padx=(T.S1, T.PAD_CARD))
 
         # Source picker and its search box.
         controls = ctk.CTkFrame(space, fg_color="transparent")
-        controls.grid(row=2, column=0, sticky="ew", padx=26, pady=(0, 8))
+        controls.grid(row=2, column=0, sticky="ew",
+                      padx=T.PAD_WINDOW, pady=(0, T.S3))
         self.source_selector = SegmentedPills(
             controls, values=[], variable=self.source_var,
             command=self._on_source_changed)
         self.source_selector.pack(side="left")
         self.query_field = SearchField(controls, textvariable=self.query_var,
-                                       placeholder="Search artwork…", width=300)
+                                       placeholder="Search artwork…", width=280)
         self.query_field.bind_entry("<KeyRelease>", self._schedule_query)
         self.query_field.bind_entry("<Return>", self._run_query_now)
 
@@ -170,7 +182,8 @@ class LibraryPane(ctk.CTkFrame):
             space, fg_color=T.C_PANEL, corner_radius=T.R_CARD,
             scrollbar_fg_color="transparent", scrollbar_button_color=T.C_CARD,
             scrollbar_button_hover_color=T.C_TEXT3)
-        self.grid_area.grid(row=3, column=0, sticky="nsew", padx=22, pady=(0, 10))
+        self.grid_area.grid(row=3, column=0, sticky="nsew",
+                            padx=T.PAD_WINDOW - T.S1, pady=(0, T.S3))
         # add="+" is essential: CTkScrollableFrame binds <Configure> on itself
         # to recompute the scrollregion; replacing it stops the wheel working.
         self.grid_area.bind("<Configure>", self._on_resize, add="+")
@@ -178,7 +191,8 @@ class LibraryPane(ctk.CTkFrame):
         # Three tiers, left to right: secondary actions, then a gap, then the
         # destructive one, then the primary alone on the right.
         bar = ctk.CTkFrame(space, fg_color="transparent")
-        bar.grid(row=4, column=0, sticky="ew", padx=26, pady=(0, 18))
+        bar.grid(row=4, column=0, sticky="ew",
+                 padx=T.PAD_WINDOW, pady=(0, T.S5))
         self.browse_btn = ctk.CTkButton(
             bar, text="Browse local file…", height=T.H_ACTION,
             corner_radius=T.R_WELL, fg_color=T.C_CARD,
@@ -190,7 +204,7 @@ class LibraryPane(ctk.CTkFrame):
             corner_radius=T.R_WELL, fg_color=T.C_CARD,
             hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
             font=T.F_BUTTON, command=self._on_restore, state="disabled")
-        self.restore_btn.pack(side="left", padx=(8, 0))
+        self.restore_btn.pack(side="left", padx=(T.GAP_CONTROL, 0))
         # Held away from the secondary pair so it cannot be hit by momentum.
         self.remove_btn = ctk.CTkButton(
             bar, text="Remove shortcut", height=T.H_ACTION,
@@ -232,26 +246,41 @@ class LibraryPane(ctk.CTkFrame):
         return entries
 
     def _filter(self):
-        for row in self.rows:
-            row.destroy()
-        self.rows.clear()
+        """Repoint the row pool at the visible entries.
+
+        Rows are reused rather than rebuilt. Destroying and recreating them on
+        every keystroke meant hundreds of widget teardowns and icon decodes per
+        character typed once a library got large.
+        """
+        entries = self.visible_entries()
+
+        while len(self.rows) < len(entries):
+            self.rows.append(AppRow(self.list, on_click=self._select))
+
+        for index, entry in enumerate(entries):
+            row = self.rows[index]
+            row.bind_entry(entry)
+            row.set_selected(False)
+            row.grid(row=index, column=0, sticky="ew",
+                     padx=T.S2, pady=T.GAP_ROW)
+        for row in self.rows[len(entries):]:
+            row.grid_remove()
+
+        self._visible = len(entries)
         self.selected_row = None
         self._clear_proposal()
         self._set_actions(False)
-
-        for index, entry in enumerate(self.visible_entries()):
-            row = AppRow(self.list, entry, on_click=self._select)
-            row.grid(row=index, column=0, sticky="ew", padx=4, pady=3)
-            self.rows.append(row)
-
-        self.count_pill.configure(text=str(len(self.rows)))
+        self.count_pill.configure(text=str(len(entries)))
         self.ctx.on_changed()
+
+    def visible_rows(self):
+        return self.rows[:self._visible]
 
     def customized_count(self) -> int:
         return sum(1 for e in self.entries if e.customized)
 
     def _row_for(self, entry: AppEntry) -> AppRow | None:
-        for row in self.rows:
+        for row in self.visible_rows():
             if row.entry.key == entry.key:
                 return row
         return None
@@ -280,7 +309,7 @@ class LibraryPane(ctk.CTkFrame):
             state=state, text=writer.restore_label if writer else "Restore original")
         if enabled and writer is not None and writer.supports_remove:
             if not self.remove_btn.winfo_ismapped():
-                self.remove_btn.pack(side="left", padx=(32, 0))
+                self.remove_btn.pack(side="left", padx=(T.S8, 0))
             self.remove_btn.configure(text=writer.remove_label, state="normal")
         else:
             self.remove_btn.pack_forget()
@@ -332,7 +361,7 @@ class LibraryPane(ctk.CTkFrame):
         if source is not None and source.needs_query:
             self.query_field.configure_placeholder(source.query_placeholder)
             if not self.query_field.winfo_ismapped():
-                self.query_field.pack(side="left", padx=(10, 0))
+                self.query_field.pack(side="left", padx=(T.S3, 0))
         else:
             self.query_field.pack_forget()
             self._cancel_query_job()
@@ -414,6 +443,7 @@ class LibraryPane(ctk.CTkFrame):
         for widget in self.grid_area.winfo_children():
             widget.destroy()
         self._tiles.clear()
+        self._chosen_tile = None
         self._grid_cols = 0
 
     def _load_artwork(self, entry: AppEntry):
@@ -473,11 +503,11 @@ class LibraryPane(ctk.CTkFrame):
             return DEFAULT_COLS
         if self._tiles:
             try:
-                cell = self._tiles[0].winfo_reqwidth() + GRID_GUTTER
+                cell = self._tiles[0].winfo_reqwidth() + T.GRID_GUTTER
             except tk.TclError:
-                cell = (T.TILE_SIZE + 36) * T.UI_SCALE
+                cell = (T.TILE_SIZE + T.S6) * T.UI_SCALE
         else:
-            cell = (T.TILE_SIZE + 36) * T.UI_SCALE
+            cell = (T.TILE_SIZE + T.S6) * T.UI_SCALE
         return max(1, int((available + 4) // cell))
 
     def _regrid(self, cols: int | None = None):
@@ -503,7 +533,7 @@ class LibraryPane(ctk.CTkFrame):
         for index, art in enumerate(results):
             row, col = divmod(index, cols)
             tile = ArtworkTile(self.grid_area, art, on_pick=self._propose)
-            tile.grid(row=row, column=col, padx=6, pady=6, sticky="n")
+            tile.grid(row=row, column=col, padx=T.S1, pady=T.S1, sticky="n")
             self._tiles.append(tile)
         self.after_idle(lambda: self._regrid(self._fit_columns()))
 
@@ -519,8 +549,15 @@ class LibraryPane(ctk.CTkFrame):
 
     def _clear_proposal(self):
         self.proposed = None
+        if self._chosen_tile is not None:
+            try:
+                self._chosen_tile.set_chosen(False)
+            except tk.TclError:
+                pass
+            self._chosen_tile = None
         self.proposed_well.show(None, placeholder="—")
-        self.proposal_label.configure(text="Choose artwork below")
+        self.proposal_label.configure(text="Choose artwork below",
+                                      text_color=T.C_TEXT3)
         self.apply_btn.configure(state="disabled")
 
     def _propose(self, art: Artwork):
@@ -528,8 +565,20 @@ class LibraryPane(ctk.CTkFrame):
         if not self.selected_row:
             return
         self.proposed = art
+        if self._chosen_tile is not None:
+            try:
+                self._chosen_tile.set_chosen(False)
+            except tk.TclError:
+                pass
+            self._chosen_tile = None
+        for tile in self._tiles:
+            if tile.art is art:
+                tile.set_chosen(True)
+                self._chosen_tile = tile
+                break
         label = art.label or art.name or "selected artwork"
-        self.proposal_label.configure(text=f"{label} — press Apply to use it")
+        self.proposal_label.configure(text=f"{label}  ·  press Apply to use it",
+                                      text_color=T.C_TEXT2)
         self.apply_btn.configure(state="normal")
 
         source = self.ctx.sources.get(art.source_id)

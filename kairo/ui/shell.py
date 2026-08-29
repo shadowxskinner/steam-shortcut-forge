@@ -88,10 +88,11 @@ class KairoShell(ctk.CTk):
         content.grid_columnconfigure(0, weight=1)
 
         bar = ctk.CTkFrame(content, fg_color="transparent", height=56)
-        bar.grid(row=0, column=0, sticky="ew", padx=26, pady=(14, 0))
+        bar.grid(row=0, column=0, sticky="ew",
+                 padx=T.PAD_WINDOW, pady=(T.S4, 0))
         self.match_btn = ctk.CTkButton(
             bar, text="Auto Match", height=T.H_FIELD, width=130,
-            corner_radius=T.R_WELL, fg_color=T.C_ACCENT,
+            corner_radius=T.R_MD, fg_color=T.C_ACCENT,
             hover_color=T.C_ACCENT_HOVER, font=T.F_BUTTON,
             command=self._auto_match)
         self.match_btn.pack(side="right")
@@ -112,9 +113,10 @@ class KairoShell(ctk.CTk):
         self.body.grid_rowconfigure(0, weight=1)
         self.body.grid_columnconfigure(0, weight=1)
 
-        self.status = ctk.CTkLabel(content, text="", font=T.F_TINY,
+        self.status = ctk.CTkLabel(content, text="", font=T.F_META,
                                    text_color=T.C_TEXT3, anchor="w")
-        self.status.grid(row=2, column=0, sticky="ew", padx=26, pady=(0, 10))
+        self.status.grid(row=2, column=0, sticky="ew",
+                         padx=T.PAD_WINDOW, pady=(0, T.S3))
 
     # -- navigation -------------------------------------------------------
 
@@ -278,7 +280,8 @@ class KairoShell(ctk.CTk):
         if running:
             self.match_btn.pack_forget()
             self.cancel_btn.pack(side="right")
-            self.progress.pack(side="left", fill="x", expand=True, padx=(0, 16))
+            self.progress.pack(side="left", fill="x", expand=True,
+                               padx=(0, T.S4))
             self.progress.set(0)
         else:
             self.cancel_btn.pack_forget()
