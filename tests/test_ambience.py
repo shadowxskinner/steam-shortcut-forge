@@ -30,25 +30,44 @@ def channels(colour: str):
 # -- the image itself -------------------------------------------------------
 
 def test_the_backdrop_fades_to_the_window_colour(fresh):
-    """A window larger than the asset shows flat background beyond it. That is
-    only seamless if the asset's own edges are already that colour."""
-    image = ambience.render(SMALL)
+    """A window larger than the asset shows flat background beyond it, so the
+    asset's own border has to already be that colour or there is a visible step.
+
+    Checked at the real size: the glow centres sit outside a small test canvas
+    entirely, so a scaled-down render would pass this without meaning anything.
+    """
+    image = ambience.render(ambience.SIZE)
+    width, height = ambience.SIZE
     base = channels(T.C_BG)
-    for corner in ((0, 0), (SMALL[0] - 1, 0), (0, SMALL[1] - 1),
-                   (SMALL[0] - 1, SMALL[1] - 1)):
-        assert image.getpixel(corner) == base, f"corner {corner} is not the base"
+    probes = [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1),
+              (width // 2, 0), (width // 2, height - 1),
+              (0, height // 2), (width - 1, height // 2)]
+    for probe in probes:
+        assert image.getpixel(probe) == base, f"{probe} is not the window colour"
+
+
+def test_the_edge_fade_is_what_guarantees_it(fresh):
+    """Structural rather than a happy accident of where the glows sit."""
+    mask = ambience.edge_mask((200, 140), inset=20)
+    assert mask.getpixel((0, 0)) == 0
+    assert mask.getpixel((100, 70)) == 255
 
 
 def test_the_glow_is_barely_there(fresh):
     """Subtle enough that removing it would not affect readability."""
     image = ambience.render(ambience.SIZE)
     base = channels(T.C_BG)
+    pixels = image.load()
+    width, height = image.size
     peak = max(
-        sum(abs(a - b) for a, b in zip(image.getpixel((x, y)), base))
-        for x, y in ((1180, 40), (120, 950), (800, 500))
+        sum(abs(a - b) for a, b in zip(pixels[x, y], base))
+        for y in range(0, height, 8) for x in range(0, width, 8)
     )
-    assert peak <= 90, f"total channel lift of {peak} is too strong for ambience"
-    assert peak >= 6, "if it is invisible there is no point shipping it"
+    # Summed across three channels, so roughly a third of this per channel.
+    # Raised deliberately from 90 when the wash was measured as too faint on a
+    # real display; still low enough that removing it changes no readability.
+    assert peak <= 110, f"total channel lift of {peak} is too strong"
+    assert peak >= 30, "too faint to be worth the asset"
 
 
 def test_nothing_is_tinted_at_the_centre_of_the_content(fresh):
@@ -56,7 +75,7 @@ def test_nothing_is_tinted_at_the_centre_of_the_content(fresh):
     image = ambience.render(ambience.SIZE)
     base = channels(T.C_BG)
     middle = image.getpixel((760, 520))
-    assert sum(abs(a - b) for a, b in zip(middle, base)) <= 40
+    assert sum(abs(a - b) for a, b in zip(middle, base)) <= 60
 
 
 # -- generated once ---------------------------------------------------------

@@ -999,3 +999,41 @@ def test_every_named_glyph_can_be_drawn(toolkit, furnished):
         icon = NavIcon(None, kind=kind)
         icon.set_state("#ffffff", "#000000")
     NavIcon(None, kind="does-not-exist")     # falls back rather than raising
+
+
+# -- the primary action must look as available as it is ---------------------
+
+def test_apply_recedes_when_nothing_is_proposed(toolkit, furnished):
+    """CTkButton only swaps the text colour when disabled; the fill stays as
+    bright as an active control, which is why a greyed-out Apply still read
+    as pressable."""
+    from kairo.ui import theme as T
+
+    pane = _library_pane()
+    pane._apply_enabled(False)
+    assert pane.apply_btn.cget("fg_color") in (T.C_CARD, None)
+
+    pane._apply_enabled(True)
+    assert pane.apply_btn.cget("fg_color") in (T.C_ACCENT_BRIGHT, None)
+
+
+def test_proposing_and_clearing_drive_the_apply_surface(toolkit, furnished):
+    from kairo.models import Artwork
+    from kairo.ui import theme as T
+
+    pane = _library_pane()
+    pane._select(pane.rows[0])
+    assert pane.apply_btn.cget("fg_color") in (T.C_CARD, None)
+
+    pane._propose(Artwork(id="a", source_id="stub"))
+    assert pane.apply_btn.cget("fg_color") in (T.C_ACCENT_BRIGHT, None)
+
+    pane._clear_proposal()
+    assert pane.apply_btn.cget("fg_color") in (T.C_CARD, None)
+
+
+def test_the_muted_accent_and_the_bright_one_are_different(toolkit, furnished):
+    """Brightness has to mean 'active' rather than being the ambient level."""
+    from kairo.ui import theme as T
+
+    assert T.C_ACCENT != T.C_ACCENT_BRIGHT

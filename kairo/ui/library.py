@@ -232,9 +232,10 @@ class LibraryPane(ctk.CTkFrame):
         self.apply_btn = ctk.CTkButton(
             bar, text="Apply", height=T.H_ACTION, width=132,
             corner_radius=T.R_WELL, fg_color=T.C_ACCENT_BRIGHT,
-            hover_color=T.C_ACCENT_HOVER, font=T.F_BUTTON,
-            command=self._on_apply, state="disabled")
+            hover_color=T.C_ACCENT_HOVER, text_color_disabled=T.C_TEXT3,
+            font=T.F_BUTTON, command=self._on_apply)
         self.apply_btn.pack(side="right")
+        self._apply_enabled(False)
 
     # -- entries ----------------------------------------------------------
 
@@ -368,11 +369,23 @@ class LibraryPane(ctk.CTkFrame):
             self.remove_btn.configure(text=writer.remove_label, state="normal")
         else:
             self.remove_btn.pack_forget()
-        self.apply_btn.configure(
-            state="normal" if (enabled and self.proposed) else "disabled")
+        self._apply_enabled(bool(enabled and self.proposed))
 
     def _writer(self):
         return self.provider.writer() if self.provider else None
+
+    def _apply_enabled(self, enabled: bool) -> None:
+        """Make the primary action look as available as it is.
+
+        CTkButton only swaps the text colour when disabled - the fill stays
+        exactly as bright as an active control, which is why a greyed-out
+        Apply still read as pressable. The surface has to change too.
+        """
+        self.apply_btn.configure(
+            state="normal" if enabled else "disabled",
+            fg_color=T.C_ACCENT_BRIGHT if enabled else T.C_CARD,
+            hover_color=T.C_ACCENT_HOVER if enabled else T.C_CARD,
+            text_color=T.C_TEXT if enabled else T.C_TEXT3)
 
     # -- sources ----------------------------------------------------------
 
@@ -638,7 +651,7 @@ class LibraryPane(ctk.CTkFrame):
         self.proposed_well.show(None, placeholder="—")
         self.proposal_label.configure(text="Choose artwork below",
                                       text_color=T.C_TEXT3)
-        self.apply_btn.configure(state="disabled")
+        self._apply_enabled(False)
 
     def _propose(self, art: Artwork):
         """Selecting artwork only proposes it. Apply writes it."""
@@ -659,7 +672,7 @@ class LibraryPane(ctk.CTkFrame):
         label = art.label or art.name or "selected artwork"
         self.proposal_label.configure(text=f"{label}  ·  press Apply to use it",
                                       text_color=T.C_TEXT2)
-        self.apply_btn.configure(state="normal")
+        self._apply_enabled(True)
 
         source = self.ctx.sources.get(art.source_id)
         if source is None:
@@ -687,7 +700,8 @@ class LibraryPane(ctk.CTkFrame):
         source = self.ctx.sources.get(art.source_id)
         if source is None:
             return
-        self.apply_btn.configure(state="disabled", text="Applying…")
+        self._apply_enabled(False)
+        self.apply_btn.configure(text="Applying…")
 
         def work():
             try:
@@ -700,7 +714,8 @@ class LibraryPane(ctk.CTkFrame):
         threading.Thread(target=work, daemon=True).start()
 
     def _apply_failed(self, entry: AppEntry, message: str):
-        self.apply_btn.configure(state="normal", text="Apply")
+        self._apply_enabled(True)
+        self.apply_btn.configure(text="Apply")
         messagebox.showerror("Could not apply artwork", message)
         self._status_if_current(entry, message)
 
