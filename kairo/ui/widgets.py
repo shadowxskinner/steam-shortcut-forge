@@ -153,52 +153,102 @@ class SearchField(ctk.CTkFrame):
 
 
 class IconWell(ctk.CTkFrame):
-    """A fixed-footprint rounded square holding one icon.
+    """A fixed-footprint square showing either artwork or a placeholder glyph.
 
-    Used wherever icons sit beside each other and must line up: the sidebar,
-    the Changes list, and the current-to-suggested pairs in review.
+    Two stacked labels rather than one, because CustomTkinter cannot empty a
+    label. Its CTkLabel._update_image() only acts when the image is *not*
+    None::
+
+        if isinstance(self._image, CTkImage):   self._label.configure(image=...)
+        elif self._image is not None:           self._label.configure(image=...)
+        # None falls through and the Tk label keeps the previous image
+
+    So configure(image=None) sets CustomTkinter's own bookkeeping to None
+    while the underlying Tk label still points at the old image. Releasing our
+    reference then frees an image the widget is still holding, and *every*
+    later configure() on it raises - including one that only sets text,
+    because configure() processes text before image. That is a placeholder
+    that cannot clear artwork, followed by a cascade of TclErrors.
+
+    Keeping one label for images and one for text sidesteps all of it: the
+    image label is only ever handed a real image, and showing a placeholder
+    hides it instead of trying to empty it. The last image stays referenced
+    for as long as this widget lives, so nothing it points at is ever freed.
     """
 
     def __init__(self, master, size: int = 48, **kw):
         super().__init__(master, width=size, height=size,
                          corner_radius=T.R_WELL, fg_color=T.C_CARD, **kw)
-        self.size = size
+        # Not self.size: tkinter.Grid already defines size() as an alias for
+        # grid_size(), and shadowing a widget method with an int is the same
+        # trap as assigning to self.config.
+        self._size = size
         self._photo = None
+        self._showing_image = False
+
         self.grid_propagate(False)
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
-        self.label = ctk.CTkLabel(self, text="", width=1, height=1)
-        self.label.grid(row=0, column=0)
 
-    def _placeholder(self, text: str) -> None:
-        apply_image(self.label, self, "_photo", None, text=text,
-                    font=("Inter", max(14, self.size // 3)),
-                    text_color=T.C_TEXT3)
+        self.image_label = ctk.CTkLabel(self, text="", width=1, height=1)
+        self.text_label = ctk.CTkLabel(self, text="", width=1, height=1)
+        self.text_label.grid(row=0, column=0)
+
+        # Kept for callers that reach for a single label.
+        self.label = self.text_label
+
+    @property
+    def size(self) -> int:
+        return self._size
+
+    # -- showing -----------------------------------------------------------
+
+    def show_placeholder(self, text: str = "○") -> None:
+        self.text_label.configure(text=text,
+                                  font=("Inter", max(14, self._size // 3)),
+                                  text_color=T.C_TEXT3)
+        if self._showing_image:
+            self.image_label.grid_remove()
+        self.text_label.grid(row=0, column=0)
+        self._showing_image = False
+
+    def show_photo(self, photo) -> None:
+        # Configure before releasing the previous reference: the widget must
+        # stop using an image before Python frees it.
+        apply_image(self.image_label, self, "_photo", photo, text="")
+        if not self._showing_image:
+            self.text_label.grid_remove()
+        self.image_label.grid(row=0, column=0)
+        self._showing_image = True
 
     def show(self, path=None, placeholder: str = "○") -> None:
         """Render an icon from a path. Never raises into the caller.
 
-        This runs from selection handlers, so a decode failure must degrade to
-        a placeholder rather than abort the click.
+        This runs from selection handlers, so a bad icon must degrade to a
+        placeholder rather than abort the click.
         """
-        if path is None or not Path(str(path)).is_file():
-            self._placeholder(placeholder)
+        if path is None:
+            self.show_placeholder(placeholder)
+            return
+        candidate = Path(str(path))
+        if not candidate.is_file():
+            self.show_placeholder(placeholder)
             return
         try:
-            photo = imaging.load_icon(self.size - 12, path=Path(str(path)))
+            photo = imaging.load_icon(self._size - 12, path=candidate)
         except Exception:
-            self._placeholder("?")
+            self.show_placeholder("?")
             return
-        apply_image(self.label, self, "_photo", photo, text="")
+        self.show_photo(photo)
 
     def show_data(self, data: bytes) -> None:
         """Render icon bytes that have already been fetched."""
         try:
-            photo = imaging.load_icon(self.size - 12, data=data)
+            photo = imaging.load_icon(self._size - 12, data=data)
         except Exception:
-            self._placeholder("?")
+            self.show_placeholder("?")
             return
-        apply_image(self.label, self, "_photo", photo, text="")
+        self.show_photo(photo)
 
 
 class AppRow(ctk.CTkFrame):
@@ -218,15 +268,9 @@ class AppRow(ctk.CTkFrame):
         self.grid_columnconfigure(2, weight=1)
 
         # Rounded square that keeps every icon the same footprint.
-        self.well = ctk.CTkFrame(self, width=self.THUMB, height=self.THUMB,
-                                 corner_radius=T.R_WELL, fg_color=T.C_CARD)
+        self.well = IconWell(self, size=self.THUMB)
         self.well.grid(row=0, column=0, rowspan=2, padx=(10, 0), pady=8)
-        self.well.grid_propagate(False)
-        self.well.grid_rowconfigure(0, weight=1)
-        self.well.grid_columnconfigure(0, weight=1)
-
-        self.thumb = ctk.CTkLabel(self.well, text="", width=1, height=1)
-        self.thumb.grid(row=0, column=0)
+        self.thumb = self.well.text_label
         self._load_thumb()
 
         self.name_lbl = ctk.CTkLabel(
@@ -238,7 +282,8 @@ class AppRow(ctk.CTkFrame):
                                     font=T.F_ITEM_SUB, text_color=self._sub_colour())
         self.sub_lbl.grid(row=1, column=2, sticky="nw", padx=(12, 10), pady=(1, 10))
 
-        for widget in (self, self.well, self.thumb, self.name_lbl, self.sub_lbl):
+        for widget in (self, self.well, self.well.image_label,
+                       self.well.text_label, self.name_lbl, self.sub_lbl):
             widget.bind("<Button-1>", lambda _: self._on_click(self))
             widget.bind("<Enter>", self._enter)
             widget.bind("<Leave>", self._leave)
@@ -251,17 +296,7 @@ class AppRow(ctk.CTkFrame):
         return T.C_SUCCESS if self.entry.customized else T.C_TEXT3
 
     def _load_thumb(self):
-        icon = self.entry.current_icon
-        if icon and icon.exists():
-            try:
-                photo = imaging.load_icon(self.THUMB - 16, path=icon)
-            except Exception:
-                photo = None
-            if photo is not None:
-                apply_image(self.thumb, self, "_photo", photo, text="")
-                return
-        apply_image(self.thumb, self, "_photo", None, text="○",
-                    font=("Inter", 24), text_color=T.C_TEXT3)
+        self.well.show(self.entry.current_icon, placeholder="○")
 
     def _enter(self, _=None):
         if not self._selected:
@@ -297,16 +332,12 @@ class ArtworkTile(ctk.CTkFrame):
 
         self.configure(cursor="hand2")
 
-        self.well = ctk.CTkFrame(self, width=T.TILE_SIZE, height=T.TILE_SIZE,
-                                 corner_radius=T.R_WELL, fg_color=T.C_CARD)
-        self.well.pack(padx=8, pady=(8, 6))
-        self.well.pack_propagate(False)
-
         # Placeholder, so the tile occupies its final footprint immediately and
         # the grid never reflows as images stream in.
-        self.holder = ctk.CTkLabel(self.well, text="",
-                                   width=T.TILE_SIZE - 18, height=T.TILE_SIZE - 18)
-        self.holder.place(relx=0.5, rely=0.5, anchor="center")
+        self.well = IconWell(self, size=T.TILE_SIZE)
+        self.well.pack(padx=8, pady=(8, 6))
+        self.well.show_placeholder("")
+        self.holder = self.well.text_label
 
         size = art.dimensions or ""
         votes = f"▲{int(art.score)}" if art.score > 0 else ""
@@ -334,10 +365,9 @@ class ArtworkTile(ctk.CTkFrame):
             if (self._on_svg_missing and data and imaging.looks_svg(data)
                     and not imaging.svg_available()):
                 self._on_svg_missing()
-            apply_image(self.holder, self, "_photo", None, text="?",
-                        font=T.F_HEADING, text_color=T.C_TEXT3)
+            self.well.show_placeholder("?")
             return
-        apply_image(self.holder, self, "_photo", photo, text="")
+        self.well.show_photo(photo)
         self._bind_hover()
 
     def _bind_hover(self):

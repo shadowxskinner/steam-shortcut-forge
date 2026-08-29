@@ -10,7 +10,7 @@ from __future__ import annotations
 
 #: The single source of truth for the version. pyproject reads it from here,
 #: and release.sh checks it rather than maintaining a copy.
-__version__ = "2.1.2"
+__version__ = "2.1.3"
 
 #: Public product name. No suffix, no qualifier.
 APP_NAME = "Kairo"

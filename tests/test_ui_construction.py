@@ -506,3 +506,119 @@ def test_icon_well_degrades_instead_of_aborting_a_selection(toolkit, furnished,
     broken.write_bytes(b"not an image at all")
     well.show(broken)                                 # undecodable
     well.show_data(b"also not an image")
+
+
+# -- switching between artwork and placeholder ------------------------------
+#
+# CustomTkinter cannot empty a label: CTkLabel._update_image() ignores a None
+# image, so the Tk label keeps the previous one. Everything below pins the way
+# IconWell works around that.
+
+@pytest.fixture
+def png(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "icon.png"
+    Image.new("RGBA", (32, 32), (90, 60, 245, 255)).save(path)
+    return path
+
+
+def test_placeholder_hides_the_image_rather_than_clearing_it(toolkit, furnished, png):
+    from kairo.ui.widgets import IconWell
+
+    well = IconWell(None, size=64)
+    well.show(png)
+    assert well._showing_image is True
+    shown = well._photo
+    assert shown is not None
+
+    well.show_placeholder("—")
+    assert well._showing_image is False
+    # The reference is deliberately retained: the hidden image label still
+    # points at it, and freeing it would leave a dangling Tk handle.
+    assert well._photo is shown
+
+
+def test_artwork_survives_alternating_with_a_placeholder(toolkit, furnished, png):
+    """The reported failure: select an entry with no icon, then one that has
+    one, and the second refuses to render."""
+    from kairo.ui.widgets import IconWell
+
+    well = IconWell(None, size=64)
+    for _ in range(5):
+        well.show(png)
+        assert well._showing_image is True
+        well.show(None, placeholder="—")
+        assert well._showing_image is False
+    well.show(png)
+    assert well._showing_image is True
+    assert well._photo is not None
+
+
+def test_a_missing_icon_does_not_poison_the_next_one(toolkit, furnished, png,
+                                                     tmp_path):
+    from kairo.ui.widgets import IconWell
+
+    well = IconWell(None, size=64)
+    well.show(tmp_path / "gone.png", placeholder="—")
+    assert well._showing_image is False
+    well.show(png)
+    assert well._showing_image is True
+
+
+def test_an_undecodable_icon_does_not_poison_the_next_one(toolkit, furnished,
+                                                          png, tmp_path):
+    from kairo.ui.widgets import IconWell
+
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(b"not an image")
+    well = IconWell(None, size=64)
+    well.show(broken)
+    assert well._showing_image is False
+    well.show(png)
+    assert well._showing_image is True
+
+
+def test_show_data_and_show_path_interchange_freely(toolkit, furnished, png):
+    from kairo.ui.widgets import IconWell
+
+    well = IconWell(None, size=64)
+    well.show_data(png.read_bytes())
+    assert well._showing_image is True
+    well.show_placeholder("—")
+    well.show_data(png.read_bytes())
+    assert well._showing_image is True
+
+
+def test_icon_well_does_not_shadow_the_widget_size_method(toolkit, furnished):
+    """tkinter.Grid defines size() as an alias for grid_size(); assigning an
+    int over it is the same trap as assigning to self.config."""
+    from kairo.ui.widgets import IconWell
+
+    well = IconWell(None, size=48)
+    assert well.size == 48
+    assert "size" not in vars(well)
+
+
+def test_rows_and_tiles_share_the_well(toolkit, furnished, png):
+    """One implementation of 'show artwork or a placeholder', not three."""
+    from kairo.models import AppEntry
+    from kairo.ui.widgets import AppRow, ArtworkTile, IconWell
+    from kairo.models import Artwork
+
+    with_icon = AppEntry(key="steam:1", provider_id="steam", name="With",
+                         current_icon=png)
+    without = AppEntry(key="steam:2", provider_id="steam", name="Without")
+
+    row_a = AppRow(None, with_icon, on_click=lambda _r: None)
+    row_b = AppRow(None, without, on_click=lambda _r: None)
+    assert isinstance(row_a.well, IconWell)
+    assert row_a.well._showing_image is True
+    assert row_b.well._showing_image is False
+
+    tile = ArtworkTile(None, Artwork(id="a", source_id="s"), on_pick=lambda _a: None)
+    assert isinstance(tile.well, IconWell)
+    tile.set_image(png.read_bytes())
+    assert tile.well._showing_image is True
+    tile.set_image(b"not an image")
+    assert tile.well._showing_image is False
