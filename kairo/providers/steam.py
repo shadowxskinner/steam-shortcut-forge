@@ -15,9 +15,10 @@ from pathlib import Path
 
 from kairo import paths
 from kairo.desktop import entry as de
+from kairo.desktop.lookup import resolve_icon
 from kairo.models import AppEntry, ArtQuery, make_key
 from kairo.providers.base import AppProvider, LauncherWriter
-from kairo.providers.writers import GeneratedEntryWriter
+from kairo.providers.writers import GeneratedEntryWriter, has_custom_artwork
 
 PROVIDER_ID = "steam"
 
@@ -237,9 +238,13 @@ class SteamProvider(AppProvider):
             path = existing.get(appid)
             if path is None:
                 continue
-            app.customized = True
+            # The shortcut existing is not the same as it carrying custom
+            # artwork: resetting artwork keeps the shortcut and should stop
+            # reporting the game as customized.
+            app.customized = has_custom_artwork(path)
             value = de.read_entry_icon(path)
-            app.current_icon = Path(value) if value else None
+            app.icon_hint = value
+            app.current_icon = Path(value) if value.startswith("/") else resolve_icon(value)
 
         return sorted(found.values(), key=lambda a: a.sort_key())
 
@@ -267,9 +272,12 @@ class SteamProvider(AppProvider):
 
     def refresh(self, entry: AppEntry) -> None:
         path = existing_generated().get(entry.local_id)
-        entry.customized = path is not None
-        if path is not None:
-            value = de.read_entry_icon(path)
-            entry.current_icon = Path(value) if value else None
-        else:
+        if path is None:
+            entry.customized = False
             entry.current_icon = None
+            return
+        entry.customized = has_custom_artwork(path)
+        value = de.read_entry_icon(path)
+        entry.icon_hint = value
+        entry.current_icon = (Path(value) if value.startswith("/")
+                              else resolve_icon(value))

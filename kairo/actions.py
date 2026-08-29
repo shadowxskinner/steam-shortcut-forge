@@ -142,6 +142,25 @@ def restore_entry(entry: AppEntry, provider, *, ledger: Ledger | None = None,
         database.refresh()
 
 
+def remove_entry(entry: AppEntry, provider, *, ledger: Ledger | None = None,
+                 refresh: bool = True) -> None:
+    """Delete a launcher entry Kairo created. Deliberately separate.
+
+    Resetting artwork and deleting a shortcut are different intentions, and a
+    single button cannot ask for both.
+    """
+    writer = provider.writer()
+    allowed, reason = writer.can_remove(entry)
+    if not allowed:
+        raise ValueError(reason)
+    writer.remove(entry)
+    provider.refresh(entry)
+    if ledger is not None:
+        ledger.forget(entry.key)
+    if refresh:
+        database.refresh()
+
+
 def restore_record(record: ChangeRecord, registry, *, ledger: Ledger | None = None,
                    refresh: bool = False) -> None:
     """Restore from a history entry rather than a live scan."""
@@ -153,7 +172,16 @@ def restore_record(record: ChangeRecord, registry, *, ledger: Ledger | None = No
     if not allowed:
         raise Skip(reason)
 
-    restore_entry(entry_from_record(record), provider, ledger=ledger, refresh=refresh)
+    entry = entry_from_record(record)
+    # "Already at a default icon" is a normal outcome during a bulk restore,
+    # not something going wrong.
+    allowed, reason = provider.writer().can_restore(entry)
+    if not allowed:
+        if ledger is not None:
+            ledger.forget(entry.key)
+        raise Skip(reason)
+
+    restore_entry(entry, provider, ledger=ledger, refresh=refresh)
 
 
 def restore_all(

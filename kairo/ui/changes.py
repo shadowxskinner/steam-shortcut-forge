@@ -28,10 +28,11 @@ def _previous_icon_path(record: ChangeRecord) -> Path | None:
 
 
 class ChangeRow(ctk.CTkFrame):
-    def __init__(self, master, record: ChangeRecord, on_restore, **kw):
+    def __init__(self, master, record: ChangeRecord, on_restore, on_remove, **kw):
         super().__init__(master, corner_radius=T.R_CARD, fg_color=T.C_ROW, **kw)
         self.record = record
         self._on_restore = on_restore
+        self._on_remove = on_remove
         self.grid_columnconfigure(3, weight=1)
 
         self.before = IconWell(self, size=48)
@@ -62,15 +63,27 @@ class ChangeRow(ctk.CTkFrame):
                      text_color=T.C_TEXT3 if allowed else T.C_DANGER
                      ).grid(row=1, column=3, sticky="nw", pady=(0, 12))
 
-        # A generated entry has no earlier artwork to return to, so restoring
-        # it removes the shortcut. The button has to say which it is.
-        verb = "Remove" if deletes_launcher(record.action) else "Restore"
+        buttons = ctk.CTkFrame(self, fg_color="transparent")
+        buttons.grid(row=0, column=4, rowspan=2, padx=(8, 12))
+
+        # A generated shortcut has no earlier artwork, so its ordinary undo is
+        # a reset rather than a restore. Deleting it is a separate button.
+        verb = "Reset" if deletes_launcher(record.action) else "Restore"
         self.button = ctk.CTkButton(
-            self, text=verb, width=90, height=32, corner_radius=16,
+            buttons, text=verb, width=94, height=30, corner_radius=15,
             fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
             font=T.F_BUTTON, command=lambda: self._on_restore(self.record),
             state="normal" if allowed else "disabled")
-        self.button.grid(row=0, column=4, rowspan=2, padx=(8, 12))
+        self.button.pack(pady=(0, 4))
+
+        if deletes_launcher(record.action):
+            self.remove_button = ctk.CTkButton(
+                buttons, text="Remove", width=94, height=30, corner_radius=15,
+                fg_color=T.C_DANGER_BG, hover_color="#3a2020",
+                text_color=T.C_DANGER, font=T.F_BUTTON,
+                command=lambda: self._on_remove(self.record),
+                state="normal" if allowed else "disabled")
+            self.remove_button.pack()
 
 
 class ChangesWindow(ctk.CTkToplevel):
@@ -191,17 +204,40 @@ class ChangesWindow(ctk.CTkToplevel):
             return
 
         for index, record in enumerate(records):
-            row = ChangeRow(self.list, record, on_restore=self._restore_one)
+            row = ChangeRow(self.list, record, on_restore=self._restore_one,
+                            on_remove=self._remove_one)
             row.grid(row=index, column=0, sticky="ew", padx=8, pady=4)
 
     # -- actions ---------------------------------------------------------
 
+    def _remove_one(self, record: ChangeRecord):
+        """Delete a shortcut Kairo created. The destructive path."""
+        from kairo import actions
+        if not messagebox.askyesno(
+                "Remove shortcut",
+                f"Delete the launcher shortcut Kairo created for "
+                f"{record.name}?\n\nThe application itself is not affected.",
+                parent=self):
+            return
+        provider = self.registry.get(record.provider_id)
+        try:
+            actions.remove_entry(actions.entry_from_record(record), provider,
+                                 ledger=self.ledger)
+        except Exception as exc:
+            messagebox.showerror("Could not remove", str(exc), parent=self)
+            self.status.configure(text=f"Could not remove {record.name}.")
+            self.refresh()
+            return
+        self.status.configure(text=f"Removed the shortcut for {record.name}.")
+        self.refresh()
+        self._notify()
+
     def _restore_one(self, record: ChangeRecord):
         if deletes_launcher(record.action):
-            title = "Remove shortcut"
-            body = (f"Remove the launcher shortcut Kairo created for "
-                    f"{record.name}?\n\nThe application itself is not "
-                    "affected — only the shortcut goes away.")
+            title = "Reset artwork"
+            body = (f"Reset {record.name} to a default icon?\n\n"
+                    "The shortcut stays where it is — only the custom "
+                    "artwork goes away.")
         else:
             title = "Restore original"
             body = (f"Put back the original icon for {record.name}?\n\n"
@@ -225,28 +261,21 @@ class ChangesWindow(ctk.CTkToplevel):
         if not records:
             return
 
-        removals = [r for r in records if deletes_launcher(r.action)]
+        resets = [r for r in records if deletes_launcher(r.action)]
         reverts = [r for r in records if not deletes_launcher(r.action)]
 
-        # Two very different outcomes hide behind one button, so the
-        # confirmation spells both out and names every shortcut that
-        # disappears. "Restore everything" must not quietly delete launcher
-        # entries the user has been using.
+        # Nothing here deletes a launcher entry. Two different outcomes still
+        # hide behind one button, so both are spelled out.
         lines = [f"This affects {len(records)} application(s):", ""]
         if reverts:
             lines.append(f"  • {len(reverts)} will go back to their original "
                          "icon and keep their launcher entry.")
-        if removals:
-            lines.append(f"  • {len(removals)} launcher shortcut(s) Kairo "
-                         "created will be DELETED:")
-            for record in removals[:12]:
-                lines.append(f"        {record.name}")
-            if len(removals) > 12:
-                lines.append(f"        …and {len(removals) - 12} more")
-            lines.append("")
-            lines.append("  Those applications stay installed. You can give "
-                         "them artwork again to recreate the shortcut.")
+        if resets:
+            lines.append(f"  • {len(resets)} shortcut(s) Kairo created will "
+                         "keep their entry and go back to a default icon.")
         lines.append("")
+        lines.append("No launcher shortcuts are deleted. To remove one, use "
+                     "its own Remove button.")
         lines.append("Anything Kairo no longer recognises is left alone.")
 
         if not messagebox.askyesno("Restore everything", "\n".join(lines),

@@ -183,16 +183,23 @@ def test_an_adopted_override_can_be_restored(fake_home, ledger, registry,
 
 
 def test_an_adopted_generated_entry_can_be_removed(fake_home, ledger, registry):
+    """The destructive action still reaches an adopted record."""
     from kairo import actions
+    from kairo.actions import entry_from_record
     apps = paths.applications_dir()
     generated_entry(apps)
     adoption.adopt_untracked(ledger, registry)
 
-    actions.restore_record(ledger.get("steam:440"), registry, ledger=ledger)
+    record = ledger.get("steam:440")
+    actions.remove_entry(entry_from_record(record), registry.get("steam"),
+                         ledger=ledger)
     assert not (apps / f"{paths.DESKTOP_PREFIX}440.desktop").exists()
+    assert ledger.get("steam:440") is None
 
 
 def test_restore_all_reaches_adopted_records(fake_home, ledger, registry):
+    """Adopted entries whose artwork lives outside Kairo's store have nothing
+    to reset, so they are skipped rather than failed."""
     from kairo import actions
     apps = paths.applications_dir()
     migrated_override(apps)
@@ -200,7 +207,9 @@ def test_restore_all_reaches_adopted_records(fake_home, ledger, registry):
     adoption.adopt_untracked(ledger, registry)
 
     summary = actions.restore_all(ledger, registry)
-    assert summary.succeeded == 2
+    assert summary.failed == 0
+    assert summary.succeeded + summary.skipped == 2
+    assert not (apps / "org.kde.dolphin.desktop").exists()   # override undone
     assert len(ledger) == 0
 
 

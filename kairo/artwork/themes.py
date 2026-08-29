@@ -146,6 +146,26 @@ class IconThemeSource(ArtworkSource):
                                   f"exact icon name '{short}' in {hits[0].label}")
         return None
 
+    def probe(self, query: ArtQuery) -> bool:
+        """Cheap existence check - returns on the first match found."""
+        term = (query.icon_name or query.text or "").strip()
+        if not term:
+            return False
+        if ThemeIndex.lookup(term):
+            return True
+        short = term.rsplit(".", 1)[-1] if "." in term else term
+        if short != term and ThemeIndex.lookup(short):
+            return True
+
+        needle = short.lower()
+        for theme in ThemeIndex.theme_names():
+            for name in ThemeIndex.app_icons(theme):
+                low = name.lower()
+                if needle in low or (len(low) >= _REVERSE_MATCH_FLOOR
+                                     and low in needle):
+                    return True
+        return False
+
     # -- transfer --------------------------------------------------------
 
     def preview(self, art: Artwork) -> bytes:

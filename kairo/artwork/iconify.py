@@ -121,6 +121,15 @@ class IconifySource(ArtworkSource):
                                       f"'{term}' in {art.label}")
         return None
 
+    def probe(self, query: ArtQuery) -> bool:
+        for term in (query.text, query.fallback_text):
+            term = (term or "").strip()
+            if not term:
+                continue
+            if self._search(term, limit=32):
+                return True
+        return False
+
     # -- transfer --------------------------------------------------------
 
     def _svg(self, url: str) -> bytes:

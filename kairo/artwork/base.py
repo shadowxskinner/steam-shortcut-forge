@@ -43,6 +43,17 @@ class ArtworkSource(ABC):
     def find(self, query: ArtQuery) -> list[Artwork]:
         ...
 
+    def probe(self, query: ArtQuery) -> bool:
+        """Whether this source has anything at all for ``query``.
+
+        Used to keep dead options out of the picker: offering "Icon themes"
+        for a Steam game that no theme has ever heard of is an invitation to
+        click something that cannot work. Implementations should answer as
+        cheaply as they can and stop at the first hit; the default does the
+        full search because that is the only generally correct answer.
+        """
+        return bool(self.find(query))
+
     def best_match(self, query: ArtQuery) -> Suggestion | None:
         """The one artwork this source would auto-apply, or None.
 

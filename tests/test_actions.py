@@ -121,17 +121,36 @@ def test_fetch_and_apply_honours_cancellation(steam_entry, png, ledger, art):
 
 # -- restore ----------------------------------------------------------------
 
-def test_restore_removes_a_generated_entry_and_its_record(steam_entry, png,
-                                                          ledger, art):
+def test_restore_resets_a_generated_entry_and_keeps_it(steam_entry, png,
+                                                       ledger, art):
     provider = SteamProvider()
     actions.apply_icon(steam_entry, provider, png, art=art, ledger=ledger)
     target = provider.writer().target(steam_entry)
 
     actions.restore_entry(steam_entry, provider, ledger=ledger)
 
-    assert not target.exists()
+    assert target.is_file()                       # non-destructive
     assert ledger.get("steam:440") is None
     assert steam_entry.customized is False
+
+
+def test_remove_entry_deletes_a_generated_shortcut(steam_entry, png, ledger, art):
+    provider = SteamProvider()
+    actions.apply_icon(steam_entry, provider, png, art=art, ledger=ledger)
+    target = provider.writer().target(steam_entry)
+
+    actions.remove_entry(steam_entry, provider, ledger=ledger)
+
+    assert not target.exists()
+    assert ledger.get("steam:440") is None
+
+
+def test_remove_entry_refuses_an_override(dolphin, png, ledger, art):
+    provider = DesktopEntryProvider()
+    actions.apply_icon(dolphin, provider, png, art=art, ledger=ledger)
+    with pytest.raises(ValueError):
+        actions.remove_entry(dolphin, provider, ledger=ledger)
+    assert (paths.applications_dir() / "org.kde.dolphin.desktop").is_file()
 
 
 def test_restore_removes_an_override_and_its_record(dolphin, png, ledger, art):
@@ -198,12 +217,21 @@ def three_changes(steam_library, system_apps, png, ledger, art):
     return ledger
 
 
-def test_restore_all_undoes_everything(three_changes):
+def test_restore_all_is_non_destructive(three_changes):
+    """Generated shortcuts keep their entry and lose only the custom artwork;
+    overrides go away entirely, which is what un-shadowing means."""
+    from kairo.providers.writers import has_custom_artwork
+
     summary = actions.restore_all(three_changes, default_registry())
+
     assert summary.succeeded == 3
     assert summary.failed == 0
     assert len(three_changes) == 0
-    assert list(paths.applications_dir().glob("kairo-*.desktop")) == []
+
+    generated = list(paths.applications_dir().glob("kairo-*.desktop"))
+    assert len(generated) == 2                      # shortcuts survive
+    assert not any(has_custom_artwork(p) for p in generated)
+    assert not (paths.applications_dir() / "org.kde.dolphin.desktop").exists()
 
 
 def test_restore_all_summarises_rather_than_stopping(three_changes):

@@ -24,14 +24,27 @@ class LauncherWriter(ABC):
     #: "overrode" - Kairo shadowed someone else's, so restoring un-shadows it.
     action: str = ""
 
-    #: Button text. One verb cannot cover both writers: for an entry Kairo
-    #: generated there is no earlier artwork to go back to, so "restore"
-    #: describes a deletion, which is exactly the wrong thing for a button to
-    #: do quietly.
+    #: Text for the ordinary, non-destructive undo.
     restore_label: str = "Restore original"
+
+    #: Whether this writer also offers a separate destructive action that
+    #: removes the launcher entry itself. Undoing artwork and deleting a
+    #: shortcut are different intentions and must not share a button.
+    supports_remove: bool = False
+    remove_label: str = "Remove shortcut"
 
     def restore_prompt(self, entry: AppEntry) -> str:
         return f"Put back the original icon for {entry.name}?"
+
+    def remove_prompt(self, entry: AppEntry) -> str:
+        return f"Remove the launcher shortcut for {entry.name}?"
+
+    def can_remove(self, entry: AppEntry) -> tuple[bool, str]:
+        """``(allowed, reason)`` for deleting the launcher entry outright."""
+        return False, "This application's launcher entry is not Kairo's to remove."
+
+    def remove(self, entry: AppEntry) -> None:
+        raise NotImplementedError
 
     @abstractmethod
     def target(self, entry: AppEntry) -> Path:

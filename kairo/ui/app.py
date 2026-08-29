@@ -33,6 +33,7 @@ DEFAULT_COLS = 3
 
 ACTIVITY_ARTWORK = "artwork"
 ACTIVITY_BULK = "bulk"
+ACTIVITY_PROBE = "probe"
 
 
 class KairoApp(ctk.CTk):
@@ -68,6 +69,10 @@ class KairoApp(ctk.CTk):
         self._filter_mode = "all"
         self._svg_hint_shown = False
         self._source_labels: dict[str, str] = {}
+        #: (entry key, source id) -> has anything to offer. Keeps a source
+        #: that cannot help this application out of the picker, without
+        #: re-asking every time the user clicks back and forth.
+        self._probe_cache: dict[tuple[str, str], bool] = {}
 
         available = self.providers.available() or self.providers.all()
         self.provider_var = ctk.StringVar(value=available[0].label)
@@ -236,11 +241,20 @@ class KairoApp(ctk.CTk):
             fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
             font=T.F_BUTTON, command=self._on_browse, state="disabled")
         self.browse_btn.pack(side="left", padx=(0, 8))
+        # The ordinary undo. Never deletes anything.
         self.restore_btn = ctk.CTkButton(
             actions_row, text="Restore original", height=42, corner_radius=21,
-            fg_color=T.C_DANGER_BG, hover_color="#3a2020", text_color=T.C_DANGER,
+            fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
             font=T.F_BUTTON, command=self._on_restore, state="disabled")
         self.restore_btn.pack(side="left", padx=(0, 8))
+
+        # The destructive one, kept visually distinct and only shown for
+        # entries Kairo created. Deleting a shortcut is a different intention
+        # from undoing artwork and must be asked for separately.
+        self.remove_btn = ctk.CTkButton(
+            actions_row, text="Remove shortcut", height=42, corner_radius=21,
+            fg_color=T.C_DANGER_BG, hover_color="#3a2020", text_color=T.C_DANGER,
+            font=T.F_BUTTON, command=self._on_remove, state="disabled")
 
         self.match_btn = ctk.CTkButton(
             actions_row, text="⚡  Auto Match", height=42, corner_radius=21,
@@ -292,6 +306,7 @@ class KairoApp(ctk.CTk):
     def scan(self):
         self.status.configure(text="Scanning…")
         self.update_idletasks()
+        self._probe_cache.clear()
         for provider in self.providers.all():
             try:
                 self.entries[provider.id] = provider.scan() if provider.available() else []
@@ -379,7 +394,22 @@ class KairoApp(ctk.CTk):
     def _set_actions(self, enabled: bool):
         state = "normal" if enabled else "disabled"
         self.browse_btn.configure(state=state)
-        self.restore_btn.configure(state=state, text=self._restore_label())
+        writer = self._writer()
+        self.restore_btn.configure(
+            state=state,
+            text=writer.restore_label if writer else "Restore original")
+        if enabled and writer is not None and writer.supports_remove:
+            if not self.remove_btn.winfo_ismapped():
+                self.remove_btn.pack(side="left", padx=(0, 8))
+            self.remove_btn.configure(state="normal", text=writer.remove_label)
+        else:
+            self.remove_btn.pack_forget()
+
+    def _writer(self):
+        if not self.selected_row:
+            return None
+        provider = self.providers.for_entry(self.selected_row.entry)
+        return provider.writer() if provider else None
 
     def _restore_label(self) -> str:
         """The verb belongs to the writer, not to this button.
@@ -411,13 +441,28 @@ class KairoApp(ctk.CTk):
     # -- sources ----------------------------------------------------------
 
     def _refresh_sources(self):
+        """Show only the sources that can actually help the selected app.
+
+        A source is hidden once it has been asked and had nothing. It is never
+        hidden merely because it has not been asked yet, and never because a
+        lookup failed - see _probe_sources.
+        """
         provider_id = self.provider().id
-        browsable = self.sources.browsable_for(provider_id, self.config_data)
-        self._source_labels = {s.label: s.id for s in browsable}
+        entry = self.selected_row.entry if self.selected_row else None
+        candidates = self.sources.browsable_for(provider_id, self.config_data)
+
+        if entry is not None:
+            usable = [s for s in candidates
+                      if self._probe_cache.get((entry.key, s.id)) is not False]
+        else:
+            usable = candidates
+
+        previous = self.source_var.get()
+        self._source_labels = {s.label: s.id for s in usable}
         labels = list(self._source_labels)
 
         self.source_selector.configure(values=labels)
-        if self.source_var.get() not in labels:
+        if previous not in labels:
             self.source_var.set(labels[0] if labels else "")
 
         if len(labels) > 1:
@@ -426,6 +471,46 @@ class KairoApp(ctk.CTk):
             self.source_row.grid_remove()
 
         self._refresh_query_row()
+
+        if entry is not None:
+            unasked = [s for s in candidates
+                       if (entry.key, s.id) not in self._probe_cache
+                       and s.id != self._source_labels.get(self.source_var.get())]
+            if unasked:
+                self._probe_sources(entry, unasked)
+
+        return previous != self.source_var.get()
+
+    def _probe_sources(self, entry: AppEntry, sources):
+        """Ask each source, in the background, whether it has anything."""
+        provider = self.providers.for_entry(entry)
+        if provider is None:
+            return
+        query = provider.artwork_query(entry)
+        token = self.tokens.start(ACTIVITY_PROBE)
+
+        def work():
+            for source in sources:
+                if token.cancelled:
+                    return
+                try:
+                    has_results = source.probe(query)
+                except Exception:
+                    # A source being briefly unreachable is not evidence that
+                    # it has nothing. Leave it visible.
+                    has_results = True
+                self._probe_cache[(entry.key, source.id)] = has_results
+                if not has_results and not token.cancelled:
+                    self.after(0, self._sources_changed, entry)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _sources_changed(self, entry: AppEntry):
+        if not self._showing(entry):
+            return
+        if self._refresh_sources():
+            self._seed_query(entry)
+            self._load_artwork(entry)
 
     def _refresh_query_row(self):
         source = self.source()
@@ -509,7 +594,10 @@ class KairoApp(ctk.CTk):
 
         source = self.source()
         if source is None:
-            self._sub_if_current(entry, "No icon source available.")
+            self._sub_if_current(
+                entry,
+                "No online artwork source has anything for this one — "
+                "use Browse local file to pick your own image.")
             return
         if not source.available(self.config_data):
             self._sub_if_current(entry, source.unavailable_reason(self.config_data))
@@ -533,9 +621,14 @@ class KairoApp(ctk.CTk):
                 if token.cancelled:
                     return
                 if not results:
+                    # It has now told us it has nothing for this application;
+                    # stop offering it.
+                    self._probe_cache[(entry.key, source.id)] = False
                     self.after(0, self._sub_if_current, entry,
                                f"{entry.subtitle}  ·  Nothing found in {source.label}")
+                    self.after(0, self._sources_changed, entry)
                     return
+                self._probe_cache[(entry.key, source.id)] = True
                 self.after(0, self._sub_if_current, entry,
                            f"{entry.subtitle}  ·  {len(results)} icons  ·  {source.label}")
                 # Lay the full grid out first so it settles into its final
@@ -682,7 +775,35 @@ class KairoApp(ctk.CTk):
             row.refresh()
         self.sub.configure(
             text=f"{entry.subtitle}  ·  "
-                 + ("Shortcut removed" if writer.action == "created" else "Restored"))
+                 + ("Artwork reset" if writer.action == "created" else "Restored"))
+        self._set_actions(bool(self.selected_row))
+        self._update_summary()
+
+    def _on_remove(self):
+        """Delete a launcher entry Kairo created. Explicitly destructive."""
+        if not self.selected_row:
+            return
+        entry = self.selected_row.entry
+        provider = self.providers.for_entry(entry)
+        writer = provider.writer()
+
+        allowed, reason = writer.can_remove(entry)
+        if not allowed:
+            messagebox.showinfo("Nothing to remove", reason)
+            return
+        if not messagebox.askyesno(writer.remove_label,
+                                   writer.remove_prompt(entry)):
+            return
+        try:
+            actions.remove_entry(entry, provider, ledger=self.ledger)
+        except Exception as exc:
+            messagebox.showerror("Could not remove", str(exc))
+            return
+        row = self._row_for(entry)
+        if row:
+            row.refresh()
+        self.sub.configure(text=f"{entry.subtitle}  ·  Shortcut removed")
+        self._set_actions(bool(self.selected_row))
         self._update_summary()
 
     # -- auto match -------------------------------------------------------

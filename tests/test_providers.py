@@ -163,14 +163,82 @@ def test_generated_writer_marks_the_entry_customized(steam_entry, png, fake_home
     assert steam_entry.current_icon is not None
 
 
-def test_generated_writer_restore_deletes_entry_and_icon(steam_entry, png, fake_home):
+def test_restore_resets_artwork_and_keeps_the_shortcut(steam_entry, png, fake_home):
+    """The ordinary undo must not delete something the user relies on."""
     writer = SteamProvider().writer()
     writer.apply(steam_entry, png)
     icon = steam_entry.current_icon
+    target = paths.applications_dir() / f"{paths.DESKTOP_PREFIX}440.desktop"
+
     writer.restore(steam_entry)
+
+    assert target.is_file()                       # shortcut survives
+    assert de.read_entry_icon(target) == writer.default_icon
+    assert not icon.exists()                      # custom artwork discarded
+    assert steam_entry.customized is False
+
+
+def test_reset_preserves_everything_except_the_icon(steam_entry, png, fake_home):
+    writer = SteamProvider().writer()
+    writer.apply(steam_entry, png)
+    writer.restore(steam_entry)
+    text = (paths.applications_dir() / f"{paths.DESKTOP_PREFIX}440.desktop").read_text()
+    assert "X-SteamAppId=440" in text
+    assert "rungameid/440" in text
+    assert "Name=Team Fortress 2" in text
+    assert de.is_managed(paths.applications_dir() / f"{paths.DESKTOP_PREFIX}440.desktop")
+
+
+def test_reset_twice_is_harmless(steam_entry, png, fake_home):
+    writer = SteamProvider().writer()
+    writer.apply(steam_entry, png)
+    writer.restore(steam_entry)
+    allowed, reason = writer.can_restore(steam_entry)
+    assert allowed is False and "default icon" in reason
+    writer.restore(steam_entry)                   # must not raise
+    assert (paths.applications_dir() / f"{paths.DESKTOP_PREFIX}440.desktop").is_file()
+
+
+def test_remove_deletes_the_shortcut(steam_entry, png, fake_home):
+    """The destructive action, reached only on purpose."""
+    writer = SteamProvider().writer()
+    writer.apply(steam_entry, png)
+    icon = steam_entry.current_icon
+
+    assert writer.can_remove(steam_entry)[0] is True
+    writer.remove(steam_entry)
+
     assert not (paths.applications_dir() / f"{paths.DESKTOP_PREFIX}440.desktop").exists()
     assert not icon.exists()
     assert steam_entry.customized is False
+
+
+def test_remove_works_after_a_reset(steam_entry, png, fake_home):
+    writer = SteamProvider().writer()
+    writer.apply(steam_entry, png)
+    writer.restore(steam_entry)
+    assert writer.can_remove(steam_entry)[0] is True
+    writer.remove(steam_entry)
+    assert not (paths.applications_dir() / f"{paths.DESKTOP_PREFIX}440.desktop").exists()
+
+
+def test_overrides_offer_no_separate_removal(system_apps):
+    """Removing an override is already non-destructive, so there is nothing
+    for a second, scarier button to do."""
+    from kairo.providers.writers import OverrideWriter
+    assert OverrideWriter().supports_remove is False
+    assert OverrideWriter().can_remove(
+        next(a for a in DesktopEntryProvider().scan() if a.name == "Dolphin"))[0] is False
+
+
+def test_a_reset_shortcut_is_no_longer_reported_as_customized(steam_entry, png,
+                                                              fake_home):
+    writer = SteamProvider().writer()
+    writer.apply(steam_entry, png)
+    assert next(a for a in SteamProvider().scan() if a.local_id == "440").customized
+    writer.restore(steam_entry)
+    rescanned = next(a for a in SteamProvider().scan() if a.local_id == "440")
+    assert rescanned.customized is False
 
 
 def test_generated_writer_reapply_replaces_the_old_icon(steam_entry, png, fake_home,
@@ -375,7 +443,7 @@ def test_apply_still_removes_our_own_legacy_entry(steam_entry, png, fake_home,
     assert not ours.exists()
 
 
-def test_restore_refuses_an_entry_without_our_marker(fake_home):
+def test_neither_action_touches_an_entry_without_our_marker(fake_home):
     from kairo.models import AppEntry
 
     target = paths.applications_dir() / f"{paths.DESKTOP_PREFIX}777.desktop"
@@ -383,12 +451,13 @@ def test_restore_refuses_an_entry_without_our_marker(fake_home):
     entry = AppEntry(key="steam:777", provider_id="steam", name="Hand written")
 
     writer = SteamProvider().writer()
-    allowed, reason = writer.can_restore(entry)
-    assert allowed is False
-    assert reason
+    assert writer.can_restore(entry)[0] is False
+    assert writer.can_remove(entry)[0] is False
+    writer.restore(entry)                          # no-op, must not raise
     with pytest.raises(ValueError):
-        writer.restore(entry)
+        writer.remove(entry)
     assert target.is_file()
+    assert "HAND WRITTEN" in target.read_text()
 
 
 def test_restore_of_a_missing_entry_is_still_a_no_op(fake_home):
@@ -495,9 +564,11 @@ def test_generated_and_override_writers_use_different_verbs():
 
     generated = SteamProvider().writer()
     override = OverrideWriter()
-    assert generated.restore_label == "Remove shortcut"
+    assert generated.restore_label == "Reset artwork"
+    assert generated.remove_label == "Remove shortcut"
     assert override.restore_label == "Restore original"
-    assert generated.restore_label != override.restore_label
+    assert generated.supports_remove is True
+    assert override.supports_remove is False
 
 
 def test_restore_prompts_describe_the_actual_outcome(steam_library, system_apps):
@@ -506,11 +577,14 @@ def test_restore_prompts_describe_the_actual_outcome(steam_library, system_apps)
     game = next(a for a in SteamProvider().scan() if a.local_id == "440")
     app = next(a for a in DesktopEntryProvider().scan() if a.name == "Dolphin")
 
-    generated_prompt = SteamProvider().writer().restore_prompt(game)
+    writer = SteamProvider().writer()
+    reset_prompt = writer.restore_prompt(game)
+    remove_prompt = writer.remove_prompt(game)
     override_prompt = OverrideWriter().restore_prompt(app)
 
-    assert "shortcut" in generated_prompt.lower()
-    assert "not affected" in generated_prompt.lower()
+    assert "shortcut stays" in reset_prompt.lower()
+    assert "delete" in remove_prompt.lower()
+    assert "not affected" in remove_prompt.lower()
     assert "keeps its launcher entry" in override_prompt.lower()
 
 

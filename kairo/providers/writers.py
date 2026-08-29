@@ -46,6 +46,22 @@ def store_icon(entry: AppEntry, icon_src: Path) -> Path:
     return dest
 
 
+def has_custom_artwork(path: Path) -> bool:
+    """Whether a launcher entry points at artwork in Kairo's own store.
+
+    This, not the mere existence of the file, is what "customized" means for a
+    generated entry: Kairo may own the shortcut while the artwork has been
+    reset back to a default.
+    """
+    value = de.read_entry_icon(path)
+    if not value.startswith("/"):
+        return False
+    try:
+        return Path(value).resolve().is_relative_to(paths.icon_store().resolve())
+    except (ValueError, OSError):
+        return False
+
+
 def _discard_stored_icon(path: Path | None, keep: Path | None = None) -> None:
     """Delete a superseded icon, but only if it is one of ours."""
     if path is None:
@@ -64,22 +80,40 @@ def _discard_stored_icon(path: Path | None, keep: Path | None = None) -> None:
 class GeneratedEntryWriter(LauncherWriter):
     """For applications with no launcher entry of their own.
 
-    Kairo creates the file from scratch, so every field in it is ours and
-    restoring means deleting it. Steam games work this way; AppImages will.
+    Kairo creates the file from scratch. There are two different things a user
+    might want to undo, and conflating them is how a button labelled "restore"
+    ends up deleting a shortcut somebody relied on:
+
+    * **Reset artwork** - keep the shortcut, drop the custom icon back to a
+      neutral default. Non-destructive, and the ordinary action.
+    * **Remove shortcut** - delete the entry Kairo created. Destructive, and
+      only ever reached deliberately.
     """
 
     action = "created"
-    restore_label = "Remove shortcut"
+    restore_label = "Reset artwork"
+    supports_remove = True
+    remove_label = "Remove shortcut"
 
-    def restore_prompt(self, entry: AppEntry) -> str:
-        return (f"Remove the launcher shortcut Kairo created for {entry.name}?\n\n"
-                "The application itself is not affected — only the shortcut "
-                "goes away. You can create it again at any time by giving the "
-                "application artwork.")
+    #: What Icon= becomes when custom artwork is reset. A plain freedesktop
+    #: name every theme carries, so the shortcut still renders as something.
+    default_icon = "applications-games"
 
-    def __init__(self, prefix: str, build_fields):
+    def __init__(self, prefix: str, build_fields, default_icon: str | None = None):
         self.prefix = prefix
         self.build_fields = build_fields
+        if default_icon:
+            self.default_icon = default_icon
+
+    def restore_prompt(self, entry: AppEntry) -> str:
+        return (f"Reset {entry.name} to a default icon?\n\n"
+                "The shortcut stays where it is — only the custom artwork "
+                "goes away.")
+
+    def remove_prompt(self, entry: AppEntry) -> str:
+        return (f"Delete the launcher shortcut Kairo created for "
+                f"{entry.name}?\n\nThe application itself is not affected. "
+                "You can create the shortcut again by giving it artwork.")
 
     def target(self, entry: AppEntry) -> Path:
         return paths.applications_dir() / f"{self.prefix}{entry.local_id}.desktop"
@@ -133,29 +167,65 @@ class GeneratedEntryWriter(LauncherWriter):
         entry.current_icon = stored
         return stored
 
-    def can_restore(self, entry: AppEntry) -> tuple[bool, str]:
+    def _owned(self, entry: AppEntry) -> tuple[Path | None, str]:
         target = self.existing(entry)
         if target is None:
-            return False, "No shortcut to remove."
+            return None, "There is no shortcut for this application."
         if not de.is_managed(target):
-            return False, ("There is a launcher entry with this name that "
-                           "Kairo did not create, so Kairo will not remove it.")
+            return None, ("There is a launcher entry with this name that "
+                          "Kairo did not create, so Kairo will not touch it.")
+        return target, ""
+
+    def can_restore(self, entry: AppEntry) -> tuple[bool, str]:
+        target, reason = self._owned(entry)
+        if target is None:
+            return False, reason
+        if not has_custom_artwork(target):
+            return False, "This shortcut is already using a default icon."
         return True, ""
 
     def restore(self, entry: AppEntry) -> None:
-        allowed, reason = self.can_restore(entry)
-        if not allowed:
-            target = self.existing(entry)
-            if target is None:
+        """Drop the custom artwork; keep the shortcut.
+
+        Rewrites only Icon=, so everything else Kairo generated - the launch
+        command, the categories, the app id - survives untouched.
+        """
+        target, reason = self._owned(entry)
+        if target is None:
+            entry.customized = False
+            return
+        if not has_custom_artwork(target):
+            entry.customized = False
+            return
+
+        previous = de.read_entry_icon(target)
+        text = de.read_text_exact(target)
+        de.atomic_write_text(target, de.set_entry_values(
+            text, {"Icon": self.default_icon}))
+        _discard_stored_icon(Path(previous) if previous.startswith("/") else None)
+
+        entry.customized = False
+        from kairo.desktop.lookup import resolve_icon
+        entry.icon_hint = self.default_icon
+        entry.current_icon = resolve_icon(self.default_icon)
+
+    def can_remove(self, entry: AppEntry) -> tuple[bool, str]:
+        target, reason = self._owned(entry)
+        return (target is not None), reason
+
+    def remove(self, entry: AppEntry) -> None:
+        """Delete the launcher entry Kairo created. Explicitly destructive."""
+        target, reason = self._owned(entry)
+        if target is None:
+            if self.existing(entry) is None:
                 entry.customized = False
                 entry.current_icon = None
                 return
             raise ValueError(reason)
 
-        target = self.existing(entry)
-        if target is not None:
-            target.unlink(missing_ok=True)
-        _discard_stored_icon(entry.current_icon)
+        icon = de.read_entry_icon(target)
+        target.unlink(missing_ok=True)
+        _discard_stored_icon(Path(icon) if icon.startswith("/") else None)
         entry.customized = False
         entry.current_icon = None
 
