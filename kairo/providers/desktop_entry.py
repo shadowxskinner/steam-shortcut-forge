@@ -109,6 +109,8 @@ class DesktopEntryProvider(AppProvider):
     id = PROVIDER_ID
     label = "Applications"
     noun = "apps"
+    group = "Library"
+    order = 1
 
     # Installed themes first: an application declares its own icon name, so an
     # exact index hit is both offline and unambiguous.

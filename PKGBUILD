@@ -1,6 +1,6 @@
 # Maintainer: Shadow Skinner <shadowxskinner@gmail.com>
 pkgname=kairo
-pkgver=2.0.0
+pkgver=2.1.0
 pkgrel=1
 pkgdesc="Automatic launcher artwork for Linux"
 arch=('any')

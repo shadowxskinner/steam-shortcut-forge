@@ -22,32 +22,58 @@ F_BUTTON = ("Inter", 12, "bold")
 F_ITEM = ("Inter", 15, "bold")
 F_ITEM_SUB = ("Inter", 12)
 
-# Colours - dark system palette
-C_BG = "#000000"
-C_SIDEBAR = "#000000"
-C_ROW = "#1c1c1e"
-C_PANEL = "#1c1c1e"
-C_CARD = "#2c2c2e"
-C_CARD_HOVER = "#3a3a3c"
-C_CARD_SELECTED = "#0A84FF"
-C_BORDER = "#38383a"
-C_BORDER_ACCENT = "#0A84FF"
-C_TEXT = "#ffffff"
-C_TEXT2 = "#aeaeb2"
-C_TEXT3 = "#8e8e93"
-C_ACCENT = "#0A84FF"
-C_ACCENT_HOVER = "#409cff"
-C_ACCENT_DIM = "#0a2540"
-C_SUCCESS = "#30D158"
-C_DANGER = "#FF453A"
-C_DANGER_BG = "#2c1c1c"
+# Colours
+#
+# Deep navy surfaces at distinct elevations rather than transparency, because
+# Tk cannot composite translucent panels. Elevation is carried by value
+# instead: the window is darkest, each column sits a step above it, and cards
+# a step above that. One indigo accent for selection and primary actions, one
+# pink for destructive ones, and three levels of text so secondary
+# information recedes without disappearing.
+C_BG = "#0E0B1E"            # window
+C_NAV = "#14102C"           # left column
+C_LIST = "#171332"          # middle column
+C_PANEL = "#1B1640"         # workspace surface
+C_CARD = "#221C4E"          # rows, wells, fields
+C_CARD_HOVER = "#2A2360"
+C_SELECTED = "#2E2668"
+C_BORDER = "#2C2657"
+C_BORDER_ACCENT = "#5B3DF5"
+
+C_ACCENT = "#5B3DF5"        # primary actions, selection
+C_ACCENT_HOVER = "#7059FF"
+C_ACCENT_DIM = "#241B54"
+C_DANGER = "#FF2D6F"        # destructive only
+C_DANGER_BG = "#3A1030"
+C_DANGER_HOVER = "#4A1540"
+C_SUCCESS = "#35D6A0"
+
+C_TEXT = "#FFFFFF"
+C_TEXT2 = "#A9A3C9"
+C_TEXT3 = "#6F6A93"
+
+# Kept so the classic window keeps working while the new shell is proven.
+C_SIDEBAR = C_NAV
+C_ROW = C_CARD
+C_CARD_SELECTED = C_ACCENT
 
 # Geometry
-R_CARD = 18
-R_WELL = 14
+R_CARD = 16
+R_WELL = 12
+R_PILL = 999
 THUMB_SIZE = 64
-TILE_SIZE = 152
-ROW_HEIGHT = 84
+TILE_SIZE = 128
+ROW_HEIGHT = 76
+
+# Column widths for the three-column shell.
+W_NAV = 232
+W_LIST = 320
+
+# Fonts specific to the shell
+F_NAV_GROUP = ("Inter", 10, "bold")
+F_NAV_ITEM = ("Inter", 13)
+F_WORKSPACE_TITLE = ("Inter", 26, "bold")
+F_SECTION = ("Inter", 11, "bold")
 
 
 def apply() -> None:

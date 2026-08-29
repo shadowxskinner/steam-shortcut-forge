@@ -195,6 +195,8 @@ class SteamProvider(AppProvider):
     id = PROVIDER_ID
     label = "Steam"
     noun = "games"
+    group = "Library"
+    order = 0
 
     # SteamGridDB first: it matches on the actual Steam app ID, so it is the
     # only source that can be certain it found the right game. Themes and

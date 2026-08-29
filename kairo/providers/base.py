@@ -73,6 +73,15 @@ class AppProvider(ABC):
     #: What one of these is called, for status lines: "games", "apps".
     noun: str = "apps"
 
+    #: Navigation grouping. The shell renders one section per distinct group,
+    #: in the order groups are first seen, so a future PCSX2Provider declaring
+    #: group = "Emulators" appears under an Emulators heading with no UI
+    #: change at all. That is the whole point of putting it here.
+    group: str = "Library"
+
+    #: Sort position within the group.
+    order: int = 0
+
     #: Artwork source ids to consult for automatic matching, best first.
     #: Declared here rather than decided in the UI, so adding a source or
     #: reordering the preference never means comparing button labels again.
