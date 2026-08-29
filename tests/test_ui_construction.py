@@ -59,6 +59,20 @@ class _Widget:
             return lambda *a, **k: "after0"
         return lambda *a, **k: None
 
+    def bind(self, sequence=None, command=None, add=True):
+        """Enforce the one CustomTkinter contract we have been bitten by.
+
+        CTk widgets reject any `add` other than "+" or True, to protect their
+        internal bindings. The stub accepts everything else a widget is asked
+        to do, which is the point - but a permissive stub gave false
+        confidence here, so this specific rule is encoded rather than
+        rediscovered on somebody's desktop.
+        """
+        if not (add == "+" or add is True):
+            raise ValueError("'add' argument can only be '+' or True to "
+                             "preserve internal callbacks")
+        return "bind0"
+
     def __call__(self, *args, **kwargs):
         return None
 
@@ -390,3 +404,18 @@ def test_filter_pills_drive_the_library_filter(toolkit, furnished):
     assert pane.visible_entries() == []
     pane.filter_pills._pick("All")
     assert len(pane.visible_entries()) == 2
+
+
+def test_search_field_binds_without_breaking_internal_callbacks(toolkit, furnished):
+    """Regression: bind_entry defaulted `add` to None and forwarded it, which
+    CTkEntry rejects - so the workspace crashed the moment a source needing a
+    query was selected."""
+    import customtkinter as ctk
+    from kairo.ui.widgets import SearchField
+
+    field = SearchField(None, textvariable=ctk.StringVar(value=""))
+    field.bind_entry("<KeyRelease>", lambda _event: None)
+    field.bind_entry("<Return>", lambda _event: None, add=True)
+
+    with pytest.raises(ValueError):
+        field.bind_entry("<Key>", lambda _event: None, add=None)

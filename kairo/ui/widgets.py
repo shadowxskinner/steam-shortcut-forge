@@ -112,8 +112,14 @@ class SearchField(ctk.CTkFrame):
             height=T.H_FIELD - 8)
         self.entry.grid(row=0, column=1, sticky="ew", padx=(4, 10))
 
-    def bind_entry(self, sequence, callback, add=None):
-        self.entry.bind(sequence, callback, add)
+    def bind_entry(self, sequence, callback, add="+"):
+        """Bind on the inner entry, preserving CustomTkinter's own bindings.
+
+        CTkEntry rejects any `add` other than "+" or True, because it relies
+        on internal bindings for placeholder handling. Defaulting to None and
+        forwarding it raised on the first keystroke binding.
+        """
+        self.entry.bind(sequence, callback, add=add)
 
     def configure_placeholder(self, text: str) -> None:
         self.entry.configure(placeholder_text=text)

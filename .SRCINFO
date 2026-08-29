@@ -1,6 +1,6 @@
 pkgbase = kairo
 	pkgdesc = Automatic launcher artwork for Linux
-	pkgver = 2.1.0
+	pkgver = 2.1.1
 	pkgrel = 1
 	url = https://github.com/shadowxskinner/kairo
 	arch = any
@@ -20,7 +20,7 @@ pkgbase = kairo
 	provides = steam-shortcut-forge
 	conflicts = steam-shortcut-forge
 	replaces = steam-shortcut-forge
-	source = kairo-2.1.0.tar.gz::https://github.com/shadowxskinner/kairo/archive/refs/tags/v2.1.0.tar.gz
+	source = kairo-2.1.1.tar.gz::https://github.com/shadowxskinner/kairo/archive/refs/tags/v2.1.1.tar.gz
 	sha256sums = SKIP
 
 pkgname = kairo
