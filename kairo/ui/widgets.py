@@ -12,6 +12,33 @@ from kairo.models import AppEntry, Artwork
 from kairo.ui import theme as T
 
 
+def apply_image(label, owner, attribute: str, photo, **options) -> None:
+    """Put an image on a label, releasing the previous one only afterwards.
+
+    Rebinding the attribute first drops Python's last reference to the old
+    image. Tk frees it, and the widget is left holding a handle to an image
+    that no longer exists - after which *any* later configure() on that
+    widget raises TclError, including one that only changes text. The failure
+    surfaces far from its cause, which is what made it worth a helper rather
+    than a comment.
+
+    Configuring first keeps the old image alive for the duration of the call,
+    because ``owner`` still references it. Only once the widget has stopped
+    using it is the reference replaced.
+    """
+    try:
+        label.configure(image=photo, **options)
+    except tk.TclError:
+        # The widget is already holding a stale handle. Clear it, then retry.
+        try:
+            label.configure(image=None)
+            label.configure(image=photo, **options)
+        except tk.TclError:
+            setattr(owner, attribute, photo)
+            return
+    setattr(owner, attribute, photo)
+
+
 class SegmentedPills(ctk.CTkFrame):
     """A rounded pill group.
 
@@ -143,17 +170,35 @@ class IconWell(ctk.CTkFrame):
         self.label = ctk.CTkLabel(self, text="", width=1, height=1)
         self.label.grid(row=0, column=0)
 
+    def _placeholder(self, text: str) -> None:
+        apply_image(self.label, self, "_photo", None, text=text,
+                    font=("Inter", max(14, self.size // 3)),
+                    text_color=T.C_TEXT3)
+
     def show(self, path=None, placeholder: str = "○") -> None:
+        """Render an icon from a path. Never raises into the caller.
+
+        This runs from selection handlers, so a decode failure must degrade to
+        a placeholder rather than abort the click.
+        """
         if path is None or not Path(str(path)).is_file():
-            self.label.configure(image=None, text=placeholder,
-                                 font=("Inter", max(14, self.size // 3)),
-                                 text_color=T.C_TEXT3)
+            self._placeholder(placeholder)
             return
         try:
-            self._photo = imaging.load_icon(self.size - 12, path=Path(str(path)))
-            self.label.configure(image=self._photo, text="")
-        except (tk.TclError, OSError, ValueError):
-            self.label.configure(image=None, text="?", text_color=T.C_TEXT3)
+            photo = imaging.load_icon(self.size - 12, path=Path(str(path)))
+        except Exception:
+            self._placeholder("?")
+            return
+        apply_image(self.label, self, "_photo", photo, text="")
+
+    def show_data(self, data: bytes) -> None:
+        """Render icon bytes that have already been fetched."""
+        try:
+            photo = imaging.load_icon(self.size - 12, data=data)
+        except Exception:
+            self._placeholder("?")
+            return
+        apply_image(self.label, self, "_photo", photo, text="")
 
 
 class AppRow(ctk.CTkFrame):
@@ -207,16 +252,16 @@ class AppRow(ctk.CTkFrame):
 
     def _load_thumb(self):
         icon = self.entry.current_icon
-        if not icon or not icon.exists():
-            self.thumb.configure(image=None, text="○", font=("Inter", 26),
-                                 text_color=T.C_TEXT3)
-            return
-        try:
-            self._photo = imaging.load_icon(self.THUMB - 16, path=icon)
-            self.thumb.configure(image=self._photo, text="")
-        except (tk.TclError, OSError, ValueError):
-            self.thumb.configure(image=None, text="○", font=("Inter", 24),
-                                 text_color=T.C_TEXT3)
+        if icon and icon.exists():
+            try:
+                photo = imaging.load_icon(self.THUMB - 16, path=icon)
+            except Exception:
+                photo = None
+            if photo is not None:
+                apply_image(self.thumb, self, "_photo", photo, text="")
+                return
+        apply_image(self.thumb, self, "_photo", None, text="○",
+                    font=("Inter", 24), text_color=T.C_TEXT3)
 
     def _enter(self, _=None):
         if not self._selected:
@@ -284,14 +329,15 @@ class ArtworkTile(ctk.CTkFrame):
 
     def set_image(self, data: bytes) -> None:
         try:
-            self._photo = imaging.load_icon(T.TILE_SIZE - 18, data=data)
-        except (tk.TclError, OSError, ValueError):
+            photo = imaging.load_icon(T.TILE_SIZE - 18, data=data)
+        except Exception:
             if (self._on_svg_missing and data and imaging.looks_svg(data)
                     and not imaging.svg_available()):
                 self._on_svg_missing()
-            self.holder.configure(text="?", font=T.F_HEADING, text_color=T.C_TEXT3)
+            apply_image(self.holder, self, "_photo", None, text="?",
+                        font=T.F_HEADING, text_color=T.C_TEXT3)
             return
-        self.holder.configure(image=self._photo, text="")
+        apply_image(self.holder, self, "_photo", photo, text="")
         self._bind_hover()
 
     def _bind_hover(self):

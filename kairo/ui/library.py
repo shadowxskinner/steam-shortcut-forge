@@ -15,7 +15,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from kairo import actions, imaging
+from kairo import actions
 from kairo.artwork.local import LocalFileSource
 from kairo.models import AppEntry, Artwork
 from kairo.ui import theme as T
@@ -548,12 +548,7 @@ class LibraryPane(ctk.CTkFrame):
     def _show_proposal(self, art: Artwork, data: bytes):
         if self.proposed is not art:
             return
-        try:
-            photo = imaging.load_icon(64, data=data)
-            self.proposed_well._photo = photo
-            self.proposed_well.label.configure(image=photo, text="")
-        except Exception:
-            self.proposed_well.label.configure(text="?", text_color=T.C_TEXT3)
+        self.proposed_well.show_data(data)
 
     def _on_apply(self):
         if not self.selected_row or not self.proposed:

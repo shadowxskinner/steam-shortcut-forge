@@ -419,3 +419,90 @@ def test_search_field_binds_without_breaking_internal_callbacks(toolkit, furnish
 
     with pytest.raises(ValueError):
         field.bind_entry("<Key>", lambda _event: None, add=None)
+
+
+# -- image lifetime ---------------------------------------------------------
+#
+# The stub cannot model Tk's image lifetimes, so it could not have caught the
+# original failure. What it can pin is the contract derived from it: the
+# widget must stop referencing an image before Python releases it.
+
+def test_apply_image_configures_before_releasing_the_previous_one(toolkit,
+                                                                  furnished):
+    """Rebinding first frees the old image while the widget still points at
+    it, and every later configure() on that widget then raises - including one
+    that only changes text."""
+    from kairo.ui.widgets import apply_image
+
+    class Owner:
+        pass
+
+    owner = Owner()
+    owner._photo = "OLD"
+    seen = []
+
+    class RecordingLabel:
+        def configure(self, **kwargs):
+            # The owner must still hold the previous image at this moment.
+            seen.append(owner._photo)
+
+    apply_image(RecordingLabel(), owner, "_photo", "NEW", text="")
+
+    assert seen == ["OLD"], "configure must run before the reference is replaced"
+    assert owner._photo == "NEW"
+
+
+def test_apply_image_recovers_from_a_stale_handle(toolkit, furnished):
+    """If a widget is already holding a freed image, clear it and retry."""
+    import tkinter as tk
+    from kairo.ui.widgets import apply_image
+
+    class Owner:
+        pass
+
+    owner = Owner()
+    owner._photo = None
+    calls = []
+
+    class StaleLabel:
+        def configure(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise tk.TclError('image "pyimage5" doesn\'t exist')
+
+    apply_image(StaleLabel(), owner, "_photo", "NEW", text="")
+
+    assert len(calls) == 3            # failed, cleared, succeeded
+    assert calls[1] == {"image": None}
+    assert owner._photo == "NEW"
+
+
+def test_apply_image_never_raises_into_the_caller(toolkit, furnished):
+    import tkinter as tk
+    from kairo.ui.widgets import apply_image
+
+    class Owner:
+        pass
+
+    class BrokenLabel:
+        def configure(self, **kwargs):
+            raise tk.TclError("hopeless")
+
+    owner = Owner()
+    apply_image(BrokenLabel(), owner, "_photo", "NEW", text="")
+    assert owner._photo == "NEW"
+
+
+def test_icon_well_degrades_instead_of_aborting_a_selection(toolkit, furnished,
+                                                            tmp_path):
+    """show() runs from click handlers, so a decode failure must not abort
+    the selection."""
+    from kairo.ui.widgets import IconWell
+
+    well = IconWell(None, size=48)
+    well.show(None)                                   # nothing to show
+    well.show(tmp_path / "missing.png")               # path does not exist
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(b"not an image at all")
+    well.show(broken)                                 # undecodable
+    well.show_data(b"also not an image")
