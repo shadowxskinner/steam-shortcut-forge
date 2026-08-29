@@ -28,19 +28,22 @@ UI_SCALE = 1.0
 # Seven steps, each a small lift on the last. Depth is carried by value
 # because Tk cannot composite translucency, so the gaps between these numbers
 # are the only thing separating one surface from another.
-C_BG = "#08061A"             # window
-C_NAV = "#0D0A22"            # navigation column
-C_LIST = "#12102E"           # entry column
-C_PANEL = "#171438"          # workspace surfaces
-C_CARD = "#1F1A48"           # rows, wells, fields
-C_CARD_HOVER = "#262052"
+# Navy, not violet. Every step keeps blue ahead of red and red behind green,
+# so the surfaces read as deep navy-indigo and the only genuinely purple thing
+# on screen is a control that is doing something.
+C_BG = "#080A1C"             # window
+C_NAV = "#0C0F24"            # navigation column
+C_LIST = "#111530"           # entry column
+C_PANEL = "#161B3C"          # workspace surfaces
+C_CARD = "#1E244C"           # rows, wells, fields
+C_CARD_HOVER = "#262D5C"
 # Selection in the reference is a lighter panel with a faint border, not a
 # saturated fill. A solid accent block draws the eye harder than the content
 # inside it, which is the opposite of what a selected row should do.
-C_SELECTED = "#272058"       # selected row surface
-C_SELECTED_NAV = "#221C50"   # nav sits one step quieter still
-C_BORDER = "#231E4C"         # barely there, on purpose
-C_BORDER_STRONG = "#2E2865"
+C_SELECTED = "#2A3062"       # selected row surface
+C_SELECTED_NAV = "#232858"   # nav sits one step quieter still
+C_BORDER = "#242A54"         # barely there, on purpose
+C_BORDER_STRONG = "#2F3668"
 
 # The everyday accent is muted; the brightest purple is kept for controls
 # that are actually active - Apply, the selected pill, the chosen tile - so
@@ -48,7 +51,7 @@ C_BORDER_STRONG = "#2E2865"
 C_ACCENT = "#5540D6"
 C_ACCENT_BRIGHT = "#6C4CFF"
 C_ACCENT_HOVER = "#7E60FF"
-C_ACCENT_SOFT = "#211B52"    # accent at rest, for quiet fills
+C_ACCENT_SOFT = "#232A5E"    # accent at rest, for quiet fills
 C_ACCENT_TEXT = "#B9AAFF"
 
 C_DANGER = "#FF3D74"         # destructive only

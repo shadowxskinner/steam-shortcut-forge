@@ -53,8 +53,16 @@ def test_the_edge_fade_is_what_guarantees_it(fresh):
     assert mask.getpixel((100, 70)) == 255
 
 
-def test_the_glow_is_barely_there(fresh):
-    """Subtle enough that removing it would not affect readability."""
+def test_the_backdrop_is_barely_perceptible(fresh):
+    """Depth, not coloured light.
+
+    The reference looks atmospheric because a colourful wallpaper shows
+    through a translucent window. That colour belongs to the desktop, not the
+    application, and baking it into Kairo's own surfaces imitates the
+    wallpaper rather than the panel design. This bound exists to stop the
+    backdrop drifting back toward that: it was 110 when the effect was being
+    pushed, and the effect was wrong.
+    """
     image = ambience.render(ambience.SIZE)
     base = channels(T.C_BG)
     pixels = image.load()
@@ -63,11 +71,34 @@ def test_the_glow_is_barely_there(fresh):
         sum(abs(a - b) for a, b in zip(pixels[x, y], base))
         for y in range(0, height, 8) for x in range(0, width, 8)
     )
-    # Summed across three channels, so roughly a third of this per channel.
-    # Raised deliberately from 90 when the wash was measured as too faint on a
-    # real display; still low enough that removing it changes no readability.
-    assert peak <= 110, f"total channel lift of {peak} is too strong"
-    assert peak >= 30, "too faint to be worth the asset"
+    # Summed across three channels, so roughly a third of this each.
+    assert peak <= 36, f"total channel lift of {peak} reads as a glow"
+    assert peak >= 6, "if it is invisible there is no point shipping it"
+
+
+def test_the_backdrop_carries_almost_no_hue(fresh):
+    """It should lift value, not introduce a colour.
+
+    Nothing here may become the brightest thing on screen in any channel, and
+    nothing may swing toward magenta or cyan.
+    """
+    image = ambience.render(ambience.SIZE)
+    base = channels(T.C_BG)
+    brightest = image.getpixel((1210, 250))
+    red, green, blue = brightest
+    assert blue > green > red, "the lift must stay navy"
+    spread = max(b - a for a, b in zip(base, brightest)) - \
+        min(b - a for a, b in zip(base, brightest))
+    assert spread <= 14, f"channel spread of {spread} is a colour, not a lift"
+
+
+def test_the_effect_can_be_removed_in_one_line(fresh):
+    """The module is kept because it is cheap and tested, not because the
+    interface needs it. GLOWS = () must remain a complete off switch."""
+    flat = ambience.render(ambience.SIZE, glows=())
+    base = channels(T.C_BG)
+    assert flat.getpixel((760, 520)) == base
+    assert flat.getpixel((1210, 250)) == base
 
 
 def test_nothing_is_tinted_at_the_centre_of_the_content(fresh):
@@ -75,7 +106,7 @@ def test_nothing_is_tinted_at_the_centre_of_the_content(fresh):
     image = ambience.render(ambience.SIZE)
     base = channels(T.C_BG)
     middle = image.getpixel((760, 520))
-    assert sum(abs(a - b) for a, b in zip(middle, base)) <= 60
+    assert sum(abs(a - b) for a, b in zip(middle, base)) <= 26
 
 
 # -- generated once ---------------------------------------------------------

@@ -1037,3 +1037,51 @@ def test_the_muted_accent_and_the_bright_one_are_different(toolkit, furnished):
     from kairo.ui import theme as T
 
     assert T.C_ACCENT != T.C_ACCENT_BRIGHT
+
+
+# -- the palette stays navy -------------------------------------------------
+
+def test_surfaces_are_navy_rather_than_violet(toolkit, furnished):
+    """The reference's app surfaces are deep navy; its purple and cyan come
+    from a wallpaper behind a translucent window. Keeping blue ahead of green
+    ahead of red is what stops Kairo's own panels drifting violet."""
+    from kairo.ui import theme as T
+
+    def channels(colour):
+        colour = colour.lstrip("#")
+        return tuple(int(colour[i:i + 2], 16) for i in (0, 2, 4))
+
+    for name in ("C_BG", "C_NAV", "C_LIST", "C_PANEL", "C_CARD",
+                 "C_CARD_HOVER", "C_SELECTED", "C_SELECTED_NAV", "C_BORDER"):
+        red, green, blue = channels(getattr(T, name))
+        assert blue > green >= red, f"{name} is not navy"
+
+
+def test_the_elevation_ladder_only_ever_rises(toolkit, furnished):
+    """Depth is carried by value, so each surface has to actually be lighter
+    than the one it sits on."""
+    from kairo.ui import theme as T
+
+    def luminance(colour):
+        colour = colour.lstrip("#")
+        red, green, blue = (int(colour[i:i + 2], 16) for i in (0, 2, 4))
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+    ladder = [T.C_BG, T.C_NAV, T.C_LIST, T.C_PANEL, T.C_CARD, T.C_CARD_HOVER]
+    values = [luminance(colour) for colour in ladder]
+    assert values == sorted(values), f"elevation is not monotonic: {values}"
+    assert values[-1] - values[0] >= 12, "the steps are too close to separate"
+
+
+def test_purple_is_reserved_for_active_controls(toolkit, furnished):
+    """Bright purple has to mean something, so it must be clearly brighter
+    than any surface it appears on."""
+    from kairo.ui import theme as T
+
+    def luminance(colour):
+        colour = colour.lstrip("#")
+        red, green, blue = (int(colour[i:i + 2], 16) for i in (0, 2, 4))
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+    assert luminance(T.C_ACCENT_BRIGHT) > luminance(T.C_CARD_HOVER) + 25
+    assert luminance(T.C_ACCENT_BRIGHT) > luminance(T.C_ACCENT)

@@ -1,4 +1,20 @@
-"""A single cached ambient backdrop.
+"""A single cached backdrop, and a very slight one.
+
+The reference looks atmospheric because its window is translucent and a
+colourful wallpaper shows through it. That colour is the desktop, not the
+application. Baking cyan and magenta into Kairo's own surfaces imitates the
+wallpaper rather than the panel design, and lands somewhere more neon than the
+thing being copied - so what remains here is a barely perceptible lift in value
+that stops a large dark area reading as perfectly flat. It carries almost no
+hue and should never be noticed as a glow.
+
+CustomTkinter cannot do translucency, so on a compositor that can, the honest
+version of the reference's atmosphere is the user's own wallpaper around the
+window - not something drawn inside it.
+
+Setting ``GLOWS = ()`` disables the effect entirely and everything still works;
+the module is kept because the machinery is cheap and tested, not because the
+interface needs it.
 
 CustomTkinter has no real transparency: ``fg_color="transparent"`` resolves to
 the master's flat colour, so anything placed behind a panel is painted over by
@@ -34,7 +50,7 @@ from kairo.ui import theme as T
 #: Bump when the recipe changes so stale assets are not reused. The cache key
 #: carries the palette but not the glow parameters, so retuning these without
 #: bumping this would quietly keep serving the old image.
-VERSION = 2
+VERSION = 3
 
 #: Generous enough to cover a maximised window on a common display. Beyond it
 #: the backdrop has already faded to the window colour.
@@ -43,12 +59,12 @@ SIZE = (1600, 1000)
 #: (centre x, centre y, radius, colour, strength). Strength is the peak alpha
 #: of the glow, and it is deliberately low - removing the whole backdrop should
 #: not change how readable anything is.
-#: Centres sit clear of the edge fade, so the glow peaks where it is meant to
-#: read rather than in the band that is on its way back to the window colour.
+#: Two near-neutral indigo lifts, weak enough to read as "this surface is not
+#: perfectly flat" rather than as coloured light. Centres sit clear of the edge
+#: fade so what little there is lands where it is meant to.
 GLOWS = (
-    (1210, 210, 780, "#7A4AF2", 0.20),     # purple-magenta, upper right
-    (210, 860, 700, "#2C74E6", 0.09),      # blue, opposite corner
-    (180, 620, 420, "#22A2D6", 0.04),      # a whisper of cyan further left
+    (1210, 250, 820, "#2A3566", 0.16),     # upper right, barely there
+    (240, 830, 700, "#242E5C", 0.10),      # lower left, fainter still
 )
 
 #: How far in from each edge the composite fades back to the window colour.
