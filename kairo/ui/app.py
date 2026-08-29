@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from kairo import APP_NAME, actions
+from kairo import APP_NAME, actions, adoption
 from kairo import config as config_store
 from kairo import migration
 from kairo.artwork.local import LocalFileSource
@@ -55,6 +55,8 @@ class KairoApp(ctk.CTk):
         self.sources = artwork_registry(self.config_data)
         self.ledger = Ledger().load()
         self.tokens = ActivityTokens()
+        self._review_window = None
+        self._changes_window = None
 
         self.entries: dict[str, list[AppEntry]] = {}
         self.rows: list[AppRow] = []
@@ -296,8 +298,20 @@ class KairoApp(ctk.CTk):
             except Exception as exc:
                 self.entries[provider.id] = []
                 messagebox.showerror("Scan failed", f"{provider.label}: {exc}")
-        # Drop history for entries the user has since deleted or taken over.
+        # Drop history for entries the user has since deleted or taken over,
+        # then pick up any Kairo-owned entry the history does not know about -
+        # everything migrated from Shortcut Forge, or anything at all if the
+        # history file was lost. Prune first so a stale record cannot block
+        # the adoption of the file that replaced it.
         self.ledger.prune()
+        try:
+            adopted = adoption.adopt_untracked(self.ledger, self.providers)
+        except Exception:
+            adopted = []              # never let housekeeping block a scan
+        if adopted:
+            self.status.configure(
+                text=f"Found {len(adopted)} existing customization(s) "
+                     "and added them to Changes.")
         self._filter()
         self._update_summary()
 
@@ -365,7 +379,20 @@ class KairoApp(ctk.CTk):
     def _set_actions(self, enabled: bool):
         state = "normal" if enabled else "disabled"
         self.browse_btn.configure(state=state)
-        self.restore_btn.configure(state=state)
+        self.restore_btn.configure(state=state, text=self._restore_label())
+
+    def _restore_label(self) -> str:
+        """The verb belongs to the writer, not to this button.
+
+        For a generated entry there is no earlier artwork to return to, so
+        "Restore original" would describe a deletion.
+        """
+        if not self.selected_row:
+            return "Restore original"
+        provider = self.providers.for_entry(self.selected_row.entry)
+        if provider is None:
+            return "Restore original"
+        return provider.writer().restore_label
 
     def _update_summary(self):
         entries = self.current_entries()
@@ -637,12 +664,13 @@ class KairoApp(ctk.CTk):
         entry = self.selected_row.entry
         provider = self.providers.for_entry(entry)
 
-        allowed, reason = provider.writer().can_restore(entry)
+        writer = provider.writer()
+        allowed, reason = writer.can_restore(entry)
         if not allowed:
-            messagebox.showinfo("Nothing to restore", reason)
+            messagebox.showinfo("Nothing to do", reason)
             return
-        if not messagebox.askyesno("Restore original",
-                                   f"Put back the original icon for {entry.name}?"):
+        if not messagebox.askyesno(writer.restore_label,
+                                   writer.restore_prompt(entry)):
             return
         try:
             actions.restore_entry(entry, provider, ledger=self.ledger)
@@ -652,7 +680,9 @@ class KairoApp(ctk.CTk):
         row = self._row_for(entry)
         if row:
             row.refresh()
-        self.sub.configure(text=f"{entry.subtitle}  ·  Restored")
+        self.sub.configure(
+            text=f"{entry.subtitle}  ·  "
+                 + ("Shortcut removed" if writer.action == "created" else "Restored"))
         self._update_summary()
 
     # -- auto match -------------------------------------------------------
@@ -663,6 +693,14 @@ class KairoApp(ctk.CTk):
         Nothing is written here. The match pass only decides what Kairo would
         propose; the review window is where the user agrees.
         """
+        if self._window_open(self._review_window):
+            # A second matching run behind an open review would leave two
+            # workflows competing over the same applications.
+            self._raise_window(self._review_window)
+            self.status.configure(
+                text="Close the review window before matching again.")
+            return
+
         entries = self.all_entries()
         if not entries:
             self.status.configure(text="Nothing to match — try Rescan first.")
@@ -684,12 +722,16 @@ class KairoApp(ctk.CTk):
             def finish():
                 self._bulk_running(False)
                 if report.cancelled:
+                    # Cancelling means "stop", not "show me a partial answer".
+                    # Opening a review over an incomplete pass invites applying
+                    # a fraction of the library and thinking it was all of it.
                     self.status.configure(
-                        text=f"Matching cancelled — {report.matched} match(es) found "
-                             "before stopping.")
-                else:
-                    self.status.configure(text=report.headline())
-                if not report.matches and not report.cancelled:
+                        text=f"Matching cancelled — nothing applied. "
+                             f"({report.matched} match(es) had been found; "
+                             "run Auto Match again for a full pass.)")
+                    return
+                self.status.configure(text=report.headline())
+                if not report.matches:
                     messagebox.showinfo(
                         "No confident matches",
                         "Kairo did not find artwork it is confident about.\n\n"
@@ -697,8 +739,9 @@ class KairoApp(ctk.CTk):
                         "an application. You can still pick artwork yourself from "
                         "the main list.")
                     return
-                ReviewWindow(self, report, self.providers, self.sources,
-                             self.ledger, on_applied=self._after_bulk)
+                self._review_window = ReviewWindow(
+                    self, report, self.providers, self.sources, self.ledger,
+                    on_applied=self._after_bulk)
 
             self.after(0, finish)
 
@@ -724,9 +767,30 @@ class KairoApp(ctk.CTk):
 
     # -- changes ----------------------------------------------------------
 
+    # -- secondary windows ------------------------------------------------
+
+    @staticmethod
+    def _window_open(window) -> bool:
+        try:
+            return window is not None and bool(window.winfo_exists())
+        except tk.TclError:
+            return False
+
+    @staticmethod
+    def _raise_window(window) -> None:
+        try:
+            window.deiconify()
+            window.lift()
+            window.focus_force()
+        except tk.TclError:
+            pass
+
     def _open_changes(self):
-        ChangesWindow(self, self.ledger, self.providers,
-                      on_finished=self._after_bulk)
+        if self._window_open(self._changes_window):
+            self._raise_window(self._changes_window)
+            return
+        self._changes_window = ChangesWindow(
+            self, self.ledger, self.providers, on_finished=self._after_bulk)
 
     # -- settings ---------------------------------------------------------
 

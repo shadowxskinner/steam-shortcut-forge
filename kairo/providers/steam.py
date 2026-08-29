@@ -23,9 +23,32 @@ PROVIDER_ID = "steam"
 
 _RE_APPID = re.compile(r'"appid"\s+"(\d+)"')
 _RE_NAME = re.compile(r'"name"\s+"([^"]+)"')
+_RE_INSTALLDIR = re.compile(r'"installdir"\s+"([^"]+)"')
 
-# Runtimes and redistributables are installed like games but are not games.
-_SKIP_NAMES = {"steamworks common redistributables", "steam linux runtime"}
+# Compatibility tools and runtimes install exactly like games. Valve ships a
+# toolmanifest.vdf in each one, which is the reliable structural signal - it
+# does not depend on the language the library is displayed in, and no real
+# game ships one. The name rules below only cover the few components that
+# predate that convention.
+_TOOL_MANIFEST = "toolmanifest.vdf"
+
+_SKIP_NAMES = {
+    "steamworks common redistributables",
+    "steamworks shared",
+    "proton experimental",
+    "proton hotfix",
+    "proton easyanticheat runtime",
+}
+
+# Deliberately narrow. "^proton\b" would swallow Proton Pulse and any other
+# real game whose title starts with the word, so these require either a
+# version number or the "Proton - " prefix Valve uses for its own builds.
+_SKIP_PATTERNS = (
+    re.compile(r"^proton[\s-]+\d", re.IGNORECASE),
+    re.compile(r"^proton\s+-\s+", re.IGNORECASE),
+    re.compile(r"^steam linux runtime\b", re.IGNORECASE),
+    re.compile(r"^steam-play\b", re.IGNORECASE),
+)
 
 FLATPAK_STEAM_ID = "com.valvesoftware.Steam"
 
@@ -107,6 +130,27 @@ def steam_cmd(appid: str) -> str:
 # Generated entries
 # ---------------------------------------------------------------------------
 
+def is_compatibility_tool(name: str, steamapps: Path, manifest_text: str) -> bool:
+    """True for Proton builds, runtimes and redistributables.
+
+    Structural check first: if the install directory contains a
+    toolmanifest.vdf, Steam itself considers this a compatibility tool.
+    """
+    install = _RE_INSTALLDIR.search(manifest_text)
+    if install:
+        tool = steamapps / "common" / install.group(1) / _TOOL_MANIFEST
+        try:
+            if tool.is_file():
+                return True
+        except OSError:
+            pass
+
+    low = name.strip().lower()
+    if low in _SKIP_NAMES:
+        return True
+    return any(pattern.match(low) for pattern in _SKIP_PATTERNS)
+
+
 def existing_generated() -> dict[str, Path]:
     """``{appid: path}`` for entries we generated, under any known prefix.
 
@@ -176,8 +220,7 @@ class SteamProvider(AppProvider):
                 if not appid_match or not name_match:
                     continue
                 appid, name = appid_match.group(1), name_match.group(1)
-                low = name.strip().lower()
-                if low in _SKIP_NAMES or low.startswith("steam linux runtime"):
+                if is_compatibility_tool(name, steamapps, text):
                     continue
                 if appid in found:
                     continue
@@ -207,6 +250,20 @@ class SteamProvider(AppProvider):
             icon_name=(entry.name or "").strip().lower(),
             steam_appid=entry.local_id,
         )
+
+    def claim(self, path: Path) -> tuple[str, str, dict] | None:
+        """Generated entries whose id looks like a Steam appid.
+
+        Requiring digits keeps this from claiming a future provider's
+        generated entries that happen to share the prefix.
+        """
+        if not paths.is_generated_name(path.name):
+            return None
+        local_id = paths.strip_generated_prefix(path.name)
+        if not local_id.isdigit():
+            return None
+        return (make_key(self.id, local_id), "created",
+                {"appid": local_id})
 
     def refresh(self, entry: AppEntry) -> None:
         path = existing_generated().get(entry.local_id)

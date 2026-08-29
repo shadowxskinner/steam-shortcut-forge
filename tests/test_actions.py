@@ -292,8 +292,12 @@ def test_apply_many_can_be_cancelled(steam_library, png, ledger, art):
                                  token=token,
                                  on_progress=lambda i, t, p: token.cancel())
 
+    # Cancelled on the very first progress callback, so nothing is fetched or
+    # written at all. Previously asserted "<= 1", which would have passed even
+    # if an item had slipped through.
     assert summary.cancelled is True
-    assert summary.succeeded <= 1
+    assert summary.succeeded == 0
+    assert len(ledger) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -337,3 +341,108 @@ def test_apply_many_records_every_success_before_returning(steam_library, png,
     on_disk = Ledger().load()
     assert len(on_disk) == 1
     assert on_disk.get(apps[0].key) is not None
+
+
+# ---------------------------------------------------------------------------
+# The exact cancellation boundary, as established on the real machine
+# ---------------------------------------------------------------------------
+
+def test_cancellation_stops_before_the_item_it_fires_on(steam_library, system_apps,
+                                                        png, ledger, art):
+    """Cancelling during item N's progress callback stops *before* item N is
+    fetched or written, because fetch_and_apply checks the token before
+    touching the network or the disk. Exactly N are applied, not N + 1.
+
+    Pinned here rather than left to a throwaway script: the earlier prediction
+    of N + 1 was wrong, and only a live run caught it.
+    """
+    provider = DesktopEntryProvider()
+    entries = [e for e in provider.scan() if not e.customized]
+    source = StubSource(png)
+    plans = [(e, source, art) for e in entries]
+    assert len(plans) >= 2
+
+    cancel_at = 1
+    token = CancelToken()
+
+    def progress(index, total, plan):
+        if index == cancel_at:
+            token.cancel()
+
+    summary = actions.apply_many(plans, default_registry(), ledger=ledger,
+                                 token=token, on_progress=progress)
+
+    assert summary.cancelled is True
+    assert summary.succeeded == cancel_at
+    assert len(ledger) == cancel_at
+    assert source.fetches == cancel_at        # the cancelled item never fetched
+    written = [p for p in paths.applications_dir().glob('*.desktop')
+               if de.is_managed(p)]
+    assert len(written) == cancel_at
+
+
+def test_a_cancelled_run_leaves_no_record_without_a_file(steam_library, png,
+                                                         ledger, art):
+    token = CancelToken()
+    steam = SteamProvider()
+    plans = [(e, StubSource(png), art) for e in steam.scan()]
+
+    def progress(index, total, plan):
+        token.cancel()
+
+    actions.apply_many(plans, default_registry(), ledger=ledger,
+                       token=token, on_progress=progress)
+    assert all(Ledger.owns(r) for r in Ledger().load().records())
+
+
+# ---------------------------------------------------------------------------
+# Artwork fetched for an apply that was then cancelled
+# ---------------------------------------------------------------------------
+
+class SlowSource(StubSource):
+    """Cancels the run from inside fetch, so the cancel lands between
+    downloading the artwork and writing the launcher entry."""
+
+    def __init__(self, png, token):
+        super().__init__(png)
+        self.token = token
+        self.last = None
+
+    def fetch(self, art, dest_dir, stem):
+        self.last = super().fetch(art, dest_dir, stem)
+        self.token.cancel()
+        return self.last
+
+
+def test_artwork_fetched_then_cancelled_is_cleaned_up(steam_entry, png, ledger,
+                                                      art, fake_home):
+    from kairo.tasks import Cancelled
+
+    token = CancelToken()
+    source = SlowSource(png, token)
+    with pytest.raises(Cancelled):
+        actions.fetch_and_apply(steam_entry, SteamProvider(), source, art,
+                                ledger=ledger, token=token)
+
+    assert source.last is not None
+    assert not source.last.exists()          # no orphan left in the store
+    assert len(ledger) == 0
+
+
+def test_cancellation_does_not_delete_artwork_something_still_uses(
+        steam_entry, png, ledger, art, fake_home):
+    """Re-applying artwork an entry already uses produces the same filename.
+    Cancelling must not then delete the icon the live entry points at."""
+    from kairo.tasks import Cancelled
+
+    provider = SteamProvider()
+    applied = actions.fetch_and_apply(steam_entry, provider, StubSource(png),
+                                      art, ledger=ledger)
+    assert applied.is_file()
+
+    token = CancelToken()
+    with pytest.raises(Cancelled):
+        actions.fetch_and_apply(steam_entry, provider, SlowSource(png, token),
+                                art, ledger=ledger, token=token)
+
+    assert applied.is_file()                 # still referenced, still there

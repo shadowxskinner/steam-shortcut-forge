@@ -181,6 +181,35 @@ class DesktopEntryProvider(AppProvider):
             icon_name=theme_query_for(entry),
         )
 
+    def system_source(self, basename: str) -> Path | None:
+        """The system copy an override shadows, if it still exists.
+
+        Absent when the application has since been uninstalled. Restoring then
+        just removes the override, which is still the right outcome - it is
+        the only way to clear a leftover for something no longer installed.
+        """
+        local = paths.applications_dir()
+        for directory in paths.system_application_dirs():
+            if directory == local:
+                continue
+            candidate = directory / basename
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def claim(self, path: Path) -> tuple[str, str, dict] | None:
+        """Any managed override in the user's applications directory."""
+        if paths.is_generated_name(path.name):
+            return None
+        if path.parent.resolve() != paths.applications_dir().resolve():
+            return None
+        source = self.system_source(path.name)
+        return (make_key(self.id, path.stem), "overrode", {
+            "basename": path.name,
+            "source": str(source) if source else "",
+            "local": str(path),
+        })
+
     def refresh(self, entry: AppEntry) -> None:
         local = Path(entry.payload.get("local") or
                      (paths.applications_dir() / entry.payload.get("basename", "")))

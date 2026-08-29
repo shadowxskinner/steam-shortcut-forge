@@ -69,6 +69,13 @@ class GeneratedEntryWriter(LauncherWriter):
     """
 
     action = "created"
+    restore_label = "Remove shortcut"
+
+    def restore_prompt(self, entry: AppEntry) -> str:
+        return (f"Remove the launcher shortcut Kairo created for {entry.name}?\n\n"
+                "The application itself is not affected — only the shortcut "
+                "goes away. You can create it again at any time by giving the "
+                "application artwork.")
 
     def __init__(self, prefix: str, build_fields):
         self.prefix = prefix
@@ -168,6 +175,11 @@ class OverrideWriter(LauncherWriter):
     """
 
     action = "overrode"
+    restore_label = "Restore original"
+
+    def restore_prompt(self, entry: AppEntry) -> str:
+        return (f"Put back the original icon for {entry.name}?\n\n"
+                "The application keeps its launcher entry.")
 
     def target(self, entry: AppEntry) -> Path:
         basename = entry.payload.get("basename") or f"{entry.local_id}.desktop"

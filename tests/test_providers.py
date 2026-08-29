@@ -425,3 +425,96 @@ def test_restoring_one_app_leaves_the_other_artwork_alone(steam_library,
 
     assert not steam_icon.exists()
     assert dolphin_icon.exists()
+
+
+# ---------------------------------------------------------------------------
+# Compatibility tools are not games
+# ---------------------------------------------------------------------------
+
+def manifest(steamapps, appid, name, installdir=None):
+    body = ('"AppState"\n{\n'
+            f'\t"appid"\t\t"{appid}"\n'
+            f'\t"name"\t\t"{name}"\n')
+    if installdir:
+        body += f'\t"installdir"\t\t"{installdir}"\n'
+    body += "}\n"
+    (steamapps / f"appmanifest_{appid}.acf").write_text(body)
+
+
+def test_toolmanifest_marks_a_compatibility_tool(steam_library):
+    """The structural signal: Valve ships toolmanifest.vdf in every compat
+    tool, and it does not depend on the display language."""
+    manifest(steam_library, "9999", "Some Runtime Thing", "SomeRuntime")
+    tool_dir = steam_library / "common" / "SomeRuntime"
+    tool_dir.mkdir(parents=True)
+    (tool_dir / "toolmanifest.vdf").write_text('"manifest" { "version" "2" }')
+
+    assert "Some Runtime Thing" not in {a.name for a in SteamProvider().scan()}
+
+
+def test_a_game_with_an_install_dir_is_still_a_game(steam_library):
+    manifest(steam_library, "8888", "Real Game", "RealGame")
+    (steam_library / "common" / "RealGame").mkdir(parents=True)
+    assert "Real Game" in {a.name for a in SteamProvider().scan()}
+
+
+@pytest.mark.parametrize("name", [
+    "Proton Experimental",
+    "Proton Hotfix",
+    "Proton 9.0",
+    "Proton 8.0-5",
+    "Proton - Experimental",
+    "Proton EasyAntiCheat Runtime",
+    "Steam Linux Runtime 3.0 (sniper)",
+    "Steamworks Common Redistributables",
+])
+def test_known_compatibility_tools_are_hidden(steam_library, name):
+    manifest(steam_library, "7777", name)
+    assert name not in {a.name for a in SteamProvider().scan()}
+
+
+@pytest.mark.parametrize("name", [
+    "Proton Pulse",          # a real game whose title starts with the word
+    "Protonwar",
+    "Steamworld Dig",
+    "Portal 2",
+])
+def test_real_games_are_not_hidden_by_the_name_rules(steam_library, name):
+    manifest(steam_library, "6666", name)
+    assert name in {a.name for a in SteamProvider().scan()}
+
+
+# ---------------------------------------------------------------------------
+# Restore verbs belong to the writer
+# ---------------------------------------------------------------------------
+
+def test_generated_and_override_writers_use_different_verbs():
+    """One label cannot cover both: for a generated entry there is no earlier
+    artwork, so 'Restore original' would describe a deletion."""
+    from kairo.providers.writers import OverrideWriter
+
+    generated = SteamProvider().writer()
+    override = OverrideWriter()
+    assert generated.restore_label == "Remove shortcut"
+    assert override.restore_label == "Restore original"
+    assert generated.restore_label != override.restore_label
+
+
+def test_restore_prompts_describe_the_actual_outcome(steam_library, system_apps):
+    from kairo.providers.writers import OverrideWriter
+
+    game = next(a for a in SteamProvider().scan() if a.local_id == "440")
+    app = next(a for a in DesktopEntryProvider().scan() if a.name == "Dolphin")
+
+    generated_prompt = SteamProvider().writer().restore_prompt(game)
+    override_prompt = OverrideWriter().restore_prompt(app)
+
+    assert "shortcut" in generated_prompt.lower()
+    assert "not affected" in generated_prompt.lower()
+    assert "keeps its launcher entry" in override_prompt.lower()
+
+
+def test_deletes_launcher_distinguishes_the_two_actions():
+    from kairo.ledger import ACTION_CREATED, ACTION_OVERRODE, deletes_launcher
+    assert deletes_launcher(ACTION_CREATED) is True
+    assert deletes_launcher(ACTION_OVERRODE) is False

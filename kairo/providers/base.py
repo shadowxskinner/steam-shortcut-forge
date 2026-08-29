@@ -24,6 +24,15 @@ class LauncherWriter(ABC):
     #: "overrode" - Kairo shadowed someone else's, so restoring un-shadows it.
     action: str = ""
 
+    #: Button text. One verb cannot cover both writers: for an entry Kairo
+    #: generated there is no earlier artwork to go back to, so "restore"
+    #: describes a deletion, which is exactly the wrong thing for a button to
+    #: do quietly.
+    restore_label: str = "Restore original"
+
+    def restore_prompt(self, entry: AppEntry) -> str:
+        return f"Put back the original icon for {entry.name}?"
+
     @abstractmethod
     def target(self, entry: AppEntry) -> Path:
         """The launcher entry this writer owns for ``entry``."""
@@ -75,4 +84,15 @@ class AppProvider(ABC):
 
     def refresh(self, entry: AppEntry) -> None:
         """Re-read this entry's current state from disk after a change."""
+        return None
+
+    def claim(self, path: Path) -> tuple[str, str, dict] | None:
+        """Identify a launcher entry this provider owns.
+
+        Returns ``(key, action, payload)`` or None. Used to adopt entries that
+        Kairo owns but has no history for - after a migration, or if the
+        change history is lost. The caller has already confirmed the file
+        carries an ownership marker; this only answers *which* provider it
+        belongs to and how to address it.
+        """
         return None

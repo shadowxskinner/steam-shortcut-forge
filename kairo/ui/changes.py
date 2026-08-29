@@ -8,9 +8,9 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from kairo import actions
+from kairo import actions, housekeeping
 from kairo.desktop.lookup import resolve_icon
-from kairo.ledger import ChangeRecord, Ledger
+from kairo.ledger import ChangeRecord, Ledger, deletes_launcher
 from kairo.tasks import CancelToken
 from kairo.ui import theme as T
 from kairo.ui.widgets import IconWell
@@ -49,7 +49,10 @@ class ChangeRow(ctk.CTkFrame):
                      font=T.F_BODY_B, text_color=T.C_TEXT
                      ).grid(row=0, column=3, sticky="sw", pady=(12, 0))
 
-        source = record.source_label or record.source_id or "a local file"
+        if record.adopted:
+            source = "Existing customization"
+        else:
+            source = record.source_label or record.source_id or "a local file"
         detail = f"{source}  ·  {T.format_date(record.applied_at)}"
         allowed, reason = Ledger.restorable(record)
         if not allowed:
@@ -59,8 +62,11 @@ class ChangeRow(ctk.CTkFrame):
                      text_color=T.C_TEXT3 if allowed else T.C_DANGER
                      ).grid(row=1, column=3, sticky="nw", pady=(0, 12))
 
+        # A generated entry has no earlier artwork to return to, so restoring
+        # it removes the shortcut. The button has to say which it is.
+        verb = "Remove" if deletes_launcher(record.action) else "Restore"
         self.button = ctk.CTkButton(
-            self, text="Restore", width=90, height=32, corner_radius=16,
+            self, text=verb, width=90, height=32, corner_radius=16,
             fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
             font=T.F_BUTTON, command=lambda: self._on_restore(self.record),
             state="normal" if allowed else "disabled")
@@ -82,6 +88,8 @@ class ChangesWindow(ctk.CTkToplevel):
         self.geometry("820x620")
         self.configure(fg_color=T.C_BG)
         self.transient(parent)
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self.after(120, self._make_modal)
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
@@ -116,12 +124,49 @@ class ChangesWindow(ctk.CTkToplevel):
             fg_color=T.C_DANGER_BG, hover_color="#3a2020", text_color=T.C_DANGER,
             font=T.F_BUTTON, command=self._restore_all)
         self.restore_all_btn.pack(side="right", padx=(0, 8))
+        self.cleanup_btn = ctk.CTkButton(
+            footer, text="Clean up unused artwork", height=40, corner_radius=20,
+            fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT2,
+            font=T.F_BUTTON, command=self._cleanup)
+        self.cleanup_btn.pack(side="left")
         self.cancel_btn = ctk.CTkButton(
             footer, text="Cancel", height=40, corner_radius=20,
             fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
             font=T.F_BUTTON, command=self._cancel)
 
         self.refresh()
+
+    def _make_modal(self):
+        try:
+            self.grab_set()
+        except Exception:
+            pass
+
+    def _cleanup(self):
+        """Delete artwork no launcher entry points at.
+
+        Reference-based, never history-based: an icon survives if anything at
+        all in the applications directory still names it.
+        """
+        preview = housekeeping.sweep(dry_run=True)
+        if not preview.removed:
+            messagebox.showinfo("Nothing to clean up",
+                                "Every icon Kairo stores is still in use.",
+                                parent=self)
+            return
+        megabytes = preview.freed_bytes / (1024 * 1024)
+        if not messagebox.askyesno(
+                "Clean up unused artwork",
+                f"{preview.removed} icon(s) in Kairo's own store are not used "
+                f"by any launcher entry, taking {megabytes:.1f} MB.\n\n"
+                "Delete them? Nothing currently in use is touched.",
+                parent=self):
+            return
+        result = housekeeping.sweep()
+        self.status.configure(text=result.describe())
+        if result.failures:
+            messagebox.showwarning("Some files could not be removed",
+                                   "\n".join(result.failures[:20]), parent=self)
 
     # -- list ------------------------------------------------------------
 
@@ -152,9 +197,16 @@ class ChangesWindow(ctk.CTkToplevel):
     # -- actions ---------------------------------------------------------
 
     def _restore_one(self, record: ChangeRecord):
-        if not messagebox.askyesno(
-                "Restore original",
-                f"Put back the original icon for {record.name}?", parent=self):
+        if deletes_launcher(record.action):
+            title = "Remove shortcut"
+            body = (f"Remove the launcher shortcut Kairo created for "
+                    f"{record.name}?\n\nThe application itself is not "
+                    "affected — only the shortcut goes away.")
+        else:
+            title = "Restore original"
+            body = (f"Put back the original icon for {record.name}?\n\n"
+                    "The application keeps its launcher entry.")
+        if not messagebox.askyesno(title, body, parent=self):
             return
         try:
             actions.restore_record(record, self.registry,
@@ -169,12 +221,36 @@ class ChangesWindow(ctk.CTkToplevel):
         self._notify()
 
     def _restore_all(self):
-        total = len(self.ledger.records())
-        if not messagebox.askyesno(
-                "Restore everything",
-                f"Put back the original icons for all {total} application(s)?\n\n"
-                "Anything Kairo no longer recognises will be left alone.",
-                parent=self):
+        records = self.ledger.records()
+        if not records:
+            return
+
+        removals = [r for r in records if deletes_launcher(r.action)]
+        reverts = [r for r in records if not deletes_launcher(r.action)]
+
+        # Two very different outcomes hide behind one button, so the
+        # confirmation spells both out and names every shortcut that
+        # disappears. "Restore everything" must not quietly delete launcher
+        # entries the user has been using.
+        lines = [f"This affects {len(records)} application(s):", ""]
+        if reverts:
+            lines.append(f"  • {len(reverts)} will go back to their original "
+                         "icon and keep their launcher entry.")
+        if removals:
+            lines.append(f"  • {len(removals)} launcher shortcut(s) Kairo "
+                         "created will be DELETED:")
+            for record in removals[:12]:
+                lines.append(f"        {record.name}")
+            if len(removals) > 12:
+                lines.append(f"        …and {len(removals) - 12} more")
+            lines.append("")
+            lines.append("  Those applications stay installed. You can give "
+                         "them artwork again to recreate the shortcut.")
+        lines.append("")
+        lines.append("Anything Kairo no longer recognises is left alone.")
+
+        if not messagebox.askyesno("Restore everything", "\n".join(lines),
+                                   parent=self):
             return
 
         self._token = CancelToken()
@@ -218,4 +294,8 @@ class ChangesWindow(ctk.CTkToplevel):
 
     def _close(self):
         self._cancel()
+        try:
+            self.grab_release()
+        except Exception:
+            pass
         self.destroy()

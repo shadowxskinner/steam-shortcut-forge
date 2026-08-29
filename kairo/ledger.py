@@ -33,6 +33,17 @@ ACTION_CREATED = "created"
 ACTION_OVERRODE = "overrode"
 
 
+def deletes_launcher(action: str) -> bool:
+    """Whether restoring this change removes the application's launcher entry.
+
+    True for entries Kairo generated - there was nothing before it, so undoing
+    means deleting. False for overrides, where the system copy shows through
+    again. The difference is the whole reason the restore button cannot have
+    one label.
+    """
+    return action == ACTION_CREATED
+
+
 def now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -53,6 +64,11 @@ class ChangeRecord:
     artwork_id: str = ""
     artwork_name: str = ""
     applied_at: str = field(default_factory=now_iso)
+    #: True when Kairo inferred this record from a launcher entry it already
+    #: owned, rather than recording it at the moment of the change. Adopted
+    #: records know what was customised and what it reverts to, but not which
+    #: source the artwork came from.
+    adopted: bool = False
     #: Enough provider payload to rebuild an AppEntry for a restore without
     #: rescanning the whole machine first.
     payload: dict[str, Any] = field(default_factory=dict)

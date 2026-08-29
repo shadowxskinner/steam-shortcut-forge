@@ -102,7 +102,17 @@ def fetch_and_apply(
     stem = paths.icon_stem(entry.provider_id, entry.local_id, art.id)
     icon_path = source.fetch(art, paths.icon_store(), stem)
     if token is not None:
-        token.check()
+        try:
+            token.check()
+        except BaseException:
+            # Cancelled between fetching and applying. The artwork on disk is
+            # about to be used by nobody, so remove it now rather than leaving
+            # it for the next sweep - unless something already points at it,
+            # which happens when re-applying artwork an entry already uses.
+            from kairo.housekeeping import is_referenced
+            if not is_referenced(icon_path):
+                icon_path.unlink(missing_ok=True)
+            raise
     return apply_icon(entry, provider, icon_path, art=art,
                       source_label=source.label, ledger=ledger,
                       refresh=refresh, save_ledger=save_ledger)

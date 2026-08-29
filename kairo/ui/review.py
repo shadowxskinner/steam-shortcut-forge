@@ -23,7 +23,11 @@ class ReviewRow(ctk.CTkFrame):
     def __init__(self, master, match: Match, on_change, **kw):
         super().__init__(master, corner_radius=T.R_CARD, fg_color=T.C_ROW, **kw)
         self.match = match
-        self.selected = ctk.BooleanVar(value=True)
+        # Nothing is ticked to begin with. A screen that opens with three
+        # hundred rows pre-selected turns one misplaced click into three
+        # hundred changes, and the point of a review step is that the user
+        # chooses.
+        self.selected = ctk.BooleanVar(value=False)
         self.skipped = False
         self._on_change = on_change
         self.grid_columnconfigure(4, weight=1)
@@ -108,6 +112,10 @@ class ReviewWindow(ctk.CTkToplevel):
         self.configure(fg_color=T.C_BG)
         self.transient(parent)
         self.protocol("WM_DELETE_WINDOW", self._close)
+        # Modal: the main window must not be able to start a second matching
+        # run behind this one and end up with two review workflows competing
+        # over the same applications.
+        self.after(120, self._make_modal)
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -117,7 +125,7 @@ class ReviewWindow(ctk.CTkToplevel):
                                                padx=24, pady=(24, 2))
         ctk.CTkLabel(
             self,
-            text="Nothing is changed until you apply. "
+            text="Nothing is selected and nothing changes until you apply. "
                  f"{len(report.unmatched)} application(s) had no confident match "
                  "and were left out.",
             font=T.F_SMALL, text_color=T.C_TEXT3
@@ -173,6 +181,12 @@ class ReviewWindow(ctk.CTkToplevel):
 
         self._build_rows()
         self._stream_previews()
+
+    def _make_modal(self):
+        try:
+            self.grab_set()
+        except Exception:
+            pass          # a grab is a nicety; never fail the window over it
 
     # -- rows ------------------------------------------------------------
 
@@ -237,15 +251,28 @@ class ReviewWindow(ctk.CTkToplevel):
     # -- applying --------------------------------------------------------
 
     def _apply_all(self):
-        self._set_all(True)
-        self._apply_selected()
+        """Explicitly select everything, then apply.
 
-    def _apply_selected(self):
-        chosen = [row for row in self.rows if row.wanted]
-        if not chosen:
-            self.status.configure(text="Nothing selected.")
+        Skipped rows stay skipped - _set_all leaves them alone.
+        """
+        candidates = [row for row in self.rows if not row.skipped]
+        if not candidates:
+            self.status.configure(text="Nothing to apply.")
             return
         if not messagebox.askyesno(
+                "Apply all",
+                f"Select and apply artwork to all {len(candidates)} matched "
+                "application(s)?", parent=self):
+            return
+        self._set_all(True)
+        self._apply_selected(confirmed=True)
+
+    def _apply_selected(self, confirmed: bool = False):
+        chosen = [row for row in self.rows if row.wanted]
+        if not chosen:
+            self.status.configure(text="Nothing selected — tick a row first.")
+            return
+        if not confirmed and not messagebox.askyesno(
                 "Apply artwork",
                 f"Apply artwork to {len(chosen)} application(s)?", parent=self):
             return
@@ -304,4 +331,8 @@ class ReviewWindow(ctk.CTkToplevel):
             self._preview_token.cancel()
         if self._token is not None:
             self._token.cancel()
+        try:
+            self.grab_release()
+        except Exception:
+            pass
         self.destroy()
