@@ -20,10 +20,10 @@ class SettingsPane(ctk.CTkFrame):
 
         ctk.CTkLabel(self, text="Settings", font=T.F_WORKSPACE_TITLE,
                      text_color=T.C_TEXT, anchor="w"
-                     ).grid(row=0, column=0, sticky="w", padx=28, pady=(24, 16))
+                     ).grid(row=0, column=0, sticky="w", padx=26, pady=(18, 14))
 
         card = ctk.CTkFrame(self, fg_color=T.C_PANEL, corner_radius=T.R_CARD)
-        card.grid(row=1, column=0, sticky="ew", padx=28, pady=(0, 16))
+        card.grid(row=1, column=0, sticky="ew", padx=26, pady=(0, 14))
         card.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(card, text="SteamGridDB API key", font=T.F_BODY_B,
@@ -39,8 +39,8 @@ class SettingsPane(ctk.CTkFrame):
                      ).grid(row=2, column=0, sticky="w", padx=20, pady=(0, 8))
 
         self.key_entry = ctk.CTkEntry(card, placeholder_text="Paste API key",
-                                      font=T.F_BODY, corner_radius=T.R_WELL,
-                                      height=38, fg_color=T.C_CARD,
+                                      font=T.F_BODY, corner_radius=T.R_FIELD,
+                                      height=T.H_FIELD, fg_color=T.C_CARD,
                                       border_width=1, border_color=T.C_BORDER)
         self.key_entry.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 12))
         if context.config.get(SGDB_KEY):
@@ -57,7 +57,7 @@ class SettingsPane(ctk.CTkFrame):
         self.saved.pack(side="right", padx=(0, 12))
 
         where = ctk.CTkFrame(self, fg_color=T.C_PANEL, corner_radius=T.R_CARD)
-        where.grid(row=2, column=0, sticky="ew", padx=28, pady=(0, 16))
+        where.grid(row=2, column=0, sticky="ew", padx=26, pady=(0, 14))
         ctk.CTkLabel(where, text="WHERE THINGS LIVE", font=T.F_SECTION,
                      text_color=T.C_TEXT3, anchor="w"
                      ).pack(anchor="w", padx=20, pady=(16, 8))
@@ -85,7 +85,7 @@ class SettingsPane(ctk.CTkFrame):
 
         ctk.CTkLabel(self, text=f"{APP_NAME} {__version__}  ·  {TAGLINE}\n{APP_ID}",
                      font=T.F_TINY, text_color=T.C_TEXT3, justify="left",
-                     anchor="w").grid(row=3, column=0, sticky="w", padx=28)
+                     anchor="w").grid(row=3, column=0, sticky="w", padx=26, pady=(0, 16))
 
     def _save(self):
         key = self.key_entry.get().strip()

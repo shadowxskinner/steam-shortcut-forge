@@ -54,8 +54,8 @@ def build_items(registry) -> list[NavItem]:
 
 class NavButton(ctk.CTkFrame):
     def __init__(self, master, item: NavItem, on_click, **kw):
-        super().__init__(master, corner_radius=T.R_WELL, fg_color="transparent",
-                         height=38, **kw)
+        super().__init__(master, corner_radius=T.R_FIELD, fg_color="transparent",
+                         height=34, **kw)
         self.item = item
         self._on_click = on_click
         self._selected = False
@@ -65,11 +65,11 @@ class NavButton(ctk.CTkFrame):
 
         self.label = ctk.CTkLabel(self, text=item.label, anchor="w",
                                   font=T.F_NAV_ITEM, text_color=T.C_TEXT2)
-        self.label.grid(row=0, column=0, sticky="w", padx=14, pady=8)
+        self.label.grid(row=0, column=0, sticky="w", padx=12, pady=6)
 
         self.count = ctk.CTkLabel(self, text="", font=T.F_TINY,
                                   text_color=T.C_TEXT3)
-        self.count.grid(row=0, column=1, sticky="e", padx=(0, 12))
+        self.count.grid(row=0, column=1, sticky="e", padx=(0, 10))
 
         for widget in (self, self.label, self.count):
             widget.bind("<Button-1>", lambda _: self._on_click(self.item))
@@ -106,7 +106,7 @@ class NavColumn(ctk.CTkFrame):
 
         row = 0
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=row, column=0, sticky="ew", padx=18, pady=(22, 18))
+        header.grid(row=row, column=0, sticky="ew", padx=16, pady=(20, 14))
         ctk.CTkLabel(header, text="KAIRO", font=T.F_LOGO,
                      text_color=T.C_TEXT).pack(side="left")
         ctk.CTkLabel(header, text="回路", font=T.F_SMALL,
@@ -120,10 +120,10 @@ class NavColumn(ctk.CTkFrame):
                 ctk.CTkLabel(self, text=item.group.upper(), anchor="w",
                              font=T.F_NAV_GROUP, text_color=T.C_TEXT3
                              ).grid(row=row, column=0, sticky="ew",
-                                    padx=20, pady=(14, 4))
+                                    padx=18, pady=(12, 3))
                 row += 1
             button = NavButton(self, item, on_click=self._select)
-            button.grid(row=row, column=0, sticky="ew", padx=10, pady=1)
+            button.grid(row=row, column=0, sticky="ew", padx=8, pady=1)
             self.buttons[item.key] = button
             row += 1
 

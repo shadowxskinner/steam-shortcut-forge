@@ -80,17 +80,17 @@ class ChangesPane(ctk.CTkFrame):
         self.grid_rowconfigure(1, weight=1)
 
         head = ctk.CTkFrame(self, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=28, pady=(24, 12))
+        head.grid(row=0, column=0, sticky="ew", padx=26, pady=(18, 10))
         titles = ctk.CTkFrame(head, fg_color="transparent")
         titles.pack(side="left")
         ctk.CTkLabel(titles, text="Changes", font=T.F_WORKSPACE_TITLE,
                      text_color=T.C_TEXT, anchor="w").pack(anchor="w")
         self.count = ctk.CTkLabel(titles, text="", font=T.F_SMALL,
                                   text_color=T.C_TEXT3, anchor="w")
-        self.count.pack(anchor="w", pady=(2, 0))
+        self.count.pack(anchor="w", pady=(1, 0))
 
         self.restore_all_btn = ctk.CTkButton(
-            head, text="Restore all", height=38, corner_radius=T.R_WELL,
+            head, text="Restore all", height=T.H_FIELD, corner_radius=T.R_WELL,
             fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
             font=T.F_BUTTON, command=self._restore_all)
         self.restore_all_btn.pack(side="right")
@@ -101,19 +101,19 @@ class ChangesPane(ctk.CTkFrame):
             command=self._cleanup)
         self.cleanup_btn.pack(side="right", padx=(0, 8))
         self.cancel_btn = ctk.CTkButton(
-            head, text="Cancel", height=38, corner_radius=T.R_WELL,
+            head, text="Cancel", height=T.H_FIELD, corner_radius=T.R_WELL,
             fg_color=T.C_DANGER_BG, hover_color=T.C_DANGER_HOVER,
             text_color=T.C_DANGER, font=T.F_BUTTON, command=self._cancel)
 
         self.list = ctk.CTkScrollableFrame(
             self, fg_color=T.C_PANEL, corner_radius=T.R_CARD,
             scrollbar_fg_color="transparent", scrollbar_button_color=T.C_CARD)
-        self.list.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 8))
+        self.list.grid(row=1, column=0, sticky="nsew", padx=22, pady=(0, 8))
         self.list.grid_columnconfigure(0, weight=1)
 
         self.status = ctk.CTkLabel(self, text="", font=T.F_TINY,
                                    text_color=T.C_TEXT3)
-        self.status.grid(row=2, column=0, sticky="w", padx=28, pady=(0, 18))
+        self.status.grid(row=2, column=0, sticky="w", padx=26, pady=(0, 16))
 
         self.refresh()
 

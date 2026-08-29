@@ -88,18 +88,18 @@ class KairoShell(ctk.CTk):
         content.grid_columnconfigure(0, weight=1)
 
         bar = ctk.CTkFrame(content, fg_color="transparent", height=56)
-        bar.grid(row=0, column=0, sticky="ew", padx=24, pady=(16, 0))
+        bar.grid(row=0, column=0, sticky="ew", padx=26, pady=(14, 0))
         self.match_btn = ctk.CTkButton(
-            bar, text="Auto Match", height=38, width=130,
+            bar, text="Auto Match", height=T.H_FIELD, width=130,
             corner_radius=T.R_WELL, fg_color=T.C_ACCENT,
             hover_color=T.C_ACCENT_HOVER, font=T.F_BUTTON,
             command=self._auto_match)
         self.match_btn.pack(side="right")
         self.cancel_btn = ctk.CTkButton(
-            bar, text="Cancel", height=38, width=110, corner_radius=T.R_WELL,
+            bar, text="Cancel", height=T.H_FIELD, width=110, corner_radius=T.R_WELL,
             fg_color=T.C_DANGER_BG, hover_color=T.C_DANGER_HOVER,
             text_color=T.C_DANGER, font=T.F_BUTTON, command=self._cancel_bulk)
-        ctk.CTkButton(bar, text="Rescan", height=38, width=100,
+        ctk.CTkButton(bar, text="Rescan", height=T.H_FIELD, width=100,
                       corner_radius=T.R_WELL, fg_color=T.C_CARD,
                       hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT2,
                       font=T.F_BUTTON, command=self.rescan
@@ -114,7 +114,7 @@ class KairoShell(ctk.CTk):
 
         self.status = ctk.CTkLabel(content, text="", font=T.F_TINY,
                                    text_color=T.C_TEXT3, anchor="w")
-        self.status.grid(row=2, column=0, sticky="ew", padx=28, pady=(0, 12))
+        self.status.grid(row=2, column=0, sticky="ew", padx=26, pady=(0, 10))
 
     # -- navigation -------------------------------------------------------
 

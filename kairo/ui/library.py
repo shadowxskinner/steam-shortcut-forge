@@ -20,7 +20,8 @@ from kairo.artwork.local import LocalFileSource
 from kairo.models import AppEntry, Artwork
 from kairo.ui import theme as T
 from kairo.ui.context import UIContext
-from kairo.ui.widgets import AppRow, ArtworkTile, IconWell
+from kairo.ui.widgets import (AppRow, ArtworkTile, IconWell, SearchField,
+                              SegmentedPills)
 
 SEARCH_DEBOUNCE_MS = 400
 GRID_GUTTER = 12
@@ -72,7 +73,7 @@ class LibraryPane(ctk.CTkFrame):
         column.grid_columnconfigure(0, weight=1)
 
         head = ctk.CTkFrame(column, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=18, pady=(22, 10))
+        head.grid(row=0, column=0, sticky="ew", padx=16, pady=(20, 10))
         ctk.CTkLabel(head, text=self.provider.label, font=T.F_TITLE,
                      text_color=T.C_TEXT).pack(side="left")
         self.count_pill = ctk.CTkLabel(head, text="0", font=T.F_TINY,
@@ -81,34 +82,25 @@ class LibraryPane(ctk.CTkFrame):
         self.count_pill.pack(side="right")
 
         self.search_var.trace_add("write", lambda *_: self._filter())
-        ctk.CTkEntry(column, textvariable=self.search_var, height=36,
-                     corner_radius=T.R_WELL,
-                     placeholder_text=f"Search {self.provider.noun}…",
-                     font=T.F_BODY, fg_color=T.C_CARD, border_width=1,
-                     border_color=T.C_BORDER
-                     ).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 10))
+        SearchField(column, textvariable=self.search_var,
+                    placeholder=f"Search {self.provider.noun}…"
+                    ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
 
-        chips = ctk.CTkFrame(column, fg_color="transparent")
-        chips.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 8))
-        self.chips = {}
-        for mode, text in (("all", "All"), ("with", "Customized"),
-                           ("without", "Untouched")):
-            button = ctk.CTkButton(
-                chips, text=text, height=26, corner_radius=13,
-                fg_color=T.C_ACCENT_DIM if mode == "all" else "transparent",
-                hover_color=T.C_CARD_HOVER,
-                text_color=T.C_TEXT if mode == "all" else T.C_TEXT3,
-                font=T.F_TINY, border_width=1,
-                border_color=T.C_BORDER_ACCENT if mode == "all" else T.C_BORDER,
-                command=lambda m=mode: self._set_filter(m))
-            button.pack(side="left", padx=(0, 5))
-            self.chips[mode] = button
+        # Same control as the source picker, so filters and sources read as
+        # one design system rather than two.
+        self._filter_labels = {"All": "all", "Customized": "with",
+                               "Untouched": "without"}
+        self.filter_pills = SegmentedPills(
+            column, values=list(self._filter_labels),
+            command=lambda label: self._set_filter(self._filter_labels[label]))
+        self.filter_pills.set("All")
+        self.filter_pills.grid(row=2, column=0, sticky="w", padx=16, pady=(0, 8))
 
         self.list = ctk.CTkScrollableFrame(
             column, fg_color="transparent", corner_radius=0,
             scrollbar_fg_color="transparent", scrollbar_button_color=T.C_CARD,
             scrollbar_button_hover_color=T.C_TEXT3)
-        self.list.grid(row=3, column=0, sticky="nsew", padx=8, pady=(0, 12))
+        self.list.grid(row=3, column=0, sticky="nsew", padx=8, pady=(0, 10))
         self.list.grid_columnconfigure(0, weight=1)
 
     # -- right column -----------------------------------------------------
@@ -120,7 +112,7 @@ class LibraryPane(ctk.CTkFrame):
         space.grid_columnconfigure(0, weight=1)
 
         header = ctk.CTkFrame(space, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=28, pady=(24, 4))
+        header.grid(row=0, column=0, sticky="ew", padx=26, pady=(18, 0))
         titles = ctk.CTkFrame(header, fg_color="transparent")
         titles.pack(side="left", fill="x", expand=True)
         self.title = ctk.CTkLabel(titles, text="Select something",
@@ -129,86 +121,87 @@ class LibraryPane(ctk.CTkFrame):
         self.title.pack(anchor="w")
         self.subtitle = ctk.CTkLabel(titles, text="", font=T.F_SMALL,
                                      text_color=T.C_TEXT3, anchor="w")
-        self.subtitle.pack(anchor="w", pady=(2, 0))
+        self.subtitle.pack(anchor="w", pady=(1, 0))
 
         # Current versus proposed, side by side. Choosing artwork below only
         # proposes it; nothing is written until Apply.
         compare = ctk.CTkFrame(space, fg_color=T.C_PANEL,
                                corner_radius=T.R_CARD)
-        compare.grid(row=1, column=0, sticky="ew", padx=28, pady=(16, 12))
+        compare.grid(row=1, column=0, sticky="ew", padx=26, pady=(10, 10))
         for column_index in (0, 1, 2):
             compare.grid_columnconfigure(column_index, weight=0)
         compare.grid_columnconfigure(3, weight=1)
 
         current_box = ctk.CTkFrame(compare, fg_color="transparent")
-        current_box.grid(row=0, column=0, padx=(20, 14), pady=16)
+        current_box.grid(row=0, column=0, padx=(18, 12), pady=12)
         ctk.CTkLabel(current_box, text="CURRENT", font=T.F_SECTION,
-                     text_color=T.C_TEXT3).pack(anchor="w", pady=(0, 6))
-        self.current_well = IconWell(current_box, size=76)
+                     text_color=T.C_TEXT3).pack(anchor="w", pady=(0, 4))
+        self.current_well = IconWell(current_box, size=66)
         self.current_well.pack()
 
         ctk.CTkLabel(compare, text="→", font=T.F_TITLE, text_color=T.C_TEXT3
                      ).grid(row=0, column=1, padx=4)
 
         proposed_box = ctk.CTkFrame(compare, fg_color="transparent")
-        proposed_box.grid(row=0, column=2, padx=(14, 20), pady=16)
+        proposed_box.grid(row=0, column=2, padx=(12, 18), pady=12)
         ctk.CTkLabel(proposed_box, text="PROPOSED", font=T.F_SECTION,
-                     text_color=T.C_TEXT3).pack(anchor="w", pady=(0, 6))
-        self.proposed_well = IconWell(proposed_box, size=76)
+                     text_color=T.C_TEXT3).pack(anchor="w", pady=(0, 4))
+        self.proposed_well = IconWell(proposed_box, size=66)
         self.proposed_well.pack()
 
         self.proposal_label = ctk.CTkLabel(
             compare, text="Choose artwork below", font=T.F_SMALL,
             text_color=T.C_TEXT3, anchor="w")
-        self.proposal_label.grid(row=0, column=3, sticky="w", padx=(4, 20))
+        self.proposal_label.grid(row=0, column=3, sticky="w", padx=(4, 18))
 
         # Source picker and its search box.
         controls = ctk.CTkFrame(space, fg_color="transparent")
-        controls.grid(row=2, column=0, sticky="ew", padx=28, pady=(0, 10))
-        self.source_selector = ctk.CTkSegmentedButton(
+        controls.grid(row=2, column=0, sticky="ew", padx=26, pady=(0, 8))
+        self.source_selector = SegmentedPills(
             controls, values=[], variable=self.source_var,
-            command=self._on_source_changed,
-            selected_color=T.C_ACCENT, selected_hover_color=T.C_ACCENT_HOVER,
-            unselected_color=T.C_CARD, unselected_hover_color=T.C_CARD_HOVER,
-            text_color=T.C_TEXT, height=30)
+            command=self._on_source_changed)
         self.source_selector.pack(side="left")
-        self.query_entry = ctk.CTkEntry(
-            controls, textvariable=self.query_var, height=30, width=260,
-            corner_radius=T.R_WELL, font=T.F_BODY, fg_color=T.C_CARD,
-            border_width=1, border_color=T.C_BORDER)
-        self.query_entry.bind("<KeyRelease>", self._schedule_query)
-        self.query_entry.bind("<Return>", self._run_query_now)
+        self.query_field = SearchField(controls, textvariable=self.query_var,
+                                       placeholder="Search artwork…", width=300)
+        self.query_field.bind_entry("<KeyRelease>", self._schedule_query)
+        self.query_field.bind_entry("<Return>", self._run_query_now)
 
         self.grid_area = ctk.CTkScrollableFrame(
             space, fg_color=T.C_PANEL, corner_radius=T.R_CARD,
             scrollbar_fg_color="transparent", scrollbar_button_color=T.C_CARD,
             scrollbar_button_hover_color=T.C_TEXT3)
-        self.grid_area.grid(row=3, column=0, sticky="nsew", padx=24, pady=(0, 10))
+        self.grid_area.grid(row=3, column=0, sticky="nsew", padx=22, pady=(0, 10))
         # add="+" is essential: CTkScrollableFrame binds <Configure> on itself
         # to recompute the scrollregion; replacing it stops the wheel working.
         self.grid_area.bind("<Configure>", self._on_resize, add="+")
 
+        # Three tiers, left to right: secondary actions, then a gap, then the
+        # destructive one, then the primary alone on the right.
         bar = ctk.CTkFrame(space, fg_color="transparent")
-        bar.grid(row=4, column=0, sticky="ew", padx=28, pady=(0, 20))
+        bar.grid(row=4, column=0, sticky="ew", padx=26, pady=(0, 18))
         self.browse_btn = ctk.CTkButton(
-            bar, text="Browse local file…", height=40, corner_radius=T.R_WELL,
-            fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
+            bar, text="Browse local file…", height=T.H_ACTION,
+            corner_radius=T.R_WELL, fg_color=T.C_CARD,
+            hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
             font=T.F_BUTTON, command=self._on_browse, state="disabled")
         self.browse_btn.pack(side="left")
         self.restore_btn = ctk.CTkButton(
-            bar, text="Restore original", height=40, corner_radius=T.R_WELL,
-            fg_color=T.C_CARD, hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
+            bar, text="Restore original", height=T.H_ACTION,
+            corner_radius=T.R_WELL, fg_color=T.C_CARD,
+            hover_color=T.C_CARD_HOVER, text_color=T.C_TEXT,
             font=T.F_BUTTON, command=self._on_restore, state="disabled")
         self.restore_btn.pack(side="left", padx=(8, 0))
-        # Destructive, visually separate, and only present where supported.
+        # Held away from the secondary pair so it cannot be hit by momentum.
         self.remove_btn = ctk.CTkButton(
-            bar, text="Remove shortcut", height=40, corner_radius=T.R_WELL,
-            fg_color=T.C_DANGER_BG, hover_color=T.C_DANGER_HOVER,
-            text_color=T.C_DANGER, font=T.F_BUTTON, command=self._on_remove)
+            bar, text="Remove shortcut", height=T.H_ACTION,
+            corner_radius=T.R_WELL, fg_color=T.C_DANGER_BG,
+            hover_color=T.C_DANGER_HOVER, text_color=T.C_DANGER,
+            font=T.F_BUTTON, command=self._on_remove)
         self.apply_btn = ctk.CTkButton(
-            bar, text="Apply", height=40, width=120, corner_radius=T.R_WELL,
-            fg_color=T.C_ACCENT, hover_color=T.C_ACCENT_HOVER,
-            font=T.F_BUTTON, command=self._on_apply, state="disabled")
+            bar, text="Apply", height=T.H_ACTION, width=132,
+            corner_radius=T.R_WELL, fg_color=T.C_ACCENT,
+            hover_color=T.C_ACCENT_HOVER, font=T.F_BUTTON,
+            command=self._on_apply, state="disabled")
         self.apply_btn.pack(side="right")
 
     # -- entries ----------------------------------------------------------
@@ -225,12 +218,6 @@ class LibraryPane(ctk.CTkFrame):
 
     def _set_filter(self, mode: str):
         self._filter_mode = mode
-        for key, button in self.chips.items():
-            active = key == mode
-            button.configure(
-                fg_color=T.C_ACCENT_DIM if active else "transparent",
-                text_color=T.C_TEXT if active else T.C_TEXT3,
-                border_color=T.C_BORDER_ACCENT if active else T.C_BORDER)
         self._filter()
 
     def visible_entries(self) -> list[AppEntry]:
@@ -293,7 +280,7 @@ class LibraryPane(ctk.CTkFrame):
             state=state, text=writer.restore_label if writer else "Restore original")
         if enabled and writer is not None and writer.supports_remove:
             if not self.remove_btn.winfo_ismapped():
-                self.remove_btn.pack(side="left", padx=(8, 0))
+                self.remove_btn.pack(side="left", padx=(32, 0))
             self.remove_btn.configure(text=writer.remove_label, state="normal")
         else:
             self.remove_btn.pack_forget()
@@ -325,9 +312,10 @@ class LibraryPane(ctk.CTkFrame):
         previous = self.source_var.get()
         self._source_labels = {s.label: s.id for s in usable}
         labels = list(self._source_labels)
-        self.source_selector.configure(values=labels)
+        self.source_selector.set_values(labels)
         if previous not in labels:
             self.source_var.set(labels[0] if labels else "")
+            self.source_selector.set(self.source_var.get())
 
         self._refresh_query_row()
 
@@ -342,11 +330,11 @@ class LibraryPane(ctk.CTkFrame):
     def _refresh_query_row(self):
         source = self.source()
         if source is not None and source.needs_query:
-            self.query_entry.configure(placeholder_text=source.query_placeholder)
-            if not self.query_entry.winfo_ismapped():
-                self.query_entry.pack(side="left", padx=(10, 0))
+            self.query_field.configure_placeholder(source.query_placeholder)
+            if not self.query_field.winfo_ismapped():
+                self.query_field.pack(side="left", padx=(10, 0))
         else:
-            self.query_entry.pack_forget()
+            self.query_field.pack_forget()
             self._cancel_query_job()
 
     def _probe_sources(self, entry: AppEntry, sources):

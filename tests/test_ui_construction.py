@@ -316,3 +316,77 @@ def test_classic_window_still_assembles(toolkit, furnished):
 
     app = KairoApp()
     assert app.entries is not None
+
+
+# -- the shared pill control has real behaviour worth pinning ---------------
+
+def test_pills_select_the_first_value_by_default(toolkit, furnished):
+    from kairo.ui.widgets import SegmentedPills
+
+    pills = SegmentedPills(None, values=["A", "B", "C"])
+    assert pills.values() == ["A", "B", "C"]
+    assert pills.get() == "A"
+
+
+def test_pills_report_and_change_selection(toolkit, furnished):
+    from kairo.ui.widgets import SegmentedPills
+
+    chosen = []
+    pills = SegmentedPills(None, values=["A", "B"], command=chosen.append)
+    pills._pick("B")
+    assert pills.get() == "B"
+    assert chosen == ["B"]
+
+
+def test_pills_drive_a_shared_variable(toolkit, furnished):
+    """The source picker and the rest of the pane read the same variable."""
+    import customtkinter as ctk
+    from kairo.ui.widgets import SegmentedPills
+
+    var = ctk.StringVar(value="")
+    pills = SegmentedPills(None, values=["Icon themes", "Iconify"], variable=var)
+    assert var.get() == "Icon themes"
+    pills.set("Iconify")
+    assert var.get() == "Iconify"
+
+
+def test_pills_reselect_when_the_current_value_disappears(toolkit, furnished):
+    """Sources are pruned per application, so the selected one can vanish."""
+    import customtkinter as ctk
+    from kairo.ui.widgets import SegmentedPills
+
+    var = ctk.StringVar(value="")
+    pills = SegmentedPills(None, values=["SteamGridDB", "Icon themes"], variable=var)
+    pills.set("Icon themes")
+    pills.set_values(["SteamGridDB"])
+    assert pills.values() == ["SteamGridDB"]
+    assert var.get() == "SteamGridDB"
+
+
+def test_pills_tolerate_an_empty_set(toolkit, furnished):
+    from kairo.ui.widgets import SegmentedPills
+
+    pills = SegmentedPills(None, values=["A"])
+    pills.set_values([])
+    assert pills.values() == []
+
+
+def test_filter_pills_drive_the_library_filter(toolkit, furnished):
+    from kairo.ledger import Ledger
+    from kairo.providers.registry import default_registry
+    from kairo.artwork.registry import default_registry as artwork_registry
+    from kairo.tasks import ActivityTokens
+    from kairo.ui.context import UIContext
+    from kairo.ui.library import LibraryPane
+
+    registry = default_registry()
+    ctx = UIContext(providers=registry, sources=artwork_registry({}), config={},
+                    ledger=Ledger().load(), tokens=ActivityTokens())
+    pane = LibraryPane(None, registry.get("steam"), ctx)
+
+    assert len(pane.visible_entries()) == 2
+    pane.filter_pills._pick("Customized")
+    assert pane._filter_mode == "with"
+    assert pane.visible_entries() == []
+    pane.filter_pills._pick("All")
+    assert len(pane.visible_entries()) == 2

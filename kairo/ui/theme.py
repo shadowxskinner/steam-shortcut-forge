@@ -60,20 +60,32 @@ C_CARD_SELECTED = C_ACCENT
 # Geometry
 R_CARD = 16
 R_WELL = 12
+R_FIELD = 10
 R_PILL = 999
-THUMB_SIZE = 64
-TILE_SIZE = 128
-ROW_HEIGHT = 76
+THUMB_SIZE = 56
+TILE_SIZE = 124
+ROW_HEIGHT = 68
 
-# Column widths for the three-column shell.
-W_NAV = 232
-W_LIST = 320
+# Column widths. The middle column carries the longest strings in the
+# application - full game titles - so it gets the space, taken from the
+# navigation, which only ever holds short labels.
+W_NAV = 206
+W_LIST = 398
+
+#: Characters before an entry name is ellipsized in the middle column.
+LIST_NAME_CHARS = 34
+
+# Control heights, so fields and pills line up wherever they appear.
+H_FIELD = 36
+H_PILL = 30
+H_ACTION = 40
 
 # Fonts specific to the shell
 F_NAV_GROUP = ("Inter", 10, "bold")
 F_NAV_ITEM = ("Inter", 13)
-F_WORKSPACE_TITLE = ("Inter", 26, "bold")
-F_SECTION = ("Inter", 11, "bold")
+F_WORKSPACE_TITLE = ("Inter", 24, "bold")
+F_SECTION = ("Inter", 10, "bold")
+F_PILL = ("Inter", 11, "bold")
 
 
 def apply() -> None:
