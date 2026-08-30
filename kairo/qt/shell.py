@@ -152,6 +152,7 @@ class KairoWindow(QMainWindow):
         sub = QLabel("回路")
         sub.setObjectName("logoSub")
         header_layout.addWidget(logo, 0, Qt.AlignVCenter)
+        header_layout.addSpacing(T.S1)
         header_layout.addWidget(sub, 0, Qt.AlignVCenter)
         header_layout.addStretch(1)
         layout.addWidget(header)

@@ -129,6 +129,7 @@ R_PILL = 999
 # resort, and never goes above 600. The selected item's name is the loudest
 # thing on screen by a wide margin, and everything else steps down from there.
 FS_LOGO = 14
+FS_LOGO_MARK = 19            # 回路, set larger than the wordmark beside it
 FS_TITLE = 28
 FS_PANE = 15
 FS_ROW = 13
@@ -214,8 +215,11 @@ def stylesheet(glass=None) -> str:
     QLabel            {{ background: transparent; color: {T.C_TEXT2}; }}
     QLabel#logo       {{ color: {T.C_TEXT}; font-size: {FS_LOGO}px;
                          font-weight: {WT_SEMI}; letter-spacing: 2.5px; }}
-    QLabel#logoSub    {{ color: {T.C_TEXT3}; font-size: {FS_META}px;
-                         letter-spacing: 1px; }}
+    /* The mark carries the identity as much as the wordmark does, so it is
+       set larger and given room, but stays quiet enough not to compete. */
+    QLabel#logoSub    {{ color: {rgba(T.C_TEXT2, 0.62)};
+                         font-size: {FS_LOGO_MARK}px;
+                         letter-spacing: 2px; }}
     QLabel#title      {{ color: {T.C_TEXT}; font-size: {FS_TITLE}px;
                          font-weight: {WT_SEMI}; letter-spacing: -0.4px; }}
     QLabel#pane       {{ color: {T.C_TEXT}; font-size: {FS_PANE}px;

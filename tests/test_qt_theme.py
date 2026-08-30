@@ -155,3 +155,13 @@ def test_a_translucent_surface_is_never_painted_twice():
             if len(uses) > 1:
                 offenders.append(f"{path.name}: {surface} x{len(uses)}")
     assert not offenders, offenders
+
+
+def test_the_mark_is_set_larger_than_the_wordmark():
+    """回路 is half the logotype, not a footnote to it."""
+    from kairo.qt import theme as Q
+
+    assert Q.FS_LOGO_MARK > Q.FS_LOGO
+    sheet = Q.stylesheet("frosted")
+    block = sheet.split("QLabel#logoSub")[1].split("}")[0]
+    assert f"font-size: {Q.FS_LOGO_MARK}px" in block
