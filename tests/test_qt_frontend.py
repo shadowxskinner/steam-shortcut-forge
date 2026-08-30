@@ -766,3 +766,100 @@ def test_closing_waits_for_work_but_not_forever():
     assert "CLOSE_DRAIN_SECONDS" in source
     finish = source.split("def _finish_close")[1]
     assert "_close_deadline" in finish, "the drain has no deadline"
+
+
+# -- one asset, several resolutions -----------------------------------------
+
+def _ico(sizes):
+    """A .ico holding several frames, smallest first, as SteamGridDB serves.
+
+    Built with QImage alone: QPainter and QFont need a QGuiApplication, and
+    this must stay runnable on a machine with no display.
+    """
+    import struct
+
+    from PySide6.QtCore import QBuffer, QByteArray
+    from PySide6.QtGui import QColor, QImage
+
+    frames = []
+    for index, size in enumerate(sizes):
+        img = QImage(size, size, QImage.Format_ARGB32)
+        img.fill(QColor(40 * (index + 1) % 256, 90, 160))
+        blob = QByteArray()
+        buffer = QBuffer(blob)
+        buffer.open(QBuffer.WriteOnly)
+        img.save(buffer, "PNG")
+        frames.append((size, bytes(blob.data())))
+
+    out = struct.pack("<HHH", 0, 1, len(frames))
+    offset = 6 + 16 * len(frames)
+    entries = body = b""
+    for size, blob in frames:
+        entries += struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0,
+                               1, 32, len(blob), offset)
+        body += blob
+        offset += len(blob)
+    return out + entries + body
+
+
+def test_the_biggest_frame_is_the_one_that_gets_decoded():
+    """QPixmap.loadFromData returns the *first* frame, which is the smallest.
+
+    SteamGridDB serves one asset at several resolutions in a single .ico -
+    a 256px icon ships alongside 128, 64, 48, 32 and 16 - so the browser was
+    rendering a 16px thumbnail enlarged into a 116px tile. The reported
+    dimensions were never wrong; nobody was decoding the frame they named.
+    """
+    from kairo.qt import images
+
+    assert images._largest_frame(_ico([16, 32, 64, 128, 256])).width() == 256
+
+
+def test_a_single_frame_image_is_unaffected():
+    from kairo.qt import images
+
+    assert images._largest_frame(_ico([256])).width() == 256
+
+
+def test_undecodable_bytes_yield_nothing():
+    from kairo.qt import images
+
+    assert images._largest_frame(b"not an image at all") is None
+
+
+def test_the_floor_is_applied_to_the_frame_that_decoded():
+    """The API's dimensions describe the asset; the frame describes the pixels.
+
+    An .ico can advertise 256 and contain nothing above 64. Filtering on the
+    reported size alone let those through, so the same floor is applied again
+    to what actually arrived - the one measurement that cannot be wrong.
+    """
+    from kairo.qt import images
+    from kairo.qt.library import MIN_USABLE_EDGE
+
+    assert images.native_edge(_ico([16, 32, 64])) < MIN_USABLE_EDGE
+    assert images.native_edge(_ico([16, 32, 256])) >= MIN_USABLE_EDGE
+    assert images.native_edge(b"not an image") == 0
+
+
+def test_a_dropped_tile_does_not_leave_a_hole():
+    """Removing a widget from a QGridLayout leaves its cell empty."""
+    source = (QT_DIR / "library.py").read_text()
+    drop = source.split("def _drop_tile")[1].split("\n    def ")[0]
+    assert "_reflow_tiles" in drop
+    reflow = source.split("def _reflow_tiles")[1].split("\n    def ")[0]
+    assert "self.grid.addWidget(tile" in reflow
+    assert "_grid_note" in reflow, "an emptied grid must say so"
+
+
+def test_dropping_the_chosen_tile_clears_the_proposal():
+    """Applying artwork that was just removed from the grid is not a thing."""
+    source = (QT_DIR / "library.py").read_text()
+    drop = source.split("def _drop_tile")[1].split("\n    def ")[0]
+    assert "self._clear_proposal()" in drop
+
+
+def test_clearing_the_proposal_also_withdraws_apply():
+    source = (QT_DIR / "library.py").read_text()
+    clear = source.split("def _clear_proposal")[1].split("\n    def ")[0]
+    assert "self.apply_btn.setEnabled(False)" in clear

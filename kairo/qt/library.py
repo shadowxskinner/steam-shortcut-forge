@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout,
 from kairo import actions
 from kairo.artwork.local import SOURCE_ID as LOCAL_SOURCE_ID
 
+from kairo.qt import images
 from kairo.qt import theme as Q
 from kairo.qt import work
 from kairo.qt.widgets import ArtworkTile, EntryRow, IconWell, Pills
@@ -29,6 +30,12 @@ FILTERS = {"All": "all", "Customized": "with", "Untouched": "without"}
 SEARCH_DEBOUNCE_MS = 250
 ACTIVITY_ARTWORK = "artwork"
 ACTIVITY_APPLY = "apply"
+
+#: Nothing below this ever fills a tile without being enlarged, so it is not
+#: offered. The source filters on the dimensions the API reports; this is the
+#: same floor applied to the frame that actually decoded, which is the only
+#: measurement that cannot be wrong.
+MIN_USABLE_EDGE = 128
 
 
 class LibraryPane(QWidget):
@@ -649,10 +656,13 @@ class LibraryPane(QWidget):
 
         work.submit(search, on_done=arrived, on_failed=failed)
 
+    def _columns(self) -> int:
+        return max(1, self.grid_scroll.viewport().width()
+                   // (ArtworkTile.WIDTH + T.S1))
+
     def _build_tiles(self, results) -> None:
         self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        columns = max(1, self.grid_scroll.viewport().width()
-                      // (ArtworkTile.WIDTH + T.S1))
+        columns = self._columns()
         for index, art in enumerate(results):
             tile = ArtworkTile(art, self.grid_holder)
             tile.picked.connect(self._propose)
@@ -686,8 +696,35 @@ class LibraryPane(QWidget):
     def _fill_tile(self, index: int, data: object, key: str) -> None:
         if self.selected is None or self.selected.entry.key != key:
             return
-        if 0 <= index < len(self.tiles):
-            self.tiles[index].set_image(data)
+        if not (0 <= index < len(self.tiles)):
+            return
+        tile = self.tiles[index]
+        if images.native_edge(data) < MIN_USABLE_EDGE:
+            # Too small to show without enlarging it. Nobody would pick it.
+            self._drop_tile(tile)
+            return
+        tile.set_image(data)
+
+    def _drop_tile(self, tile) -> None:
+        """Remove a tile and close the hole it leaves behind."""
+        if tile not in self.tiles:
+            return
+        if tile is self.chosen_tile:
+            self._clear_proposal()
+        self.tiles.remove(tile)
+        self.grid.removeWidget(tile)
+        tile.setParent(None)
+        tile.deleteLater()
+        self._reflow_tiles()
+
+    def _reflow_tiles(self) -> None:
+        """Re-seat the survivors so the grid has no gaps."""
+        columns = self._columns()
+        for position, tile in enumerate(self.tiles):
+            self.grid.removeWidget(tile)
+            self.grid.addWidget(tile, position // columns, position % columns)
+        if not self.tiles:
+            self._grid_note("nothing here is large enough to use")
 
     # -- proposing ---------------------------------------------------------
 
@@ -701,6 +738,9 @@ class LibraryPane(QWidget):
             self.chosen_tile = None
         self.proposed_well.show_placeholder("—")
         self.proposal.setText("Choose artwork below")
+        # Nothing proposed, nothing to apply — including when the tile that
+        # was chosen has just been dropped for being too small.
+        self.apply_btn.setEnabled(False)
 
     def _propose(self, art) -> None:
         if self.selected is None:

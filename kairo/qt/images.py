@@ -12,8 +12,8 @@ import hashlib
 from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QBuffer, QByteArray, Qt
+from PySide6.QtGui import QImageReader, QPixmap
 
 try:
     from PySide6.QtSvg import QSvgRenderer
@@ -47,6 +47,53 @@ def _render_svg(data: bytes, size: int):
     renderer.render(painter)
     painter.end()
     return pixmap
+
+
+def _largest_frame(data: bytes):
+    """Decode the biggest image in a container, not the first one.
+
+    A .ico holds several resolutions in one file, and SteamGridDB serves
+    exactly that: one asset, many sizes. QPixmap.loadFromData returns the
+    first directory entry, which is conventionally the smallest — so a 256px
+    icon arrived as a 32px thumbnail and was then enlarged into the tile.
+    That, and not the reported dimensions, is why the browser looked blurry:
+    the metadata was telling the truth about a frame nobody was decoding.
+    """
+    payload = QByteArray(data)          # must outlive the reader
+    buffer = QBuffer(payload)
+    buffer.open(QBuffer.ReadOnly)
+    reader = QImageReader(buffer)
+    reader.setDecideFormatFromContent(True)
+    best = None
+    while True:
+        frame = reader.read()
+        if frame.isNull():
+            break
+        if best is None or frame.width() * frame.height() > best.width() * best.height():
+            best = frame
+        if not reader.jumpToNextImage():
+            break
+    return best
+
+
+def native_edge(data: bytes) -> int:
+    """The shorter edge of the biggest frame in the file, or 0 if unreadable.
+
+    The API's dimensions describe the asset; this describes the pixels that
+    actually arrived, which is the only number worth filtering on.
+    """
+    frame = _largest_frame(data)
+    if frame is None or frame.isNull():
+        return 0
+    return min(frame.width(), frame.height())
+
+
+def _from_data(data: bytes):
+    frame = _largest_frame(data)
+    if frame is not None and not frame.isNull():
+        return QPixmap.fromImage(frame)
+    loaded = QPixmap()                  # a format QImageReader would not walk
+    return loaded if loaded.loadFromData(data) else None
 
 
 def _scale(pixmap, size: int):
@@ -83,15 +130,12 @@ def load(size: int, *, path=None, data: bytes | None = None):
             if path.suffix.lower() == ".svg":
                 pixmap = _render_svg(path.read_bytes(), size)
             else:
-                loaded = QPixmap(str(path))
-                pixmap = _scale(loaded, size)
+                pixmap = _scale(_from_data(path.read_bytes()), size)
         elif data is not None:
             if _looks_svg(data):
                 pixmap = _render_svg(data, size)
             else:
-                loaded = QPixmap()
-                if loaded.loadFromData(data):
-                    pixmap = _scale(loaded, size)
+                pixmap = _scale(_from_data(data), size)
     except Exception:
         return None
 
