@@ -252,15 +252,56 @@ def test_choosing_artwork_only_proposes_it():
         assert writing not in propose
 
 
-def test_the_milestone_writes_nothing_at_all():
-    """No Qt module may call an action that touches a launcher entry."""
+# -- how the shell is allowed to write --------------------------------------
+#
+# The read-only guard has served its purpose and is replaced, not deleted:
+# writing is now permitted, but only through the one door that owns the
+# marker checks, the ledger and the atomic write.
+
+def test_the_shell_never_writes_a_launcher_file_itself():
+    """Every write goes through kairo.actions, never a writer or a path."""
     for path in MODULES:
         source = path.read_text()
-        for writing in ("actions.apply_icon", "actions.fetch_and_apply",
-                        "actions.restore_entry", "actions.remove_entry",
-                        "actions.restore_all", "actions.apply_many",
-                        "config_store.save", "housekeeping.sweep"):
-            assert writing not in source, f"{path.name} calls {writing}"
+        for backdoor in ("writer.apply", "writer.restore(", "writer.remove(",
+                         "os.replace", "shutil.copyfile", "write_text(",
+                         "write_bytes(", "unlink("):
+            assert backdoor not in source, f"{path.name} uses {backdoor}"
+
+
+def test_every_write_records_itself_in_the_ledger():
+    """An unrecorded change cannot be undone from the Changes view."""
+    source = (QT_DIR / "library.py").read_text()
+    for call in ("actions.fetch_and_apply(", "actions.restore_entry(",
+                 "actions.remove_entry("):
+        assert call in source, f"{call} is not wired"
+        tail = source.split(call)[1].split(")")[0]
+        assert "ledger=self.ctx.ledger" in tail, f"{call} skips the ledger"
+
+
+def test_applying_runs_off_the_ui_thread_and_can_be_cancelled():
+    source = (QT_DIR / "library.py").read_text()
+    apply_body = source.split("def _apply")[1].split("def _restore")[0]
+    assert "work.submit(" in apply_body, "a network fetch must not block the UI"
+    assert "self.tokens.start(" in apply_body
+    assert "token=token" in apply_body
+
+
+def test_only_the_destructive_action_asks_first():
+    """Apply and restore are recoverable from Changes; deleting is not."""
+    source = (QT_DIR / "library.py").read_text()
+    remove = source.split("def _remove")[1].split("def _browse")[0]
+    assert "QMessageBox" in remove
+    assert "QMessageBox.Cancel" in remove, "cancel must be the default"
+    for safe in ("def _apply", "def _restore"):
+        body = source.split(safe)[1].split("\n    def ")[0]
+        assert "QMessageBox" not in body, f"{safe} should not interrupt"
+
+
+def test_apply_is_offered_only_once_there_is_something_to_apply():
+    source = (QT_DIR / "library.py").read_text()
+    assert "self.apply_btn.setEnabled(False)" in source
+    propose = source.split("def _propose")[1].split("\n    def ")[0]
+    assert "self.apply_btn.setEnabled(True)" in propose
 
 
 # -- tuning controls that actually reach the user ---------------------------
@@ -475,7 +516,11 @@ def test_qt_jobs_are_destroyed_on_the_gui_thread():
     assert "setAutoDelete(False)" in source
     assert "Qt.QueuedConnection" in source
     assert "QThreadPool.globalInstance()" not in source
-    assert "finally:" in source and "signals.finished.emit()" in source
+    # The finished signal must fire from finally, whatever run() did, or the
+    # job is never released. It goes through _emit now so a dead receiver
+    # cannot strand it either.
+    assert "finally:" in source
+    assert "self._emit(self.signals.finished)" in source
 
 
 # -- the worker lifecycle, for real -----------------------------------------
@@ -691,3 +736,33 @@ def test_the_fixed_appearance_is_still_applied():
     assert "setStyleSheet(Q.stylesheet(self.glass))" in shell
     frosted = Q.PRESETS[Q.DEFAULT_PRESET]
     assert (frosted.workspace, frosted.nav, frosted.panel) == (0.78, 0.97, 0.95)
+
+
+def test_a_dead_receiver_never_strands_a_job(qt_core, monkeypatch):
+    """Emitting from a deleted sender raises rather than being dropped.
+
+    When the application tears down mid-lookup, that RuntimeError used to
+    escape run() and take the finished signal with it, so the job was never
+    released and is_idle() stayed false — a close that waits on it would then
+    wait forever.
+    """
+    from kairo.qt import work
+
+    class DeadSignal:
+        def emit(self, *args):
+            raise RuntimeError("Signal source has been deleted")
+
+    job = work.submit(lambda: "value")
+    monkeypatch.setattr(job.signals, "done", DeadSignal(), raising=False)
+    monkeypatch.setattr(job.signals, "finished", DeadSignal(), raising=False)
+    job.run()                      # as the pool thread would call it
+
+    assert job not in work._LIVE_JOBS, "a stranded job blocks every close"
+
+
+def test_closing_waits_for_work_but_not_forever():
+    """A window must always be closable."""
+    source = (QT_DIR / "shell.py").read_text()
+    assert "CLOSE_DRAIN_SECONDS" in source
+    finish = source.split("def _finish_close")[1]
+    assert "_close_deadline" in finish, "the drain has no deadline"

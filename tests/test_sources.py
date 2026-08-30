@@ -242,3 +242,56 @@ def test_one_failing_asset_class_does_not_lose_the_others(monkeypatch):
     monkeypatch.setattr(source, "_api_get", fake_get)
     found = source.find(ArtQuery(entry=entry(), steam_appid="42700"))
     assert [a.kind for a in found] == ["icon"]
+
+
+def test_an_upscaled_asset_is_dropped_when_something_sharp_exists(monkeypatch):
+    """A 32px icon enlarged into a 116px tile arrives as a smear."""
+    from kairo.artwork import steamgriddb as sgdb
+    from kairo.models import ArtQuery
+
+    source = sgdb.SteamGridDBSource(api_key="k")
+    monkeypatch.setattr(source, "game_id", lambda appid: 7)
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+
+    def fake_get(path):
+        if path.startswith("/icons"):
+            return {"total": 2, "data": [
+                {"id": 1, "url": "https://e.invalid/small.png",
+                 "width": 32, "height": 32, "style": "custom"},
+                {"id": 2, "url": "https://e.invalid/big.png",
+                 "width": 512, "height": 512, "style": "official"}]}
+        return {"data": [], "total": 0}
+
+    monkeypatch.setattr(source, "_api_get", fake_get)
+    found = source.find(ArtQuery(entry=entry(), steam_appid="42700"))
+    assert [a.width for a in found] == [512]
+
+
+def test_a_blurry_icon_still_beats_an_empty_browser(monkeypatch):
+    """Dropped only when the game has something better to offer."""
+    from kairo.artwork import steamgriddb as sgdb
+    from kairo.models import ArtQuery
+
+    source = sgdb.SteamGridDBSource(api_key="k")
+    monkeypatch.setattr(source, "game_id", lambda appid: 7)
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+
+    def fake_get(path):
+        if path.startswith("/icons"):
+            return {"total": 1, "data": [
+                {"id": 1, "url": "https://e.invalid/small.png",
+                 "width": 32, "height": 32, "style": "custom"}]}
+        return {"data": [], "total": 0}
+
+    monkeypatch.setattr(source, "_api_get", fake_get)
+    found = source.find(ArtQuery(entry=entry(), steam_appid="42700"))
+    assert [a.width for a in found] == [32]
+
+
+def test_unknown_dimensions_are_never_treated_as_blurry():
+    """Not every source reports a size; absence is not evidence of smallness."""
+    from kairo.artwork.steamgriddb import _sharp
+    from kairo.models import Artwork
+
+    unknown = Artwork(id="u", source_id="steamgriddb", width=0, height=0)
+    assert _sharp(unknown) is True

@@ -9,10 +9,15 @@ wired to it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
-                               QLineEdit, QPushButton, QScrollArea,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+                               QLabel, QLineEdit, QMessageBox, QPushButton,
+                               QScrollArea, QVBoxLayout, QWidget)
+
+from kairo import actions
+from kairo.artwork.local import SOURCE_ID as LOCAL_SOURCE_ID
 
 from kairo.qt import theme as Q
 from kairo.qt import work
@@ -23,6 +28,7 @@ from kairo.ui import theme as T
 FILTERS = {"All": "all", "Customized": "with", "Untouched": "without"}
 SEARCH_DEBOUNCE_MS = 250
 ACTIVITY_ARTWORK = "artwork"
+ACTIVITY_APPLY = "apply"
 
 
 class LibraryPane(QWidget):
@@ -253,9 +259,12 @@ class LibraryPane(QWidget):
         for button in (self.browse_btn, self.restore_btn, self.remove_btn,
                        self.apply_btn):
             button.setFixedHeight(Q.H_BUTTON)
-            # Read-only milestone: the layout is being judged, not the wiring.
-            button.setEnabled(False)
-            button.setToolTip("Not wired yet — this milestone is read-only")
+        self.browse_btn.clicked.connect(lambda _c: self._browse())
+        self.restore_btn.clicked.connect(lambda _c: self._restore())
+        self.remove_btn.clicked.connect(lambda _c: self._remove())
+        self.apply_btn.clicked.connect(lambda _c: self._apply())
+        # Apply needs something to apply; the rest need a selected entry.
+        self.apply_btn.setEnabled(False)
         row.addWidget(self.browse_btn)
         row.addWidget(self.restore_btn)
         row.addWidget(self.remove_btn)
@@ -290,6 +299,105 @@ class LibraryPane(QWidget):
         self.remove_btn.setVisible(supports_remove)
         if supports_remove:
             self.remove_btn.setText(writer.remove_label)
+
+    # -- writing -----------------------------------------------------------
+    #
+    # Every one of these goes through kairo.actions, which owns the marker
+    # checks, the ledger and the atomic write. Nothing here touches a launcher
+    # file directly, and nothing here decides whether an operation is allowed:
+    # the writer does, and it raises with a reason when it is not.
+
+    def _busy(self, busy: bool, verb: str = "") -> None:
+        for button in (self.browse_btn, self.restore_btn, self.remove_btn,
+                       self.apply_btn):
+            button.setEnabled(not busy)
+        if busy and verb:
+            self.proposal.setText(f"{verb}…")
+
+    def _finished(self, message: str) -> None:
+        self._busy(False)
+        self.proposal.setText(message)
+        self.apply_btn.setEnabled(self.proposed is not None)
+        self.rescan()
+        self.changed.emit()
+
+    def _failed(self, message: str) -> None:
+        self._busy(False)
+        self.apply_btn.setEnabled(self.proposed is not None)
+        self.proposal.setText(message)
+
+    def _apply(self) -> None:
+        if self.selected is None or self.proposed is None:
+            return
+        entry, art = self.selected.entry, self.proposed
+        source = self.ctx.sources.get(art.source_id)
+        if source is None:
+            self._failed("that artwork's source is no longer available")
+            return
+        token = self.tokens.start(ACTIVITY_APPLY)
+        self._busy(True, "Applying")
+
+        def run():
+            return actions.fetch_and_apply(entry, self.provider, source, art,
+                                           ledger=self.ctx.ledger, token=token)
+
+        work.submit(run,
+                    on_done=lambda _path: self._finished(f"applied to {entry.name}"),
+                    on_failed=self._failed)
+
+    def _restore(self) -> None:
+        if self.selected is None:
+            return
+        entry = self.selected.entry
+        self._busy(True, self.restore_btn.text())
+
+        def run():
+            actions.restore_entry(entry, self.provider, ledger=self.ctx.ledger)
+
+        work.submit(run,
+                    on_done=lambda _r: self._finished(f"restored {entry.name}"),
+                    on_failed=self._failed)
+
+    def _remove(self) -> None:
+        """The destructive one, and the only action that asks first."""
+        if self.selected is None:
+            return
+        entry = self.selected.entry
+        confirm = QMessageBox(self)
+        confirm.setIcon(QMessageBox.Warning)
+        confirm.setWindowTitle(self.remove_btn.text())
+        confirm.setText(f"{self.remove_btn.text()} for {entry.name}?")
+        confirm.setInformativeText(
+            "This deletes the launcher entry Kairo created. Artwork you "
+            "applied to other applications is unaffected.")
+        confirm.setStandardButtons(QMessageBox.Cancel | QMessageBox.Yes)
+        confirm.setDefaultButton(QMessageBox.Cancel)
+        if confirm.exec() != QMessageBox.Yes:
+            return
+        self._busy(True, self.remove_btn.text())
+
+        def run():
+            actions.remove_entry(entry, self.provider, ledger=self.ctx.ledger)
+
+        work.submit(run,
+                    on_done=lambda _r: self._finished(f"removed {entry.name}"),
+                    on_failed=self._failed)
+
+    def _browse(self) -> None:
+        """A file on disk is just another artwork source."""
+        if self.selected is None:
+            return
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Choose an icon", str(Path.home()),
+            "Images (*.png *.svg *.ico *.xpm *.jpg *.jpeg);;All files (*)")
+        if not path:
+            return
+        source = self.ctx.sources.get(LOCAL_SOURCE_ID)
+        if source is None:
+            self._failed("the local-file source is not registered")
+            return
+        art = source.artwork_for(Path(path))
+        self._propose(art)
 
     # -- entries -----------------------------------------------------------
 
@@ -605,7 +713,8 @@ class LibraryPane(QWidget):
                 self.chosen_tile = tile
                 break
         label = art.label or art.name or "selected artwork"
-        self.proposal.setText(f"{label}  ·  Apply is not wired in this milestone")
+        self.proposal.setText(f"{label}  ·  ready to apply")
+        self.apply_btn.setEnabled(True)
 
         source = self.ctx.sources.get(art.source_id)
         if source is None:

@@ -59,16 +59,34 @@ class Job(QRunnable):
         # on the pool thread and race Shiboken's GUI-thread reference handling.
         self.setAutoDelete(False)
 
+    def _emit(self, signal, *args) -> bool:
+        """Emit unless the receiving QObject is already gone.
+
+        Qt drops a queued signal whose receiver has been destroyed, but
+        emitting from a *deleted sender* raises RuntimeError instead. That
+        happens when the application tears down while a lookup is still in
+        flight, and it used to escape run() - taking the finished signal with
+        it, so the job was never released and is_idle() stayed false forever.
+        """
+        try:
+            signal.emit(*args)
+            return True
+        except RuntimeError:
+            return False
+
     @Slot()
     def run(self):
         try:
             result = self._function(*self._args, **self._kwargs)
         except Exception as exc:
-            self.signals.failed.emit(str(exc))
+            self._emit(self.signals.failed, str(exc))
         else:
-            self.signals.done.emit(result)
+            self._emit(self.signals.done, result)
         finally:
-            self.signals.finished.emit()
+            if not self._emit(self.signals.finished):
+                # No GUI thread left to release this on. Drop it here so a
+                # close waiting on is_idle() cannot wait forever.
+                _LIVE_JOBS.discard(self)
 
 
 def _release(job: Job) -> None:

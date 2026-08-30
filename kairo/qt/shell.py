@@ -11,6 +11,8 @@ the real backend; nothing writes to a launcher entry.
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMainWindow,
                                QStackedWidget, QVBoxLayout,
@@ -31,6 +33,9 @@ from kairo.qt.settings import SettingsPane
 from kairo.qt.widgets import NavButton
 from kairo.tasks import ActivityTokens
 from kairo.ui import theme as T
+
+#: A close waits this long for artwork work to finish, then goes anyway.
+CLOSE_DRAIN_SECONDS = 5.0
 
 
 class Context:
@@ -78,6 +83,7 @@ class KairoWindow(QMainWindow):
         self._close_timer = QTimer(self)
         self._close_timer.setInterval(50)
         self._close_timer.timeout.connect(self._finish_close)
+        self._close_deadline = 0.0
         self._blur_resize_timer = QTimer(self)
         self._blur_resize_timer.setSingleShot(True)
         self._blur_resize_timer.setInterval(80)
@@ -180,6 +186,8 @@ class KairoWindow(QMainWindow):
             item = next(i for i in self.items if i.key == key)
             pane = LibraryPane(item.provider, self.ctx)
             pane.rescan_requested.connect(self.rescan)
+            # A write in one pane changes what Changes has to show.
+            pane.changed.connect(self._refresh_changes)
         self.panes[key] = pane
         self.stack.addWidget(pane)
         return pane
@@ -190,6 +198,11 @@ class KairoWindow(QMainWindow):
         for button_key, button in self.buttons.items():
             button.setChecked(button_key == key)
         if hasattr(pane, "refresh"):
+            pane.refresh()
+
+    def _refresh_changes(self) -> None:
+        pane = self.panes.get(nav.VIEW_CHANGES)
+        if pane is not None and hasattr(pane, "refresh"):
             pane.refresh()
 
     def rescan(self) -> None:
@@ -251,6 +264,9 @@ class KairoWindow(QMainWindow):
         self.tokens.cancel_all()
         if not work.is_idle():
             self._draining = True
+            # Bounded: a window must always be closable. Waiting is a courtesy
+            # to work in flight, not a condition of being allowed to quit.
+            self._close_deadline = time.monotonic() + CLOSE_DRAIN_SECONDS
             self.hide()
             self._close_timer.start()
             event.ignore()
@@ -260,7 +276,9 @@ class KairoWindow(QMainWindow):
         super().closeEvent(event)
 
     def _finish_close(self) -> None:
-        if self._draining and work.is_idle():
+        if not self._draining:
+            return
+        if work.is_idle() or time.monotonic() >= self._close_deadline:
             self._draining = False
             self._close_timer.stop()
             self.close()

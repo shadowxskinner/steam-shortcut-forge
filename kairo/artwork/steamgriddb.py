@@ -35,9 +35,17 @@ LOGO_MAX_ASPECT = 2.0
 GRID_SQUARE_DIMENSIONS = "512x512,1024x1024"
 
 # Below this an asset is being enlarged to fill a tile rather than fitted into
-# one. Still offered - a small official icon may be exactly what you want -
-# but never ranked above something that will actually look sharp.
+# one, and it arrives as a smear. Dropped rather than merely demoted - but
+# only when the game has something sharp to show instead, because a blurry
+# icon still beats an empty browser.
 SHARP_MIN_EDGE = 128
+
+
+def _sharp(art: Artwork) -> bool:
+    """False only when the dimensions are known and too small to fill a tile."""
+    if not art.width or not art.height:
+        return True                     # unknown - let the user judge the tile
+    return min(art.width, art.height) >= SHARP_MIN_EDGE
 
 
 def _fits_as_icon(width: int, height: int) -> bool:
@@ -198,7 +206,8 @@ class SteamGridDBSource(ArtworkSource):
             assets += [a for a in extras if _fits_as_icon(a.width, a.height)]
 
         assets.sort(key=_rank, reverse=True)
-        return assets
+        sharp = [a for a in assets if _sharp(a)]
+        return sharp or assets
 
     def best_match(self, query: ArtQuery) -> Suggestion | None:
         """Highest confidence available anywhere in Kairo.
