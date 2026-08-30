@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel,
                                QPushButton, QVBoxLayout, QWidget)
 
 from kairo.qt import images
+from kairo.qt import theme as Q
 from kairo.ui import theme as T
 
 
@@ -21,7 +22,7 @@ from kairo.ui import theme as T
 # Navigation icons, drawn
 # ---------------------------------------------------------------------------
 
-def nav_pixmap(kind: str, colour: str, size: int = 18) -> QPixmap:
+def nav_pixmap(kind: str, colour: str, size: int = 20) -> QPixmap:
     """A small monochrome pictogram.
 
     Drawn with QPainter for the same reason the Tk shell drew them on a canvas:
@@ -73,6 +74,8 @@ class NavButton(QPushButton):
         self.key = key
         self._icon = icon
         self.setObjectName("nav")
+        self.setFixedHeight(Q.H_NAV_ITEM)
+        self.setIconSize(QSize(20, 20))
         self.setCheckable(True)
         self.setAutoExclusive(False)
         self.setCursor(Qt.PointingHandCursor)
@@ -204,18 +207,18 @@ class EntryRow(QFrame):
         self.entry = None
         self._selected = False
         self.setObjectName("row")
-        self.setFixedHeight(T.H_ROW)
+        self.setFixedHeight(Q.H_ROW)
         self.setCursor(Qt.PointingHandCursor)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(T.S3, T.S2, T.S3, T.S2)
+        layout.setContentsMargins(T.S3, T.S2, T.S4, T.S2)
         layout.setSpacing(T.S3)
 
-        self.well = IconWell(T.THUMB_SIZE, self)
+        self.well = IconWell(Q.WELL_ROW, self)
         layout.addWidget(self.well)
 
         text = QVBoxLayout()
-        text.setSpacing(1)
+        text.setSpacing(3)
         self.name = QLabel("", self)
         self.name.setObjectName("rowName")
         self.meta = QLabel("", self)
@@ -250,6 +253,9 @@ class EntryRow(QFrame):
 
 
 class ArtworkTile(QFrame):
+
+    WIDTH = Q.TILE + 20
+    HEIGHT = Q.TILE + 38
     """One candidate icon. Image first, almost no chrome."""
 
     picked = Signal(object)
@@ -260,13 +266,13 @@ class ArtworkTile(QFrame):
         self._chosen = False
         self.setObjectName("tile")
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(T.TILE_SIZE + 16, T.TILE_SIZE + 34)
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(T.S2, T.S2, T.S2, T.S1)
+        layout.setContentsMargins(T.S2, T.S2, T.S2, T.S2)
         layout.setSpacing(T.S1)
 
-        self.well = IconWell(T.TILE_SIZE, self)
+        self.well = IconWell(Q.TILE, self)
         self.well.show_placeholder("")
         layout.addWidget(self.well, 0, Qt.AlignHCenter)
 

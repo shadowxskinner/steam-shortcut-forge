@@ -108,16 +108,16 @@ class KairoWindow(QMainWindow):
         right_layout.setSpacing(0)
 
         bar = QHBoxLayout()
-        bar.setContentsMargins(T.PAD_WINDOW, T.S4, T.PAD_WINDOW, 0)
-        self.banner = QLabel("Shell milestone — read-only. Tune the glass "
-                             "under Settings → Appearance, or Ctrl+1…4.")
-        self.banner.setObjectName("banner")
-        self.banner.setObjectName("meta")
-        bar.addWidget(self.banner)
+        bar.setContentsMargins(Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE, 0)
+        bar.setSpacing(Q.GAP)
+        # The read-only note used to sit here as a full-width strip, which put
+        # the least important sentence on screen in the most prominent row.
+        # It belongs on the status line; this row is for actions.
         bar.addStretch(1)
         for label in ("Rescan", "Auto Match"):
             button = QPushButton(label)
             button.setObjectName("secondary" if label == "Rescan" else "primary")
+            button.setFixedHeight(Q.H_ACTION)
             if label == "Rescan":
                 button.clicked.connect(self.rescan)
             else:
@@ -131,7 +131,7 @@ class KairoWindow(QMainWindow):
 
         self.status = QLabel("")
         self.status.setObjectName("meta")
-        self.status.setContentsMargins(T.PAD_WINDOW, 0, T.PAD_WINDOW, T.S3)
+        self.status.setContentsMargins(Q.PAD_PANE, 0, Q.PAD_PANE, T.S4)
         right_layout.addWidget(self.status)
 
         layout.addWidget(right, 1)
@@ -139,13 +139,14 @@ class KairoWindow(QMainWindow):
     def _build_nav(self) -> QWidget:
         column = QWidget()
         column.setObjectName("nav")
-        column.setFixedWidth(T.W_NAV)
+        column.setFixedWidth(Q.W_NAV)
         layout = QVBoxLayout(column)
-        layout.setContentsMargins(T.S2, T.S6, T.S2, T.S4)
-        layout.setSpacing(T.GAP_ROW)
+        layout.setContentsMargins(T.S3, Q.PAD_PANE, T.S3, Q.PAD_COLUMN)
+        layout.setSpacing(T.S1)
 
         header = QHBoxLayout()
-        header.setContentsMargins(T.S2, 0, T.S2, T.S5)
+        header.setContentsMargins(T.S3, 0, T.S3, Q.PAD_PANE)
+        header.setSpacing(T.S2)
         logo = QLabel("KAIRO")
         logo.setObjectName("logo")
         sub = QLabel("回路")
@@ -159,9 +160,9 @@ class KairoWindow(QMainWindow):
         for item in self.items:
             if item.group != current_group:
                 current_group = item.group
-                heading = QLabel("  ".join(item.group.upper()))
+                heading = QLabel(item.group.upper())
                 heading.setObjectName("micro")
-                heading.setContentsMargins(T.S3, T.S4, 0, T.S1)
+                heading.setContentsMargins(T.S4, Q.GAP_WIDE, 0, T.S2)
                 layout.addWidget(heading)
             button = NavButton(item.key, item.label, nav.icon_for(item), column)
             button.clicked.connect(lambda _checked, key=item.key: self._select(key))
@@ -207,9 +208,10 @@ class KairoWindow(QMainWindow):
             self.status.setText(
                 f"{len(pane.entries)} {pane.provider.noun}  ·  "
                 f"{pane.customized_count()} customized  ·  "
-                f"{len(self.ledger)} change(s) recorded  ·  {self.blur.status}")
+                f"{len(self.ledger)} change(s) recorded  ·  {self.blur.status}"
+                f"  ·  read-only shell")
         else:
-            self.status.setText(self.blur.status)
+            self.status.setText(f"{self.blur.status}  ·  read-only shell")
 
     def rescan(self) -> None:
         self.ledger.prune()

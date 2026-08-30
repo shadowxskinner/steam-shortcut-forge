@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
 from kairo.desktop.lookup import resolve_icon
 from kairo.ledger import ChangeRecord, Ledger, deletes_launcher
 from kairo.qt.widgets import IconWell
+from kairo.qt import theme as Q
 from kairo.ui import theme as T
 
 
@@ -28,24 +29,24 @@ class ChangeRow(QFrame):
         super().__init__(parent)
         self.record = record
         self.setObjectName("row")
-        self.setFixedHeight(T.H_ROW)
+        self.setFixedHeight(Q.H_ROW)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(T.S3, T.S2, T.S3, T.S2)
-        layout.setSpacing(T.S2)
+        layout.setContentsMargins(T.S3, T.S2, T.S4, T.S2)
+        layout.setSpacing(T.S3)
 
-        before = IconWell(T.THUMB_SIZE, self)
+        before = IconWell(Q.WELL_ROW, self)
         before.show_path(previous_icon(record), "—")
         arrow = QLabel("→")
         arrow.setObjectName("meta")
-        after = IconWell(T.THUMB_SIZE, self)
+        after = IconWell(Q.WELL_ROW, self)
         after.show_path(record.applied_icon_path, "—")
         layout.addWidget(before)
         layout.addWidget(arrow)
         layout.addWidget(after)
 
         text = QVBoxLayout()
-        text.setSpacing(1)
+        text.setSpacing(3)
         name = QLabel(T.ellipsize(record.name, 34))
         name.setObjectName("rowName")
         source = ("Existing customization" if record.adopted
@@ -79,12 +80,12 @@ class ChangesPane(QWidget):
         self.setObjectName("workspace")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(T.PAD_WINDOW, T.S5, T.PAD_WINDOW, T.S5)
-        layout.setSpacing(T.S3)
+        layout.setContentsMargins(Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE)
+        layout.setSpacing(Q.GAP_WIDE)
 
         head = QHBoxLayout()
         titles = QVBoxLayout()
-        titles.setSpacing(1)
+        titles.setSpacing(4)
         title = QLabel("Changes")
         title.setObjectName("title")
         self.count = QLabel("")
@@ -105,14 +106,14 @@ class ChangesPane(QWidget):
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(T.S2, T.S2, T.S2, T.S2)
+        card_layout.setContentsMargins(T.S3, T.S3, T.S3, T.S3)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.holder = QWidget()
         self.rows = QVBoxLayout(self.holder)
         self.rows.setContentsMargins(0, 0, T.S2, 0)
-        self.rows.setSpacing(T.GAP_ROW)
+        self.rows.setSpacing(Q.GAP_ROW)
         self.rows.addStretch(1)
         self.scroll.setWidget(self.holder)
         card_layout.addWidget(self.scroll)

@@ -34,8 +34,8 @@ class AppearancePanel(QFrame):
         self._updating = False
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(T.PAD_CARD, T.PAD_CARD, T.PAD_CARD, T.PAD_CARD)
-        layout.setSpacing(T.S2)
+        layout.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD, Q.PAD_CARD, Q.PAD_CARD)
+        layout.setSpacing(T.S3)
 
         heading = QLabel("A P P E A R A N C E")
         heading.setObjectName("micro")
@@ -81,7 +81,7 @@ class AppearancePanel(QFrame):
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(T.S3)
-        grid.setVerticalSpacing(T.S1)
+        grid.setVerticalSpacing(T.S2)
         for row, name in enumerate(Q.LAYERS):
             caption = QLabel(name)
             caption.setObjectName("meta")
@@ -168,8 +168,8 @@ class SettingsPane(QWidget):
         self._on_glass_change = on_glass_change
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(T.PAD_WINDOW, T.S5, T.PAD_WINDOW, T.S5)
-        layout.setSpacing(T.S4)
+        layout.setContentsMargins(Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE)
+        layout.setSpacing(Q.GAP_WIDE)
 
         title = QLabel("Settings")
         title.setObjectName("title")
@@ -179,9 +179,9 @@ class SettingsPane(QWidget):
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(T.PAD_CARD, T.PAD_CARD,
-                                       T.PAD_CARD, T.PAD_CARD)
-        card_layout.setSpacing(T.S2)
+        card_layout.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD,
+                                       Q.PAD_CARD, Q.PAD_CARD)
+        card_layout.setSpacing(T.S3)
         heading = QLabel("SteamGridDB API key")
         heading.setObjectName("rowNameOn")
         note = QLabel("Optional. Only needed for Steam game artwork — icon "
@@ -208,9 +208,9 @@ class SettingsPane(QWidget):
         places = QFrame()
         places.setObjectName("card")
         places_layout = QVBoxLayout(places)
-        places_layout.setContentsMargins(T.PAD_CARD, T.PAD_CARD,
-                                         T.PAD_CARD, T.PAD_CARD)
-        places_layout.setSpacing(T.S1)
+        places_layout.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD,
+                                         Q.PAD_CARD, Q.PAD_CARD)
+        places_layout.setSpacing(T.S2)
         section = QLabel("W H E R E   T H I N G S   L I V E")
         section.setObjectName("micro")
         places_layout.addWidget(section)

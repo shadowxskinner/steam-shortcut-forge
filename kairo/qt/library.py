@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QScrollArea,
                                QVBoxLayout, QWidget)
 
+from kairo.qt import theme as Q
 from kairo.qt import work
 from kairo.qt.widgets import ArtworkTile, EntryRow, IconWell, Pills
 from kairo.tasks import ActivityTokens
@@ -64,20 +65,22 @@ class LibraryPane(QWidget):
     def _build_list(self) -> QWidget:
         column = QWidget()
         column.setObjectName("list")
-        column.setFixedWidth(T.W_LIST)
+        column.setFixedWidth(Q.W_LIST)
         layout = QVBoxLayout(column)
-        layout.setContentsMargins(T.PAD_COLUMN, T.S6, T.PAD_COLUMN, T.S3)
-        layout.setSpacing(T.S2)
+        layout.setContentsMargins(Q.PAD_COLUMN, Q.PAD_PANE,
+                                  Q.PAD_COLUMN, Q.PAD_COLUMN)
+        layout.setSpacing(Q.GAP)
 
         head = QHBoxLayout()
         title = QLabel(self.provider.label)
         title.setObjectName("pane")
         self.count = QLabel("0")
-        self.count.setObjectName("meta")
+        self.count.setObjectName("count")
         head.addWidget(title)
         head.addStretch(1)
         head.addWidget(self.count)
         layout.addLayout(head)
+        layout.addSpacing(T.S1)
 
         self.search = QLineEdit()
         self.search.setPlaceholderText(f"Search {self.provider.noun}…")
@@ -96,9 +99,10 @@ class LibraryPane(QWidget):
         holder = QWidget()
         self.rows_layout = QVBoxLayout(holder)
         self.rows_layout.setContentsMargins(0, 0, T.S2, 0)
-        self.rows_layout.setSpacing(T.GAP_ROW)
+        self.rows_layout.setSpacing(Q.GAP_ROW)
         self.rows_layout.addStretch(1)
         self.scroll.setWidget(holder)
+        layout.addSpacing(T.S1)
         layout.addWidget(self.scroll, 1)
         return column
 
@@ -108,28 +112,44 @@ class LibraryPane(QWidget):
         space = QWidget()
         space.setObjectName("workspace")
         layout = QVBoxLayout(space)
-        layout.setContentsMargins(T.PAD_WINDOW, T.S5, T.PAD_WINDOW, T.S5)
-        layout.setSpacing(T.S3)
+        layout.setContentsMargins(Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE)
+        layout.setSpacing(Q.GAP_WIDE)
 
+        # -- title block: the name is the loudest thing on the screen -------
+        head = QHBoxLayout()
+        head.setSpacing(Q.GAP)
+        names = QVBoxLayout()
+        names.setSpacing(4)
         self.title = QLabel("")
         self.title.setObjectName("title")
         self.subtitle = QLabel("")
         self.subtitle.setObjectName("meta")
-        layout.addWidget(self.title)
-        layout.addWidget(self.subtitle)
+        names.addWidget(self.title)
+        names.addWidget(self.subtitle)
+        head.addLayout(names)
+        head.addStretch(1)
+        layout.addLayout(head)
 
-        compare = QFrame()
-        compare.setObjectName("card")
-        compare_layout = QHBoxLayout(compare)
-        compare_layout.setContentsMargins(T.PAD_CARD, T.PAD_CARD_TIGHT,
-                                          T.PAD_CARD, T.PAD_CARD_TIGHT)
-        compare_layout.setSpacing(T.S3)
-        self.current_well = IconWell(T.WELL_SIZE)
-        self.proposed_well = IconWell(T.WELL_SIZE)
+        # -- one card, hairline-divided -------------------------------------
+        # The reference groups a subject's fields into a single surface and
+        # separates them with hairlines rather than gaps. Two floating cards
+        # read as two unrelated things; one card reads as one subject.
+        card = QFrame()
+        card.setObjectName("card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD,
+                                       Q.PAD_CARD, Q.PAD_CARD)
+        card_layout.setSpacing(0)
+
+        compare_layout = QHBoxLayout()
+        compare_layout.setContentsMargins(0, 0, 0, Q.PAD_CARD)
+        compare_layout.setSpacing(Q.GAP_WIDE)
+        self.current_well = IconWell(Q.WELL_COMPARE)
+        self.proposed_well = IconWell(Q.WELL_COMPARE)
         for caption, well in (("CURRENT", self.current_well),
                               ("PROPOSED", self.proposed_well)):
             box = QVBoxLayout()
-            box.setSpacing(T.S1)
+            box.setSpacing(T.S2)
             label = QLabel(caption)
             label.setObjectName("micro")
             box.addWidget(label)
@@ -138,36 +158,32 @@ class LibraryPane(QWidget):
             if caption == "CURRENT":
                 arrow = QLabel("→")
                 arrow.setObjectName("meta")
-                compare_layout.addWidget(arrow)
+                compare_layout.addWidget(arrow, 0, Qt.AlignVCenter)
         self.proposal = QLabel("Choose artwork below")
         self.proposal.setObjectName("meta")
-        compare_layout.addWidget(self.proposal)
-        compare_layout.addStretch(1)
-        layout.addWidget(compare)
-
-        panel = QFrame()
-        panel.setObjectName("card")
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(T.PAD_CARD, T.PAD_CARD_TIGHT,
-                                        T.PAD_CARD, T.S2)
-        panel_layout.setSpacing(T.S2)
+        self.proposal.setWordWrap(True)
+        compare_layout.addWidget(self.proposal, 1, Qt.AlignVCenter)
+        card_layout.addLayout(compare_layout)
+        card_layout.addWidget(self._divider())
 
         controls = QHBoxLayout()
-        controls.setSpacing(T.S3)
-        heading = QLabel("A R T W O R K")
+        controls.setContentsMargins(0, Q.PAD_CARD, 0, Q.GAP)
+        controls.setSpacing(Q.GAP)
+        heading = QLabel("ARTWORK")
         heading.setObjectName("micro")
         controls.addWidget(heading)
+        controls.addSpacing(T.S1)
         self.source_pills = Pills([])
         self.source_pills.changed.connect(self._source_changed)
         controls.addWidget(self.source_pills)
+        controls.addStretch(1)
         self.query = QLineEdit()
         self.query.setPlaceholderText("Search artwork…")
-        self.query.setFixedWidth(240)
+        self.query.setFixedWidth(260)
         self.query.setClearButtonEnabled(True)
         self.query.returnPressed.connect(self._load_artwork)
         controls.addWidget(self.query)
-        controls.addStretch(1)
-        panel_layout.addLayout(controls)
+        card_layout.addLayout(controls)
 
         self.grid_scroll = QScrollArea()
         self.grid_scroll.setWidgetResizable(True)
@@ -175,16 +191,15 @@ class LibraryPane(QWidget):
         self.grid_holder = QWidget()
         self.grid = QGridLayout(self.grid_holder)
         self.grid.setContentsMargins(0, 0, T.S2, 0)
-        self.grid.setSpacing(T.S2)
+        self.grid.setSpacing(Q.GAP)
         self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.grid_scroll.setWidget(self.grid_holder)
-        panel_layout.addWidget(self.grid_scroll, 1)
-        layout.addWidget(panel, 1)
+        card_layout.addWidget(self.grid_scroll, 1)
+        layout.addWidget(card, 1)
 
-        # Three tiers: secondary actions, a gap, the destructive one, then the
-        # primary alone on the right.
+        # -- actions: secondary pair, the destructive one apart, primary last
         bar = QHBoxLayout()
-        bar.setSpacing(T.GAP_CONTROL)
+        bar.setSpacing(Q.GAP)
         self.browse_btn = QPushButton("Browse local file…")
         self.browse_btn.setObjectName("secondary")
         # Left blank on purpose: _update_actions fills them from the writer,
@@ -197,18 +212,27 @@ class LibraryPane(QWidget):
         self.apply_btn.setObjectName("primary")
         for button in (self.browse_btn, self.restore_btn, self.remove_btn,
                        self.apply_btn):
+            button.setFixedHeight(Q.H_ACTION)
             # Read-only milestone: the layout is being judged, not the wiring.
             button.setEnabled(False)
             button.setToolTip("Not wired yet — this milestone is read-only")
         bar.addWidget(self.browse_btn)
         bar.addWidget(self.restore_btn)
-        bar.addSpacing(T.S8)
+        bar.addSpacing(T.S6)
         bar.addWidget(self.remove_btn)
         bar.addStretch(1)
         bar.addWidget(self.apply_btn)
         layout.addLayout(bar)
         self._update_actions()
         return space
+
+    @staticmethod
+    def _divider() -> QFrame:
+        """A hairline, not a gap — it groups where a gap would separate."""
+        line = QFrame()
+        line.setObjectName("divider")
+        line.setFixedHeight(1)
+        return line
 
     def _update_actions(self) -> None:
         """Take the verbs from the writer, never from this file.
@@ -470,7 +494,7 @@ class LibraryPane(QWidget):
 
     def _build_tiles(self, results) -> None:
         columns = max(1, self.grid_scroll.viewport().width()
-                      // (T.TILE_SIZE + 16 + T.S2))
+                      // (ArtworkTile.WIDTH + Q.GAP))
         for index, art in enumerate(results):
             tile = ArtworkTile(art, self.grid_holder)
             tile.picked.connect(self._propose)
