@@ -156,8 +156,10 @@ def test_glass_can_be_nudged_without_inverting_the_layers():
 
     nudged = Q.PRESETS["frosted"].shifted(-0.10)
     assert nudged.nav >= nudged.panel >= nudged.tile
-    assert Q.PRESETS["frosted"].shifted(5.0).panel == 1.0     # clamped
-    assert Q.PRESETS["frosted"].shifted(-5.0).tile >= 0.30
+    assert Q.PRESETS["frosted"].shifted(5.0).panel == 1.0      # clamped
+    # The floor is zero, not a minimum tint: fully transparent is a legitimate
+    # setting, and it is what the workspace backdrop used to be.
+    assert Q.PRESETS["frosted"].shifted(-5.0).tile == 0.0
 
 
 def test_resolve_accepts_a_name_a_number_or_a_glass():
@@ -298,7 +300,8 @@ def test_the_appearance_panel_covers_every_layer():
 
     source = (QT_DIR / "settings.py").read_text()
     assert "for row, name in enumerate(Q.LAYERS)" in source
-    assert set(Q.LAYERS) == {"nav", "list", "panel", "card", "tile", "line"}
+    assert set(Q.LAYERS) == {"workspace", "nav", "list", "panel", "card",
+                             "tile", "line"}
 
 
 def test_tuned_values_can_be_reported_back():
@@ -320,7 +323,7 @@ def test_replaced_clamps_without_reordering_the_intent():
     tuned = Q.PRESETS["frosted"].replaced(panel=0.99, tile=4.0, card=-1.0)
     assert tuned.panel == 0.99
     assert tuned.tile == 1.0
-    assert tuned.card == 0.30
+    assert tuned.card == 0.0
     assert tuned.nav == Q.PRESETS["frosted"].nav
 
 
@@ -334,3 +337,68 @@ def test_a_denser_preset_exists_to_compare_against():
     assert dense.panel > frosted.panel
     assert dense.nav >= dense.list >= dense.panel >= dense.card >= dense.tile
     assert dense.panel < 1.0, "dense is still glass, not a wall"
+
+
+# -- the backdrop behind the cards ------------------------------------------
+
+def test_the_workspace_has_a_backdrop_at_all():
+    """It used to be fully transparent, which is why content behind the window
+    stayed legible however hard the compositor blurred. Blur smears what is
+    behind a surface; it does not dim it, and a region with no surface has
+    nothing to dim with."""
+    from kairo.qt import theme as Q
+    from kairo.ui import theme as T
+
+    sheet = Q.stylesheet("frosted")
+    line = next(l for l in sheet.splitlines() if "QWidget#workspace" in l)
+    assert "transparent" not in line
+    assert Q.rgba(T.C_BG, Q.PRESETS["frosted"].workspace) in line
+
+
+def test_the_window_itself_still_has_no_rectangle():
+    """The root stays fully transparent so Kairo never draws a slab the
+    compositor has to blur around."""
+    from kairo.qt import theme as Q
+
+    line = next(l for l in Q.stylesheet("dense").splitlines()
+                if "QWidget#root" in l)
+    assert "transparent" in line
+
+
+def test_the_backdrop_sits_under_the_cards_in_every_preset():
+    from kairo.qt import theme as Q
+
+    for name, glass in Q.PRESETS.items():
+        assert glass.workspace <= glass.panel, name
+
+
+def test_dense_raises_the_backdrop_most():
+    """It is the lever that actually stops text reading through."""
+    from kairo.qt import theme as Q
+
+    frosted, dense = Q.PRESETS["frosted"], Q.PRESETS["dense"]
+    assert dense.workspace - frosted.workspace > dense.panel - frosted.panel
+
+
+# -- the UI must not imply Kairo can set blur strength ----------------------
+
+def test_appearance_says_who_controls_what():
+    """ext-background-effect-v1 carries a region and nothing else - no radius,
+    no strength. A slider here would be claiming a setting that does not
+    exist."""
+    source = (QT_DIR / "settings.py").read_text()
+    note = source.split("Kairo controls opacity")[1].split('"""')[0]
+
+    assert "compositor controls blur" in note.lower()
+    assert "Desktop Effects" in note
+    assert "no radius or strength" in note
+
+
+def test_no_blur_strength_control_is_offered():
+    from kairo.qt import theme as Q
+
+    assert not any("blur" in layer for layer in Q.LAYERS)
+    for path in MODULES:
+        source = path.read_text().lower()
+        assert "blurstrength" not in source
+        assert "blur_radius" not in source

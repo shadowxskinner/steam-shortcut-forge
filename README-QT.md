@@ -68,6 +68,7 @@ content or not.
 
 | layer | frosted | dense |
 | --- | --- | --- |
+| **workspace backdrop** | **0.62** | **0.86** |
 | navigation | 0.94 | 0.985 |
 | entry column | 0.93 | 0.98 |
 | workspace cards | 0.92 | 0.975 |
@@ -78,6 +79,31 @@ content or not.
 `dense` exists because 0.92 still let terminal text read through on a real
 display. It is a preset to compare against rather than a new default guessed at
 in code — try both and tell me which is closer.
+
+## Opacity and blur are different levers
+
+**Kairo controls opacity. KWin controls blur.**
+
+`ext-background-effect-v1` asks for a *region* to be blurred and carries no
+radius or strength, so there is deliberately no blur control in Kairo — a
+slider here would be claiming a setting the protocol does not have.
+
+Blur smears what is behind a surface. It does not dim it. A region with little
+opacity keeps its contrast however hard the compositor works, which is why the
+**workspace backdrop** matters most: until this build it was fully transparent,
+and it is the largest area of the window — the title row, the gaps between
+cards, the action bar and every margin. Raising it is the single change most
+likely to fix legible background text; lowering it shows more wallpaper.
+
+For blur strength, read what you currently have:
+
+```bash
+./kwin-blur-report.sh          # read-only: reads config, queries KWin, writes nothing
+```
+
+Then change it yourself in **System Settings → Desktop Effects → Blur → ⚙**, so
+KWin reloads the effect properly. I have not touched your `kwinrc` and will
+not.
 
 The root stays fully transparent, so the compositor's blur of the wallpaper is
 what fills the gaps between panels — that is where the colour is meant to come

@@ -24,11 +24,19 @@ from kairo.ui import theme as T
 class Glass:
     """How see-through each layer is.
 
-    ``window`` is not a surface: the root stays fully transparent so the
-    compositor's blur of the wallpaper is what fills the gaps. The rest are
-    real alphas on real panels.
+    ``workspace`` is the backdrop the cards sit on - the title area, the gaps
+    between panels, the action bar, the margins. It used to be fully
+    transparent, which is why content behind the window stayed legible however
+    hard the compositor blurred: blur smears what is behind a surface, it does
+    not dim it, and a region with no surface at all has nothing to dim with.
+    Raising it is what stops text reading through; lowering it shows more
+    wallpaper. That trade is the whole point of it being a slider.
+
+    The root stays fully transparent regardless, so the window still has no
+    rectangle of its own beyond its panels.
     """
 
+    workspace: float = 0.62  # backdrop behind the cards
     nav: float = 0.94        # navigation column
     list: float = 0.93       # entry column
     panel: float = 0.92      # workspace cards
@@ -42,18 +50,19 @@ class Glass:
         Tuning happens by eye at runtime; this is how the result gets back
         into the source without anyone transcribing six numbers.
         """
-        return ("Glass(nav={0.nav:.2f}, list={0.list:.2f}, panel={0.panel:.2f}, "
-                "card={0.card:.2f}, tile={0.tile:.2f}, "
-                "line={0.line:.2f})".format(self))
+        return ("Glass(workspace={0.workspace:.2f}, nav={0.nav:.2f}, "
+                "list={0.list:.2f}, panel={0.panel:.2f}, card={0.card:.2f}, "
+                "tile={0.tile:.2f}, line={0.line:.2f})".format(self))
 
     def replaced(self, **values) -> "Glass":
-        clean = {name: max(0.30, min(1.0, float(value)))
+        clean = {name: max(0.0, min(1.0, float(value)))
                  for name, value in values.items()}
         return replace(self, **clean)
 
     def shifted(self, delta: float) -> "Glass":
-        clamp = lambda value: max(0.30, min(1.0, value + delta))
-        return replace(self, nav=clamp(self.nav), list=clamp(self.list),
+        clamp = lambda value: max(0.0, min(1.0, value + delta))
+        return replace(self, workspace=clamp(self.workspace),
+                       nav=clamp(self.nav), list=clamp(self.list),
                        panel=clamp(self.panel), card=clamp(self.card),
                        tile=clamp(self.tile), line=clamp(self.line))
 
@@ -64,18 +73,19 @@ class Glass:
 #: the two can be compared side by side before either is baked in.
 PRESETS = {
     "frosted": Glass(),
-    "dense": Glass(nav=0.985, list=0.98, panel=0.975, card=0.95, tile=0.92,
-                   line=0.70),
-    "clear": Glass(nav=0.78, list=0.76, panel=0.74, card=0.70, tile=0.66,
-                   line=0.45),
-    "solid": Glass(nav=1.0, list=1.0, panel=1.0, card=1.0, tile=1.0, line=1.0),
+    "dense": Glass(workspace=0.86, nav=0.985, list=0.98, panel=0.975,
+                   card=0.95, tile=0.92, line=0.70),
+    "clear": Glass(workspace=0.30, nav=0.78, list=0.76, panel=0.74, card=0.70,
+                   tile=0.66, line=0.45),
+    "solid": Glass(workspace=1.0, nav=1.0, list=1.0, panel=1.0, card=1.0,
+                   tile=1.0, line=1.0),
 }
-LAYERS = ("nav", "list", "panel", "card", "tile", "line")
+LAYERS = ("workspace", "nav", "list", "panel", "card", "tile", "line")
 DEFAULT_PRESET = "frosted"
 
 # Kept so older callers and the entry point keep working.
 DEFAULT_ALPHA = PRESETS[DEFAULT_PRESET].panel
-MIN_ALPHA, MAX_ALPHA = 0.30, 1.0
+MIN_ALPHA, MAX_ALPHA = 0.0, 1.0
 
 
 def rgba(colour: str, alpha: float = 1.0) -> str:
@@ -115,7 +125,7 @@ def stylesheet(glass=None) -> str:
                          border-right: 1px solid {rgba(T.C_BORDER, g.line)}; }}
     QWidget#list      {{ background: {rgba(T.C_LIST, g.list)};
                          border-right: 1px solid {rgba(T.C_BORDER, g.line)}; }}
-    QWidget#workspace {{ background: transparent; }}
+    QWidget#workspace {{ background: {rgba(T.C_BG, g.workspace)}; }}
     QFrame#card       {{ background: {rgba(T.C_PANEL, g.panel)};
                          border: 1px solid {rgba(T.C_BORDER, g.line)};
                          border-radius: {T.R_LG}px; }}

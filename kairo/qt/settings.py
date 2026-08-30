@@ -45,11 +45,21 @@ class AppearancePanel(QFrame):
         self.blur.setObjectName("rowMeta")
         layout.addWidget(self.blur)
 
+        # The division of labour, stated in the UI so the sliders are not read
+        # as controlling something they cannot reach.
         explain = QLabel(
-            "Blur is drawn by the compositor, never by Kairo. Without it the "
-            "window is simply translucent, which is the normal appearance "
-            "everywhere except a KDE Wayland session offering "
-            "ext-background-effect-v1.")
+            "Kairo controls opacity. The compositor controls blur.\n\n"
+            "The sliders below set how solid each of Kairo's own surfaces is. "
+            "Blur is drawn by KWin behind the window, and how hard it smears "
+            "is a desktop setting — System Settings → Desktop Effects → Blur. "
+            "The ext-background-effect-v1 protocol Kairo uses only asks for a "
+            "region to be blurred; it carries no radius or strength, so there "
+            "is deliberately no blur control here to imply otherwise.\n\n"
+            "If content behind Kairo is still legible, both levers matter: "
+            "blur smears what is behind a surface but does not dim it, so a "
+            "region with little opacity keeps its contrast however hard the "
+            "compositor works. Raise Workspace first — it is the backdrop the "
+            "cards sit on.")
         explain.setObjectName("meta")
         explain.setWordWrap(True)
         layout.addWidget(explain)
