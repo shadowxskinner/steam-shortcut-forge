@@ -72,15 +72,20 @@ class SettingsPane(QWidget):
         note.setMaximumWidth(Q.W_MEASURE)
         self.key = QLineEdit(context.config.get(SGDB_KEY, ""))
         self.key.setPlaceholderText("Paste API key")
-        self.key.setEnabled(False)
-        save = QPushButton("Save")
-        save.setObjectName("primary")
-        save.setFixedHeight(Q.H_BUTTON)
-        save.setEnabled(False)
-        save.setToolTip("Not wired yet — this milestone is read-only")
+        self.key.textChanged.connect(lambda _t: self._key_changed())
+        self.saved = QLabel("")
+        self.saved.setObjectName("meta")
+        self.save = QPushButton("Save")
+        self.save.setObjectName("primary")
+        self.save.setFixedHeight(Q.H_BUTTON)
+        # Nothing to save until something is typed, so the button says so
+        # rather than sitting there live and doing nothing when pressed.
+        self.save.setEnabled(False)
+        self.save.clicked.connect(lambda _c: self._save_key())
         row = QHBoxLayout()
+        row.addWidget(self.saved)
         row.addStretch(1)
-        row.addWidget(save)
+        row.addWidget(self.save)
         card_layout.addWidget(heading)
         card_layout.addWidget(note)
         card_layout.addWidget(self.key)
@@ -130,6 +135,33 @@ class SettingsPane(QWidget):
         about = QLabel(f"{APP_NAME} {__version__}  ·  {TAGLINE}\n{APP_ID}")
         about.setObjectName("meta")
         layout.addWidget(about)
+
+    def _key_changed(self) -> None:
+        current = str(self.ctx.config.get(SGDB_KEY, ""))
+        self.save.setEnabled(self.key.text().strip() != current.strip())
+        self.saved.setText("")
+
+    def _save_key(self) -> None:
+        """Write the key, and say so.
+
+        A silent save on an optional field leaves you wondering whether it
+        took, so the row reports it and the button goes quiet again until
+        something else changes.
+        """
+        from kairo import config as config_store
+
+        value = self.key.text().strip()
+        if value:
+            self.ctx.config[SGDB_KEY] = value
+        else:
+            self.ctx.config.pop(SGDB_KEY, None)
+        try:
+            config_store.save(self.ctx.config)
+        except OSError as exc:
+            self.saved.setText(f"could not save — {exc}")
+            return
+        self.saved.setText("saved")
+        self.save.setEnabled(False)
 
     def refresh(self) -> None:
         return None

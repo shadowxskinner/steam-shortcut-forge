@@ -58,3 +58,23 @@ def test_the_registry_is_given_the_configuration():
     registry = (Path(__file__).resolve().parents[1] / "kairo" / "providers"
                 / "registry.py").read_text()
     assert "providers_from_config(config)" in registry
+
+
+def test_the_api_key_can_actually_be_saved():
+    """It was left disabled from the read-only milestone.
+
+    Settings could write emulator configuration while the field beside it
+    stayed inert, which is a confusing pair of behaviours to sit together.
+    """
+    source = (QT_DIR / "settings.py").read_text()
+    assert "Not wired yet" not in source
+    assert "def _save_key" in source
+    save = source.split("def _save_key")[1].split("\n    def ")[0]
+    assert "config_store.save" in save
+    assert "OSError" in save, "a failed write must be reported"
+
+
+def test_save_is_offered_only_when_there_is_a_change():
+    source = (QT_DIR / "settings.py").read_text()
+    changed = source.split("def _key_changed")[1].split("\n    def ")[0]
+    assert "setEnabled(" in changed
