@@ -295,3 +295,103 @@ def test_unknown_dimensions_are_never_treated_as_blurry():
 
     unknown = Artwork(id="u", source_id="steamgriddb", width=0, height=0)
     assert _sharp(unknown) is True
+
+
+# ---------------------------------------------------------------------------
+# SteamGridDB for games that were never on Steam
+#
+# The Steam-only restriction was Kairo's, not the API's, and it is what left
+# emulator libraries with generic symbols instead of cover art.
+# ---------------------------------------------------------------------------
+
+def test_emulators_are_served_but_desktop_applications_are_not():
+    """Searching a game artwork database for a text editor finds nonsense."""
+    from kairo.artwork.steamgriddb import SteamGridDBSource
+
+    source = SteamGridDBSource(api_key="k")
+    assert source.supports("steam") is True
+    assert source.supports("emu-dolphin") is True
+    assert source.supports("desktop") is False
+
+
+def test_a_title_is_searched_when_there_is_no_appid(monkeypatch):
+    from kairo.artwork import steamgriddb as sgdb
+    from kairo.models import ArtQuery
+
+    asked = []
+    source = sgdb.SteamGridDBSource(api_key="k")
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+
+    def fake_get(path):
+        asked.append(path)
+        if path.startswith("/search/autocomplete"):
+            return {"data": [{"id": 4242, "name": "Metroid Prime"}]}
+        if path.startswith("/icons"):
+            return {"total": 1, "data": [
+                {"id": 1, "url": "https://e.invalid/i.png",
+                 "width": 512, "height": 512, "style": "official"}]}
+        return {"data": [], "total": 0}
+
+    monkeypatch.setattr(source, "_api_get", fake_get)
+    found = source.find(ArtQuery(entry=entry(), text="metroid prime"))
+    assert any(p.startswith("/search/autocomplete") for p in asked)
+    assert any("/game/4242" in p for p in asked), "the searched id must be used"
+    assert [a.width for a in found] == [512]
+
+
+def test_the_fallback_term_is_tried_when_the_title_finds_nothing(monkeypatch):
+    """Emulator queries carry 'title system' as a second attempt."""
+    from kairo.artwork import steamgriddb as sgdb
+    from kairo.models import ArtQuery
+
+    terms = []
+    source = sgdb.SteamGridDBSource(api_key="k")
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+
+    def fake_get(path):
+        if path.startswith("/search/autocomplete"):
+            terms.append(path)
+            if "wii" in path.lower():
+                return {"data": [{"id": 7}]}
+            return {"data": []}
+        return {"data": [], "total": 0}
+
+    monkeypatch.setattr(source, "_api_get", fake_get)
+    source.find(ArtQuery(entry=entry(), text="twilight princess",
+                         fallback_text="twilight princess wii"))
+    assert len(terms) == 2, terms
+
+
+def test_an_appid_still_outranks_a_title(monkeypatch):
+    from kairo.artwork import steamgriddb as sgdb
+    from kairo.models import (AUTO_APPLY_THRESHOLD, CONFIDENCE_ID, ArtQuery)
+
+    source = sgdb.SteamGridDBSource(api_key="k")
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+    monkeypatch.setattr(source, "game_id", lambda appid: 1)
+    monkeypatch.setattr(source, "search_id", lambda term: 2)
+    monkeypatch.setattr(source, "_api_get", lambda path: {
+        "total": 1, "data": [{"id": 9, "url": "https://e.invalid/i.png",
+                              "width": 512, "height": 512, "style": "official"}]})
+
+    by_id = source.best_match(ArtQuery(entry=entry(), steam_appid="440"))
+    by_name = source.best_match(ArtQuery(entry=entry(), text="team fortress"))
+    assert by_id.confidence == CONFIDENCE_ID
+    assert by_name.confidence < by_id.confidence
+    assert by_name.confidence >= AUTO_APPLY_THRESHOLD
+
+
+def test_a_search_failure_is_not_an_empty_library(monkeypatch):
+    """Unreachable is not the same as 'this game has no artwork'."""
+    from kairo import net
+    from kairo.artwork import steamgriddb as sgdb
+    from kairo.models import ArtQuery
+
+    source = sgdb.SteamGridDBSource(api_key="k")
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+
+    def fake_get(path):
+        raise net.NetworkError("down")
+
+    monkeypatch.setattr(source, "_api_get", fake_get)
+    assert source.find(ArtQuery(entry=entry(), text="anything")) == []

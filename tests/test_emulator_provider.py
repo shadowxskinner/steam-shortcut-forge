@@ -99,10 +99,14 @@ def test_the_artwork_search_falls_back_to_the_system(tmp_path):
     assert query.fallback_text == "twilight princess wii"
 
 
-def test_steamgriddb_is_not_consulted_for_roms():
-    """It is keyed on Steam appids, which a ROM does not have."""
+def test_steamgriddb_leads_for_roms():
+    """It carries game art; themes and Iconify carry symbols.
+
+    It was excluded on the belief that it needed a Steam appid. That was
+    Kairo's restriction, not the API's - it searches by title too.
+    """
     provider = EmulatorProvider(emu.Emulator(name="Cemu").normalised())
-    assert "steamgriddb" not in provider.auto_match_sources
+    assert provider.auto_match_sources[0] == "steamgriddb"
 
 
 def test_a_retitled_rom_keeps_its_key(tmp_path):

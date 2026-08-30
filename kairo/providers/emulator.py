@@ -70,10 +70,11 @@ class EmulatorProvider(AppProvider):
     noun = "games"
     group = GROUP
 
-    # No SteamGridDB: it is keyed on Steam appids and a ROM has none. Themes
-    # rarely carry game art either, so Iconify leads. Declared here rather
-    # than decided in the UI, like every other provider.
-    auto_match_sources = ("iconify", "theme")
+    # SteamGridDB first, by title rather than by appid. It is the only source
+    # that carries actual game art; themes and Iconify carry symbols, and a
+    # symbol is a poor substitute for a cover on a games shelf. Declared here
+    # rather than decided in the UI, like every other provider.
+    auto_match_sources = ("steamgriddb", "iconify", "theme")
 
     def __init__(self, emulator: emu.Emulator, order: int = 0):
         self.emulator = emulator

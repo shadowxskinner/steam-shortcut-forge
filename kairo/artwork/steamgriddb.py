@@ -1,7 +1,13 @@
-"""SteamGridDB — community artwork, keyed on Steam appid.
+"""SteamGridDB — community artwork.
 
-Genuinely Steam-only: the API is indexed by Steam appid, so it cannot serve an
-application that has no Steam presence.
+Keyed on Steam appid where there is one, and searched by title where there is
+not. The Steam-only restriction here was Kairo's, not the API's: SteamGridDB
+indexes plenty of games that were never on Steam, which is exactly what an
+emulator library is made of. Without this, ROMs fell back to icon themes and
+Iconify and got generic symbols instead of cover art.
+
+A title search can be wrong in a way an appid never is, so a name match is
+scored as a search hit rather than as an identifier and never outranks one.
 """
 
 from __future__ import annotations
@@ -16,7 +22,8 @@ from typing import Any
 
 from kairo import net, paths
 from kairo.artwork.base import ArtworkSource
-from kairo.models import CONFIDENCE_ID, Artwork, ArtQuery, Suggestion
+from kairo.models import (CONFIDENCE_EXACT_SEARCH, CONFIDENCE_ID,
+                          Artwork, ArtQuery, Suggestion)
 
 SOURCE_ID = "steamgriddb"
 API_BASE = "https://www.steamgriddb.com/api/v2"
@@ -76,7 +83,12 @@ class SteamGridDBSource(ArtworkSource):
     # -- availability ----------------------------------------------------
 
     def supports(self, provider_id: str) -> bool:
-        return provider_id == "steam"
+        """Steam by appid, emulators by title. Not desktop applications.
+
+        A .desktop entry is a text editor or a browser, and searching a game
+        artwork database for one returns confident nonsense.
+        """
+        return provider_id == "steam" or provider_id.startswith("emu-")
 
     def available(self, config: dict[str, Any] | None = None) -> bool:
         return bool(self._key(config))
@@ -108,6 +120,39 @@ class SteamGridDBSource(ArtworkSource):
             raise net.NetworkError(f"Network error: {exc.reason}") from exc
 
     # -- lookups ---------------------------------------------------------
+
+    def search_id(self, term: str) -> int | None:
+        """SteamGridDB game id for a title, or None.
+
+        Cached like the appid lookup, but keyed on the term and with a
+        lifetime, because unlike an appid mapping a search result can change
+        as the database grows.
+        """
+        term = (term or "").strip()
+        if not term:
+            return None
+        digest = hashlib.md5(term.lower().encode()).hexdigest()
+        cache = paths.cache_dir() / f"search_{digest}.json"
+        if cache.is_file():
+            try:
+                if time.time() - cache.stat().st_mtime < LIST_CACHE_SECONDS:
+                    return json.loads(cache.read_text()).get("game_id")
+            except (json.JSONDecodeError, OSError):
+                pass
+        quoted = urllib.parse.quote(term, safe="")
+        data = self._api_get(f"/search/autocomplete/{quoted}")
+        records = data.get("data") or []
+        game_id = None
+        for record in records:
+            if isinstance(record, dict) and record.get("id"):
+                game_id = record["id"]
+                break
+        try:
+            paths.cache_dir().mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps({"game_id": game_id}))
+        except OSError:
+            pass
+        return game_id
 
     def game_id(self, steam_appid: str) -> int | None:
         """Steam appid to SteamGridDB game id. Cached permanently; it is stable."""
@@ -189,9 +234,7 @@ class SteamGridDBSource(ArtworkSource):
         largest assets on offer. Grids and logos are filtered to roughly
         square, and ranked so nothing gets enlarged into a tile.
         """
-        if not query.steam_appid:
-            return []
-        game_id = self.game_id(query.steam_appid)
+        game_id = self._resolve(query)
         if game_id is None:
             return []
 
@@ -209,6 +252,21 @@ class SteamGridDBSource(ArtworkSource):
         sharp = [a for a in assets if _sharp(a)]
         return sharp or assets
 
+    def _resolve(self, query: ArtQuery) -> int | None:
+        """The appid mapping when there is one, otherwise a title search."""
+        if query.steam_appid:
+            return self.game_id(query.steam_appid)
+        for term in (query.text, query.fallback_text):
+            if not term:
+                continue
+            try:
+                found = self.search_id(term)
+            except net.NetworkError:
+                return None
+            if found is not None:
+                return found
+        return None
+
     def best_match(self, query: ArtQuery) -> Suggestion | None:
         """Highest confidence available anywhere in Kairo.
 
@@ -220,8 +278,15 @@ class SteamGridDBSource(ArtworkSource):
         results = self.find(query)
         if not results:
             return None
-        return Suggestion(results[0], CONFIDENCE_ID,
-                          f"matched by Steam app ID {query.steam_appid}")
+        if query.steam_appid:
+            return Suggestion(results[0], CONFIDENCE_ID,
+                              f"matched by Steam app ID {query.steam_appid}")
+        # A title search can find the wrong game; an appid cannot. Scored the
+        # same as any other exact search hit rather than as an identifier, so
+        # it still clears the auto-apply threshold but never outranks a real
+        # appid match when both are available.
+        return Suggestion(results[0], CONFIDENCE_EXACT_SEARCH,
+                          f"matched by title “{query.text}”")
 
     # -- transfer --------------------------------------------------------
 
