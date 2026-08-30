@@ -5,6 +5,7 @@ from __future__ import annotations
 from kairo.models import AppEntry
 from kairo.providers.base import AppProvider
 from kairo.providers.desktop_entry import DesktopEntryProvider
+from kairo.providers.emulator import providers_from_config
 from kairo.providers.steam import SteamProvider
 
 
@@ -36,6 +37,13 @@ class ProviderRegistry:
         return self.get(entry.provider_id)
 
 
-def default_registry() -> ProviderRegistry:
-    """Adding a provider is one import and one line here."""
-    return ProviderRegistry([SteamProvider(), DesktopEntryProvider()])
+def default_registry(config: dict | None = None) -> ProviderRegistry:
+    """Adding a provider is one import and one line here.
+
+    Emulators are the exception: there is no EmulatorProvider class to add,
+    because each configured emulator becomes its own provider. They come last
+    so Steam and Applications keep their positions, and the sidebar groups
+    them under Emulators without this file saying so.
+    """
+    return ProviderRegistry([SteamProvider(), DesktopEntryProvider(),
+                             *providers_from_config(config)])

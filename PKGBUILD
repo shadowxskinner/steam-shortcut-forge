@@ -51,6 +51,9 @@ package() {
     install -Dm644 io.github.shadowxskinner.Kairo.desktop \
         "$pkgdir/usr/share/applications/io.github.shadowxskinner.Kairo.desktop"
 
+    install -Dm644 icons/io.github.shadowxskinner.Kairo.svg \
+        "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.shadowxskinner.Kairo.svg"
+
     install -Dm644 LICENSE \
         "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

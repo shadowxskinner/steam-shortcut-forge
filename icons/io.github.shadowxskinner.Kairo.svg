@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Kairo: 回路, "circuit". The mark is the outer 回 with a trace leaving it. -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6C4CFF"/>
+      <stop offset="1" stop-color="#5540D6"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="116" height="116" rx="26" fill="#0C0F24"/>
+  <rect x="6.5" y="6.5" width="115" height="115" rx="25.5" fill="none"
+        stroke="#242A54" stroke-width="1"/>
+  <rect x="30" y="30" width="68" height="68" rx="10" fill="none"
+        stroke="url(#g)" stroke-width="7"/>
+  <rect x="52" y="52" width="24" height="24" rx="4" fill="url(#g)"/>
+  <path d="M98 64 h16" stroke="#B9AAFF" stroke-width="6" stroke-linecap="round"/>
+  <path d="M14 64 h16" stroke="#B9AAFF" stroke-width="6" stroke-linecap="round"/>
+</svg>

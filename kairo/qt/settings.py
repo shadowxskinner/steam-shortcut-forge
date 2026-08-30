@@ -9,14 +9,16 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit,
 from kairo import APP_ID, APP_NAME, TAGLINE, __version__
 from kairo import migration, paths
 from kairo.artwork.steamgriddb import CONFIG_KEY as SGDB_KEY
+from kairo.qt.emulator_settings import EmulatorsCard
 from kairo.qt import theme as Q
 from kairo.ui import theme as T
 
 
 class SettingsPane(QWidget):
-    def __init__(self, context, parent=None):
+    def __init__(self, context, on_providers_changed=None, parent=None):
         super().__init__(parent)
         self.ctx = context
+        self._on_providers_changed = on_providers_changed
         self.setObjectName("workspace")
         # A QWidget *subclass* does not paint a stylesheet background unless
         # it is told to; plain QWidget instances do. Both panes name
@@ -84,6 +86,11 @@ class SettingsPane(QWidget):
         card_layout.addWidget(self.key)
         card_layout.addLayout(row)
         layout.addWidget(card)
+
+        # -- emulators -----------------------------------------------------
+        # The only part of Settings that changes what the sidebar contains,
+        # so it tells the shell to rebuild rather than waiting for a restart.
+        layout.addWidget(EmulatorsCard(context, self._on_providers_changed))
 
         # -- where things live --------------------------------------------
         places = QFrame()

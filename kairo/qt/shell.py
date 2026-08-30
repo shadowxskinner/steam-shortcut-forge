@@ -70,7 +70,7 @@ class KairoWindow(QMainWindow):
             self.migration_report = migration.MigrationReport(failures=[str(exc)])
 
         self.config_data = config_store.load()
-        self.providers = provider_registry()
+        self.providers = provider_registry(self.config_data)
         self.sources = artwork_registry(self.config_data)
         self.ledger = Ledger().load()
         self.tokens = ActivityTokens()
@@ -182,7 +182,7 @@ class KairoWindow(QMainWindow):
         if key == nav.VIEW_CHANGES:
             pane = ChangesPane(self.ctx)
         elif key == nav.VIEW_SETTINGS:
-            pane = SettingsPane(self.ctx)
+            pane = SettingsPane(self.ctx, self._providers_changed)
         else:
             item = next(i for i in self.items if i.key == key)
             pane = LibraryPane(item.provider, self.ctx)
@@ -200,6 +200,31 @@ class KairoWindow(QMainWindow):
             button.setChecked(button_key == key)
         if hasattr(pane, "refresh"):
             pane.refresh()
+
+    def _providers_changed(self) -> None:
+        """Rebuild the sidebar after an emulator is added, edited or removed.
+
+        Emulators are the only configuration that changes what destinations
+        exist, and making the user restart to see a section they just created
+        would be a poor way to find out it worked.
+        """
+        self.providers = provider_registry(self.config_data)
+        self.items = nav.build_items(self.providers)
+        current = next((k for k, b in self.buttons.items() if b.isChecked()),
+                       None)
+        for pane in self.panes.values():
+            self.stack.removeWidget(pane)
+            pane.deleteLater()
+        self.panes.clear()
+        self.buttons.clear()
+        old_nav = self.centralWidget().layout().itemAt(0).itemAt(0).widget()
+        body = self.centralWidget().layout().itemAt(0)
+        body.removeWidget(old_nav)
+        old_nav.setParent(None)
+        old_nav.deleteLater()
+        body.insertWidget(0, self._build_nav())
+        keys = [item.key for item in self.items]
+        self._select(current if current in keys else keys[0])
 
     def _refresh_changes(self) -> None:
         pane = self.panes.get(nav.VIEW_CHANGES)

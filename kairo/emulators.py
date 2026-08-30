@@ -16,6 +16,7 @@ system label. An emulator with one folder is simply that case with one entry.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -204,12 +205,16 @@ class Rom:
 
     @property
     def local_id(self) -> str:
-        """Stable within an emulator, and safe in a key.
+        """Stable, readable, and legal in a filename.
 
-        Derived from the path rather than the title, so correcting a title
-        later does not orphan the change history for that shortcut.
+        The provider id already namespaces this, so the emulator is not
+        repeated here. Built from the file's own stem and a digest of its
+        full path: no slashes or colons to break a .desktop filename, and
+        nothing derived from the display title, so correcting a title later
+        cannot orphan that shortcut's history.
         """
-        return f"{self.emulator_id}/{slug(str(self.path))}"
+        digest = hashlib.sha1(str(self.path).encode()).hexdigest()[:8]
+        return f"{slug(self.path.stem)[:48]}-{digest}"
 
 
 def load(config: dict[str, Any] | None) -> list[Emulator]:
