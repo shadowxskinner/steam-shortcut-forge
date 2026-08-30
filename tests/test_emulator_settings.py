@@ -78,3 +78,19 @@ def test_save_is_offered_only_when_there_is_a_change():
     source = (QT_DIR / "settings.py").read_text()
     changed = source.split("def _key_changed")[1].split("\n    def ")[0]
     assert "setEnabled(" in changed
+
+
+def test_no_button_is_narrower_than_its_own_label():
+    """#secondary carries 16px of side padding.
+
+    A square button has no room for text, and Qt elides the label rather
+    than overflowing — which turned a browse button into a single dot.
+    """
+    source = (QT_DIR / "emulator_settings.py").read_text()
+    assert "setFixedWidth(Q.H_BUTTON)" not in source
+
+
+def test_the_dialog_wears_kairos_colours_not_the_desktops():
+    source = (QT_DIR / "emulator_settings.py").read_text()
+    assert 'self.setObjectName("workspace")' in source
+    assert "WA_StyledBackground" in source

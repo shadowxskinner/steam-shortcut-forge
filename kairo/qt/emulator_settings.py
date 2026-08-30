@@ -45,11 +45,13 @@ class FolderRow(QWidget):
         self.system = _field("System (optional)", folder.system)
         self.system.setFixedWidth(Q.W_LABEL * 2)
 
-        browse = QPushButton("…")
+        # Labelled, not an icon: the secondary style carries 16px of side
+        # padding, so a square button has no room for its own text and Qt
+        # elides "…" down to a single dot. It also reads better matching the
+        # Choose… beside the executable field.
+        browse = QPushButton("Choose…")
         browse.setObjectName("secondary")
         browse.setFixedHeight(Q.H_BUTTON)
-        browse.setFixedWidth(Q.H_BUTTON)
-        browse.setToolTip("Choose a folder")
         browse.clicked.connect(lambda _c: self._browse())
 
         self.remove = QPushButton("Remove")
@@ -58,6 +60,7 @@ class FolderRow(QWidget):
 
         row.addWidget(self.path, 1)
         row.addWidget(browse)
+        row.addSpacing(T.S2)
         row.addWidget(self.extensions)
         row.addWidget(self.system)
         row.addWidget(self.remove)
@@ -83,6 +86,11 @@ class EmulatorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Emulator")
         self.setMinimumWidth(760)
+        # Without this the dialog takes the system palette, so it is dark on
+        # a dark desktop theme and light on a light one while the window
+        # behind it stays Kairo's own colour either way.
+        self.setObjectName("workspace")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self._original = emulator
         emulator = emulator or emu.Emulator()
 
