@@ -94,3 +94,34 @@ def test_the_dialog_wears_kairos_colours_not_the_desktops():
     source = (QT_DIR / "emulator_settings.py").read_text()
     assert 'self.setObjectName("workspace")' in source
     assert "WA_StyledBackground" in source
+
+
+def test_a_folder_row_reports_what_it_actually_matches():
+    """A wrong extension looks completely fine until something counts.
+
+    Typing .rvs instead of .rvz, or putting the folder in the wrong box,
+    produces a form that validates and a library that is empty.
+    """
+    source = (QT_DIR / "emulator_settings.py").read_text()
+    assert "def recount" in source
+    recount = source.split("def recount")[1].split("\n    def ")[0]
+    assert "no folder" in recount
+    # Pluralised in an f-string, so "files" never appears literally.
+    assert "file{" in recount
+    assert "rglob" in recount, "the count must come from the filesystem"
+    assert "textChanged.connect" in source, "it must update as you type"
+
+
+def test_the_folder_columns_are_labelled():
+    """Three unlabelled boxes is how a path ends up in the wrong one."""
+    source = (QT_DIR / "emulator_settings.py").read_text()
+    for column in ("Folder", "File types", "System", "Matches"):
+        assert f'QLabel("{column}")' in source or f'("{column}"' in source, column
+
+
+def test_arguments_come_after_the_folders_and_say_they_are_optional():
+    """Above the folder list it read as the next thing to fill in."""
+    source = (QT_DIR / "emulator_settings.py").read_text()
+    assert source.index("ROM FOLDERS") < source.index('QLabel("Arguments")')
+    assert "Optional." in source
+    assert "not where the ROM folder goes" in source

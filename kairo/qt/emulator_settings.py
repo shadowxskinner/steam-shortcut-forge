@@ -58,18 +58,49 @@ class FolderRow(QWidget):
         self.remove.setObjectName("danger")
         self.remove.setFixedHeight(Q.H_BUTTON)
 
+        # How many files this row actually matches, updated as you type. A
+        # folder in the wrong box or an extension typed .rvs instead of .rvz
+        # both look completely fine until something says "no files".
+        self.matched = QLabel("")
+        self.matched.setObjectName("meta")
+        self.matched.setFixedWidth(Q.W_LABEL)
+        self.path.textChanged.connect(lambda _t: self.recount())
+        self.extensions.textChanged.connect(lambda _t: self.recount())
+
         row.addWidget(self.path, 1)
         row.addWidget(browse)
         row.addSpacing(T.S2)
         row.addWidget(self.extensions)
         row.addWidget(self.system)
+        row.addWidget(self.matched)
         row.addWidget(self.remove)
+        self.recount()
 
     def _browse(self) -> None:
         start = self.path.text().strip() or str(Path.home())
         chosen = QFileDialog.getExistingDirectory(self, "ROM folder", start)
         if chosen:
             self.path.setText(chosen)
+
+    def recount(self) -> None:
+        folder = self.value()
+        if not folder.path:
+            self.matched.setText("")
+            return
+        root = Path(folder.path).expanduser()
+        if not root.is_dir():
+            self.matched.setText("no folder")
+            return
+        if not folder.extensions:
+            self.matched.setText("no types")
+            return
+        try:
+            count = sum(1 for p in root.rglob("*")
+                        if folder.matches(p.name) and p.is_file())
+        except OSError:
+            self.matched.setText("unreadable")
+            return
+        self.matched.setText(f"{count} file{'' if count == 1 else 's'}")
 
     def value(self) -> emu.RomFolder:
         # Extensions are typed however people type them - ".iso, rvz" is as
@@ -109,8 +140,7 @@ class EmulatorDialog(QDialog):
         find.clicked.connect(lambda _c: self._find_executable())
 
         for label, widget, extra in (("Name", self.name, None),
-                                     ("Executable", self.executable, find),
-                                     ("Arguments", self.arguments, None)):
+                                     ("Executable", self.executable, find)):
             line = QHBoxLayout()
             line.setSpacing(T.S2)
             caption = QLabel(label)
@@ -122,22 +152,29 @@ class EmulatorDialog(QDialog):
                 line.addWidget(extra)
             layout.addLayout(line)
 
-        hint = QLabel(f"{emu.ROM_PLACEHOLDER} is replaced with the game's "
-                      "file. It is added for you if you leave it out.")
-        hint.setObjectName("meta")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
         heading = QLabel("ROM FOLDERS")
         heading.setObjectName("micro")
         layout.addWidget(heading)
 
-        columns = QLabel("Folder, then the file extensions that count, then "
-                         "the system name — Dolphin wants one row for "
-                         "GameCube and another for Wii.")
+        columns = QLabel("One row per system. Dolphin wants one for GameCube "
+                         "and another for Wii; most emulators want one row.")
         columns.setObjectName("meta")
         columns.setWordWrap(True)
         layout.addWidget(columns)
+
+        # Column headers. Three unlabelled boxes in a row is how a folder
+        # path ends up typed into the arguments field instead.
+        header = QHBoxLayout()
+        header.setSpacing(T.S2)
+        for caption, width in (("Folder", 0), ("File types", Q.W_QUERY),
+                               ("System", Q.W_LABEL * 2), ("Matches", Q.W_LABEL)):
+            box = QLabel(caption)
+            box.setObjectName("micro")
+            if width:
+                box.setFixedWidth(width)
+            header.addWidget(box, 1 if not width else 0)
+        header.addSpacing(Q.W_LABEL)
+        layout.addLayout(header)
 
         holder = QWidget()
         self.folders = QVBoxLayout(holder)
@@ -154,6 +191,24 @@ class EmulatorDialog(QDialog):
         add.setFixedHeight(Q.H_BUTTON)
         add.clicked.connect(lambda _c: self._add_folder())
         layout.addWidget(add, 0, Qt.AlignLeft)
+
+        # Arguments last, and described as optional. Sitting above the folder
+        # list it read as the next thing to fill in, and a ROM folder got
+        # typed into it.
+        advanced = QHBoxLayout()
+        advanced.setSpacing(T.S2)
+        caption = QLabel("Arguments")
+        caption.setObjectName("meta")
+        caption.setFixedWidth(Q.W_LABEL)
+        advanced.addWidget(caption)
+        advanced.addWidget(self.arguments, 1)
+        layout.addLayout(advanced)
+        hint = QLabel(f"Optional. {emu.ROM_PLACEHOLDER} is replaced with the "
+                      "game's file, and is added for you if you leave it out. "
+                      "This is not where the ROM folder goes.")
+        hint.setObjectName("meta")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
         self.rows: list[FolderRow] = []
         for folder in emulator.folders or (emu.RomFolder(""),):
