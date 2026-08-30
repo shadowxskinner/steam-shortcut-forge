@@ -30,6 +30,14 @@ FILTERS = {"All": "all", "Customized": "with", "Untouched": "without"}
 SEARCH_DEBOUNCE_MS = 250
 ACTIVITY_ARTWORK = "artwork"
 ACTIVITY_APPLY = "apply"
+ACTIVITY_SCAN = "scan"
+
+#: How many rows exist at once. A row is five widgets, so a 2000-game library
+#: built the lot and spent 1.8 seconds and 225MB doing it — every time the
+#: search box was cleared. Rows are built in pages instead and the next page
+#: arrives as you reach the bottom, which keeps the cost proportional to what
+#: is on screen rather than to the size of the library.
+ROW_PAGE = 120
 
 #: Nothing below this ever fills a tile without being enlarged, so it is not
 #: offered. The source filters on the dimensions the API reports; this is the
@@ -53,6 +61,8 @@ class LibraryPane(QWidget):
 
         self.entries = []
         self.rows: list[EntryRow] = []
+        self._filtered: list = []
+        self._shown = 0
         self.visible = 0
         self.selected: EntryRow | None = None
         self.proposed = None
@@ -118,6 +128,8 @@ class LibraryPane(QWidget):
         self.rows_layout.setSpacing(Q.GAP_ROW)
         self.rows_layout.addStretch(1)
         self.scroll.setWidget(holder)
+        self.scroll.verticalScrollBar().valueChanged.connect(
+            self._grow_if_near_bottom)
         layout.addSpacing(T.S1)
         layout.addWidget(self.scroll, 1)
         return column
@@ -410,14 +422,39 @@ class LibraryPane(QWidget):
     # -- entries -----------------------------------------------------------
 
     def rescan(self) -> None:
-        try:
-            self.entries = (self.provider.scan()
-                            if self.provider.available() else [])
-        except Exception as exc:
+        """Scan off the UI thread.
+
+        A Steam library is a handful of manifest files, but a ROM folder can
+        be thousands of entries on a spinning disk, and doing that here froze
+        the window for as long as it took. The token means a rescan triggered
+        while one is already running discards the older result rather than
+        letting two land in either order.
+        """
+        token = self.tokens.start(ACTIVITY_SCAN)
+        provider = self.provider
+
+        def run():
+            return provider.scan() if provider.available() else []
+
+        # Named apart from the artwork lookup's callbacks: two nested
+        # functions called arrived/failed in one file is how a test ends up
+        # asserting against the wrong one.
+        def scanned(entries):
+            if token.cancelled:
+                return
+            self.entries = entries
+            self._probe_cache.clear()
+            self.refilter(auto_select=True)
+
+        def scan_failed(message):
+            if token.cancelled:
+                return
             self.entries = []
-            self.status.emit(f"{self.provider.label}: {exc}")
-        self._probe_cache.clear()
-        self.refilter(auto_select=True)
+            self._probe_cache.clear()
+            self.refilter(auto_select=True)
+            self.status.emit(f"{provider.label}: {message}")
+
+        work.submit(run, on_done=scanned, on_failed=scan_failed)
 
     def visible_entries(self):
         term = self.search.text().strip().lower()
@@ -434,27 +471,15 @@ class LibraryPane(QWidget):
     def refilter(self, auto_select: bool = False) -> None:
         entries = self.visible_entries()
         previous = self.selected.entry.key if self.selected else None
-
-        while len(self.rows) < len(entries):
-            row = EntryRow(self.grid_holder)
-            row.clicked.connect(self.select)
-            self.rows.append(row)
-            self.rows_layout.insertWidget(len(self.rows) - 1, row)
-
-        for index, entry in enumerate(entries):
-            row = self.rows[index]
-            row.bind(entry)
-            row.set_selected(False)
-            row.setVisible(True)
-        for row in self.rows[len(entries):]:
-            row.setVisible(False)
-
+        self._filtered = entries
+        self._shown = min(len(entries), max(ROW_PAGE, self._shown_floor()))
+        self._bind_rows(entries[:self._shown])
         self.visible = len(entries)
         self.selected = None
         self.count.setText(str(len(entries)))
 
         if previous is not None:
-            for row in self.rows[:self.visible]:
+            for row in self.rows[:self._shown]:
                 if row.entry.key == previous:
                     self.select(row, load=False)
                     break
@@ -464,6 +489,46 @@ class LibraryPane(QWidget):
             else:
                 self._empty_workspace()
         self.changed.emit()
+
+    def _shown_floor(self) -> int:
+        """Keep at least a viewport's worth, however short the viewport is."""
+        try:
+            height = self.scroll.viewport().height()
+        except Exception:
+            return ROW_PAGE
+        return max(1, height // max(1, Q.H_ROW + Q.GAP_ROW) + 4)
+
+    def _bind_rows(self, entries) -> None:
+        """Materialise exactly as many rows as are being shown."""
+        while len(self.rows) < len(entries):
+            row = EntryRow(self.grid_holder)
+            row.clicked.connect(self.select)
+            self.rows.append(row)
+            self.rows_layout.insertWidget(len(self.rows) - 1, row)
+        for index, entry in enumerate(entries):
+            row = self.rows[index]
+            row.bind(entry)
+            row.set_selected(False)
+            row.setVisible(True)
+        for row in self.rows[len(entries):]:
+            row.setVisible(False)
+
+    def _grow_if_near_bottom(self, value: int) -> None:
+        """Add the next page as the end of the built rows comes into view."""
+        bar = self.scroll.verticalScrollBar()
+        if bar.maximum() - value > Q.H_ROW * 3:
+            return
+        if self._shown >= len(self._filtered):
+            return
+        keep = self.selected.entry.key if self.selected else None
+        self._shown = min(len(self._filtered), self._shown + ROW_PAGE)
+        self._bind_rows(self._filtered[:self._shown])
+        if keep is not None:
+            for row in self.rows[:self._shown]:
+                if row.entry is not None and row.entry.key == keep:
+                    row.set_selected(True)
+                    self.selected = row
+                    break
 
     def customized_count(self) -> int:
         return sum(1 for entry in self.entries if entry.customized)

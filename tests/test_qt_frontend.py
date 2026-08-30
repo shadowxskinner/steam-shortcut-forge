@@ -931,3 +931,51 @@ def test_the_mark_is_not_drawn_without_the_glyphs_to_draw_it():
     assert "inFont" in source
     nav = source.split("def _build_nav")[1].split("\n    def ")[0]
     assert "if _can_render(MARK)" in nav, "the mark must be conditional"
+
+
+def test_scanning_a_library_does_not_block_the_window():
+    """A ROM folder can be thousands of files on a spinning disk."""
+    source = (QT_DIR / "library.py").read_text()
+    rescan = source.split("def rescan")[1].split("\n    def ")[0]
+    assert "work.submit(" in rescan
+    assert "self.tokens.start(ACTIVITY_SCAN)" in rescan
+    assert "provider.scan()" in rescan
+    assert "token.cancelled" in rescan, "a stale scan must not overwrite a new one"
+
+
+def test_rows_are_built_in_pages_not_all_at_once():
+    """A row is five widgets; a library is not necessarily small.
+
+    Building one per entry cost 1.8 seconds and 225MB on a 2000-game
+    library — and paid it again every time the search box was cleared.
+    """
+    from kairo.qt.library import ROW_PAGE
+
+    source = (QT_DIR / "library.py").read_text()
+    assert 0 < ROW_PAGE < 500
+    refilter = source.split("def refilter")[1].split("\n    def ")[0]
+    assert "self._shown = min(" in refilter
+    assert "self._bind_rows(entries[:self._shown])" in refilter
+
+
+def test_reaching_the_bottom_brings_the_next_page():
+    """Paging must not put entries out of reach."""
+    source = (QT_DIR / "library.py").read_text()
+    grow = source.split("def _grow_if_near_bottom")[1].split("\n    def ")[0]
+    assert "self._shown + ROW_PAGE" in grow
+    assert "verticalScrollBar" in grow
+    assert "valueChanged.connect" in source
+
+
+def test_the_count_reports_the_library_not_the_page():
+    """Showing 120 of 2000 must still say 2000."""
+    source = (QT_DIR / "library.py").read_text()
+    refilter = source.split("def refilter")[1].split("\n    def ")[0]
+    assert "self.visible = len(entries)" in refilter
+    assert "self.count.setText(str(len(entries)))" in refilter
+
+
+def test_growing_the_page_keeps_the_selection():
+    source = (QT_DIR / "library.py").read_text()
+    grow = source.split("def _grow_if_near_bottom")[1].split("\n    def ")[0]
+    assert "self.selected" in grow, "scrolling must not drop the selection"

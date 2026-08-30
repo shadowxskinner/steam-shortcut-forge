@@ -22,6 +22,7 @@ from kairo.desktop import entry as de
 from kairo.models import AppEntry, ArtQuery, make_key
 from kairo.providers.base import AppProvider, LauncherWriter
 from kairo.desktop.lookup import resolve_icon
+from kairo.providers.steam import existing_generated
 from kairo.providers.writers import GeneratedEntryWriter, has_custom_artwork
 
 #: Provider ids are namespaced so a ROM can never collide with a Steam appid,
@@ -112,13 +113,17 @@ class EmulatorProvider(AppProvider):
             )
             entries.append(entry)
 
-        writer = self.writer()
+        # One listing of the applications directory, then a dict lookup per
+        # ROM. Asking the writer for each entry cost two stat calls apiece,
+        # which is 4000 syscalls for a 2000-game library and is felt on any
+        # disk slower than a tmpfs.
+        existing = existing_generated()
         for entry in entries:
-            existing = writer.existing(entry)
-            if existing is None:
+            path = existing.get(entry.local_id)
+            if path is None:
                 continue
-            entry.customized = has_custom_artwork(existing)
-            value = de.read_entry_icon(existing)
+            entry.customized = has_custom_artwork(path)
+            value = de.read_entry_icon(path)
             entry.icon_hint = value
             entry.current_icon = (Path(value) if value.startswith("/")
                                   else resolve_icon(value))
@@ -141,8 +146,7 @@ class EmulatorProvider(AppProvider):
         )
 
     def refresh(self, entry: AppEntry) -> None:
-        writer = self.writer()
-        existing = writer.existing(entry)
+        existing = existing_generated().get(entry.local_id)
         if existing is None:
             entry.customized = False
             entry.current_icon = None

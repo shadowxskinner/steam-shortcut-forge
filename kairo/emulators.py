@@ -249,6 +249,10 @@ def scan(emulator: Emulator) -> list[Rom]:
     """
     found: list[Rom] = []
     seen: set[Path] = set()
+    # resolve() is a syscall per file, and it only earns its keep when two
+    # configured folders could reach the same ROM. With one folder - Cemu,
+    # PCSX2, most emulators - there is nothing to collide with.
+    dedup = len(emulator.folders) > 1
     for folder in emulator.folders:
         if not folder.extensions:
             continue
@@ -256,21 +260,23 @@ def scan(emulator: Emulator) -> list[Rom]:
         try:
             if not root.is_dir():
                 continue
-            candidates = sorted(root.rglob("*"))
+            candidates = root.rglob("*")
         except OSError:
             continue
         for path in candidates:
             try:
-                if not path.is_file() or not folder.matches(path.name):
+                if not folder.matches(path.name) or not path.is_file():
                     continue
-                resolved = path.resolve()
+                if dedup:
+                    resolved = path.resolve()
+                    if resolved in seen:    # overlapping folders, or a symlink
+                        continue
+                    seen.add(resolved)
             except OSError:
                 continue
-            if resolved in seen:        # overlapping folders, or a symlink
-                continue
-            seen.add(resolved)
             found.append(Rom(emulator_id=emulator.id, path=path,
                              title=clean_title(path.name),
                              system=folder.system))
+    # Sorted once at the end rather than sorting every directory listing.
     found.sort(key=lambda rom: (rom.system.lower(), rom.title.lower()))
     return found

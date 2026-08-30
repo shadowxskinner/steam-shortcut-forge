@@ -7,7 +7,6 @@ emulator the user has half-finished setting up.
 
 from pathlib import Path
 
-import pytest
 
 from kairo import emulators as emu
 from kairo.providers.emulator import EmulatorProvider, providers_from_config
