@@ -23,10 +23,15 @@ classifiers = [
     "Topic :: Desktop Environment",
 ]
 dependencies = [
-    "customtkinter>=6.0.0",
     "Pillow>=10.0.0",
-    "cairosvg",
 ]
+
+[project.optional-dependencies]
+# The two frontends. Neither is required by the other, and the backend needs
+# neither: providers, artwork, the ledger, migration and matching are all
+# toolkit-free and their tests run with no GUI library installed at all.
+tk = ["customtkinter>=6.0.0", "cairosvg"]
+qt = ["PySide6>=6.6"]
 
 [project.urls]
 Homepage = "https://github.com/shadowxskinner/kairo"
@@ -35,6 +40,7 @@ Issues = "https://github.com/shadowxskinner/kairo/issues"
 
 [project.gui-scripts]
 kairo = "kairo.__main__:main"
+kairo-qt = "kairo.qt.__main__:main"
 
 [tool.setuptools.dynamic]
 # Single source of truth. Nothing else stores a version string.
@@ -42,6 +48,11 @@ version = { attr = "kairo.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["kairo*"]
+
+[tool.setuptools.package-data]
+# The blur shim is built, not shipped prebuilt: it is optional, and a compiled
+# object has no business in a wheel that must also work without it.
+"kairo.qt" = ["native/*.c", "native/build.sh"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

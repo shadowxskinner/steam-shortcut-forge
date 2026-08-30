@@ -9,68 +9,17 @@ providers at all.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import customtkinter as ctk
 
 from kairo.ui import theme as T
 from kairo.ui.widgets import NavIcon
 
-VIEW_CHANGES = "view:changes"
-VIEW_SETTINGS = "view:settings"
-
-GROUP_MANAGEMENT = "Management"
-
-#: Icons for the destinations this module owns.
-VIEW_ICONS = {VIEW_CHANGES: "history", VIEW_SETTINGS: "sliders"}
-
-#: Icons for providers that shipped before nav_icon existed. A provider may
-#: name its own through a ``nav_icon`` attribute; anything unrecognised falls
-#: back by group, so a future emulator gets the chip without supplying
-#: anything at all.
-PROVIDER_ICONS = {"steam": "steam", "desktop": "grid"}
-GROUP_ICONS = {"Emulators": "chip"}
-
-
-def icon_for(item: "NavItem") -> str:
-    if item.provider is not None:
-        named = getattr(item.provider, "nav_icon", None)
-        if named:
-            return named
-        return PROVIDER_ICONS.get(item.provider.id,
-                                  GROUP_ICONS.get(item.group, "chip"))
-    return VIEW_ICONS.get(item.key, "chip")
-
-
-@dataclass(frozen=True)
-class NavItem:
-    key: str
-    label: str
-    group: str
-    provider: object | None = None
-    subtitle: str = ""
-
-
-def build_items(registry) -> list[NavItem]:
-    """Providers first, grouped as they declare, then the fixed destinations."""
-    providers = registry.available() or registry.all()
-
-    groups: dict[str, list] = {}
-    for provider in providers:
-        groups.setdefault(provider.group, []).append(provider)
-
-    items: list[NavItem] = []
-    for group, members in groups.items():
-        for provider in sorted(members, key=lambda p: (p.order, p.label)):
-            items.append(NavItem(key=f"provider:{provider.id}",
-                                 label=provider.label, group=group,
-                                 provider=provider))
-
-    items.append(NavItem(key=VIEW_CHANGES, label="Changes",
-                         group=GROUP_MANAGEMENT))
-    items.append(NavItem(key=VIEW_SETTINGS, label="Settings",
-                         group=GROUP_MANAGEMENT))
-    return items
+# The model - which providers appear, how they group, which icon each gets -
+# lives in kairo.navmodel so both frontends build the same navigation from the
+# same registry. Re-exported here so existing imports keep working.
+from kairo.navmodel import (  # noqa: F401  (re-export)
+    GROUP_MANAGEMENT, GROUP_ICONS, PROVIDER_ICONS, VIEW_CHANGES, VIEW_ICONS,
+    VIEW_SETTINGS, NavItem, build_items, icon_for)
 
 
 class NavButton(ctk.CTkFrame):
