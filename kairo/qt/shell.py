@@ -294,6 +294,8 @@ class KairoWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.tokens.cancel_all()
+        # The native effect must go before Qt destroys its wl_surface.
+        self.blur.remove(self)
         super().closeEvent(event)
 
 

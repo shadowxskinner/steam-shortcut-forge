@@ -12,7 +12,8 @@ raises. There is no fallback that captures the screen or fakes the effect: the
 compositor does it or it does not happen.
 
 The whole interaction is one registry roundtrip and one ``set_blur_region`` at
-startup. Nothing is periodic and nothing repeats on resize or repaint.
+startup, then one release before Qt destroys the surface. Nothing is periodic
+and nothing repeats on resize or repaint.
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ RESULTS = {
     -3: "could not read the Wayland registry",
     -4: "this compositor does not offer ext-background-effect-v1",
     -5: "the compositor refused the effect object",
+    -6: "the compositor refused the blur region",
+    -7: "could not retain the blur effect",
 }
 
 
@@ -65,6 +68,8 @@ class Blur:
             library.kairo_blur_available.restype = ctypes.c_int
             library.kairo_blur_enable.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
             library.kairo_blur_enable.restype = ctypes.c_int
+            library.kairo_blur_disable.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            library.kairo_blur_disable.restype = ctypes.c_int
         except OSError as exc:
             self.status = f"blur unavailable — shim would not load ({exc})"
             return
@@ -135,3 +140,18 @@ class Blur:
         self.active = result == 0
         self.status = RESULTS.get(result, f"blur unavailable — code {result}")
         return self.active
+
+    def remove(self, window) -> None:
+        """Release blur while ``window`` still owns its Wayland surface."""
+        if self._library is None or not self.active:
+            return
+        display, surface = self._display(), self._surface(window)
+        if not display or not surface:
+            return
+        try:
+            self._library.kairo_blur_disable(ctypes.c_void_p(display),
+                                              ctypes.c_void_p(surface))
+        except Exception:
+            return
+        finally:
+            self.active = False

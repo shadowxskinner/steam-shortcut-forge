@@ -328,8 +328,7 @@ def test_replaced_clamps_without_reordering_the_intent():
 
 
 def test_a_denser_preset_exists_to_compare_against():
-    """0.92 still let terminal text read through on a real display, so the
-    denser option is a preset to try rather than a new default guessed at."""
+    """Dense remains an escape hatch for unusually high-contrast wallpaper."""
     from kairo.qt import theme as Q
 
     dense = Q.PRESETS["dense"]
@@ -337,6 +336,15 @@ def test_a_denser_preset_exists_to_compare_against():
     assert dense.panel > frosted.panel
     assert dense.nav >= dense.list >= dense.panel >= dense.card >= dense.tile
     assert dense.panel < 1.0, "dense is still glass, not a wall"
+
+
+def test_live_default_keeps_reading_content_quiet():
+    """The shell-6 desktop capture left terminal text competing with Kairo."""
+    from kairo.qt import theme as Q
+
+    frosted = Q.PRESETS[Q.DEFAULT_PRESET]
+    assert frosted.workspace >= 0.75
+    assert frosted.panel >= 0.94
 
 
 # -- the backdrop behind the cards ------------------------------------------
@@ -402,6 +410,32 @@ def test_no_blur_strength_control_is_offered():
         source = path.read_text().lower()
         assert "blurstrength" not in source
         assert "blur_radius" not in source
+
+
+def test_native_blur_uses_a_real_region_not_null():
+    """ext-background-effect says NULL removes blur; shell 6 did exactly that."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parent.parent / "kairo" / "qt"
+              / "native" / "blur.c").read_text()
+    assert "wl_compositor_create_region" in source
+    assert "wl_region_add" in source
+    assert "set_blur_region(effect, region)" in source
+    assert "set_blur_region(effect, NULL)" not in source
+
+
+def test_blur_is_released_before_qt_destroys_the_surface():
+    """An orphaned effect object made closing the live shell unsafe."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "kairo" / "qt"
+    native = (root / "native" / "blur.c").read_text()
+    bridge = (root / "blur.py").read_text()
+    close = (root / "shell.py").read_text().split("def closeEvent")[1]
+    assert "kairo_blur_disable" in native
+    assert "ext_background_effect_surface_v1_destroy" in native
+    assert "kairo_blur_disable.argtypes" in bridge
+    assert close.index("self.blur.remove(self)") < close.index("super().closeEvent")
 
 
 def test_a_clicked_signal_is_never_wired_straight_to_a_bare_signal():

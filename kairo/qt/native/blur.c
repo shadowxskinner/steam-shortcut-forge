@@ -9,8 +9,9 @@
  *
  * Deliberately does no roundtrips of its own beyond a single one at setup.
  * There is no thread, no loop and nothing periodic: a blur region is set once
- * and the compositor honours it until the surface goes away.
+ * and released explicitly before Qt destroys the surface.
  */
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -19,8 +20,17 @@
 
 struct state {
     struct ext_background_effect_manager_v1 *manager;
-    uint32_t capabilities;
+    struct wl_compositor *compositor;
 };
+
+struct active_effect {
+    struct wl_display *display;
+    struct wl_surface *surface;
+    struct ext_background_effect_surface_v1 *effect;
+    struct active_effect *next;
+};
+
+static struct active_effect *active_effects;
 
 static void handle_global(void *data, struct wl_registry *registry,
                           uint32_t name, const char *interface, uint32_t version)
@@ -30,10 +40,20 @@ static void handle_global(void *data, struct wl_registry *registry,
         s->manager = wl_registry_bind(registry, name,
                                       &ext_background_effect_manager_v1_interface,
                                       version < 1 ? version : 1);
+    } else if (strcmp(interface, wl_compositor_interface.name) == 0) {
+        s->compositor = wl_registry_bind(registry, name,
+                                         &wl_compositor_interface,
+                                         version < 1 ? version : 1);
     }
 }
 
-static void handle_global_remove(void *data, struct wl_registry *r, uint32_t n) { }
+static void handle_global_remove(void *data, struct wl_registry *registry,
+                                 uint32_t name)
+{
+    (void) data;
+    (void) registry;
+    (void) name;
+}
 
 static const struct wl_registry_listener registry_listener = {
     handle_global, handle_global_remove
@@ -45,22 +65,27 @@ int kairo_blur_available(void *display_ptr)
     struct wl_display *display = display_ptr;
     if (!display) return 0;
 
-    struct state s = { NULL, 0 };
+    struct state s = { NULL, NULL };
     struct wl_registry *registry = wl_display_get_registry(display);
     if (!registry) return 0;
     wl_registry_add_listener(registry, &registry_listener, &s);
-    wl_display_roundtrip(display);
+    if (wl_display_roundtrip(display) < 0) {
+        wl_registry_destroy(registry);
+        return 0;
+    }
 
     int found = s.manager != NULL;
     if (s.manager) ext_background_effect_manager_v1_destroy(s.manager);
+    if (s.compositor) wl_compositor_destroy(s.compositor);
     wl_registry_destroy(registry);
     return found;
 }
 
 /*
- * Blur everything behind the surface. Passing a NULL region means "the whole
- * surface", which is what a translucent window wants: the compositor blurs
- * only where the surface is actually see-through.
+ * Blur everything behind the surface. The protocol says a NULL region removes
+ * the effect, so use a very large region instead. Regions are clipped to the
+ * current surface bounds and copied by the compositor; this therefore covers
+ * future resizes without keeping the wl_region proxy alive.
  *
  * Returns 0 on success, negative on failure.
  */
@@ -78,21 +103,86 @@ int kairo_blur_enable(void *display_ptr, void *surface_ptr)
         return -2;
     }
 
-    struct state s = { NULL, 0 };
+    for (struct active_effect *item = active_effects; item; item = item->next) {
+        if (item->surface == surface) return 0;
+    }
+
+    struct state s = { NULL, NULL };
     struct wl_registry *registry = wl_display_get_registry(display);
     if (!registry) return -3;
     wl_registry_add_listener(registry, &registry_listener, &s);
-    wl_display_roundtrip(display);
+    if (wl_display_roundtrip(display) < 0) {
+        wl_registry_destroy(registry);
+        return -3;
+    }
     wl_registry_destroy(registry);
 
-    if (!s.manager) return -4;
+    if (!s.manager || !s.compositor) {
+        if (s.manager) ext_background_effect_manager_v1_destroy(s.manager);
+        if (s.compositor) wl_compositor_destroy(s.compositor);
+        return -4;
+    }
 
     struct ext_background_effect_surface_v1 *effect =
         ext_background_effect_manager_v1_get_background_effect(s.manager, surface);
-    if (!effect) return -5;
+    if (!effect) {
+        ext_background_effect_manager_v1_destroy(s.manager);
+        wl_compositor_destroy(s.compositor);
+        return -5;
+    }
 
-    ext_background_effect_surface_v1_set_blur_region(effect, NULL);
+    struct wl_region *region = wl_compositor_create_region(s.compositor);
+    if (!region) {
+        ext_background_effect_surface_v1_destroy(effect);
+        ext_background_effect_manager_v1_destroy(s.manager);
+        wl_compositor_destroy(s.compositor);
+        return -6;
+    }
+
+    struct active_effect *item = calloc(1, sizeof(*item));
+    if (!item) {
+        wl_region_destroy(region);
+        ext_background_effect_surface_v1_destroy(effect);
+        ext_background_effect_manager_v1_destroy(s.manager);
+        wl_compositor_destroy(s.compositor);
+        return -7;
+    }
+
+    wl_region_add(region, 0, 0, INT32_MAX, INT32_MAX);
+    ext_background_effect_surface_v1_set_blur_region(effect, region);
+    wl_region_destroy(region);
+    ext_background_effect_manager_v1_destroy(s.manager);
+    wl_compositor_destroy(s.compositor);
+
+    item->display = display;
+    item->surface = surface;
+    item->effect = effect;
+    item->next = active_effects;
+    active_effects = item;
+
     wl_surface_commit(surface);
     wl_display_flush(display);
+    return 0;
+}
+
+/* Release the protocol object while Qt's wl_surface is still valid. */
+int kairo_blur_disable(void *display_ptr, void *surface_ptr)
+{
+    struct wl_display *display = display_ptr;
+    struct wl_surface *surface = surface_ptr;
+    if (!display || !surface) return -1;
+
+    struct active_effect **link = &active_effects;
+    while (*link && ((*link)->surface != surface || (*link)->display != display)) {
+        link = &(*link)->next;
+    }
+    if (!*link) return 0;
+
+    struct active_effect *item = *link;
+    *link = item->next;
+    ext_background_effect_surface_v1_destroy(item->effect);
+    wl_surface_commit(surface);
+    wl_display_flush(display);
+    free(item);
     return 0;
 }

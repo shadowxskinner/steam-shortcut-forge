@@ -36,13 +36,13 @@ class Glass:
     rectangle of its own beyond its panels.
     """
 
-    workspace: float = 0.62  # backdrop behind the cards
-    nav: float = 0.94        # navigation column
-    list: float = 0.93       # entry column
-    panel: float = 0.92      # workspace cards
-    card: float = 0.88       # rows, wells, fields
-    tile: float = 0.84       # artwork tiles, lightest for depth
-    line: float = 0.55       # borders and separators
+    workspace: float = 0.78  # backdrop behind the cards
+    nav: float = 0.97        # navigation column
+    list: float = 0.96       # entry column
+    panel: float = 0.95      # workspace cards
+    card: float = 0.92       # rows, wells, fields
+    tile: float = 0.88       # artwork tiles, lightest for depth
+    line: float = 0.62       # borders and separators
 
     def describe(self) -> str:
         """The constructor line for these values.
@@ -68,9 +68,10 @@ class Glass:
 
 
 #: Frosted is the default: content behind a panel should be shape and colour,
-#: never legible text. Dense exists because on a real display 0.92 still let
-#: terminal text read through - kept as a preset rather than a new default so
-#: the two can be compared side by side before either is baked in.
+#: never legible text. The live shell-6 screenshots showed that the original
+#: tint left terminal text competing with the interface, so the reading layers
+#: are denser while the workspace still admits wallpaper colour. Dense remains
+#: available for especially high-contrast backgrounds.
 PRESETS = {
     "frosted": Glass(),
     "dense": Glass(workspace=0.86, nav=0.985, list=0.98, panel=0.975,

@@ -31,7 +31,7 @@ done
 wayland-scanner client-header "$XML" ext-background-effect-v1-client-protocol.h
 wayland-scanner private-code  "$XML" ext-background-effect-v1-protocol.c
 
-gcc -shared -fPIC -O2 -o libkairoblur.so \
+gcc -shared -fPIC -O2 -Wall -Wextra -Werror -o libkairoblur.so \
     blur.c ext-background-effect-v1-protocol.c \
     $(pkg-config --cflags --libs wayland-client)
 
