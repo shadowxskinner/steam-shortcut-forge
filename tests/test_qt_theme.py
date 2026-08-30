@@ -136,13 +136,6 @@ def test_letter_spacing_is_styled_not_typed():
     assert not offenders, offenders
 
 
-def test_a_slider_is_given_a_height_of_its_own():
-    """Styling only a QSlider's sub-controls leaves the widget 3px tall."""
-    from pathlib import Path
-    source = (Path(__file__).resolve().parent.parent
-              / "kairo" / "qt" / "settings.py").read_text()
-    assert "slider.setFixedHeight(Q.H_PILLS)" in source
-
 
 def test_a_translucent_surface_is_never_painted_twice():
     """Nesting #workspace inside #workspace doubles the fill.

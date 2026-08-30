@@ -28,11 +28,34 @@ LIST_CACHE_SECONDS = 86400
 # unreadable sliver once scaled down, so it is not offered as an icon.
 LOGO_MAX_ASPECT = 2.0
 
+# Square grids. SteamGridDB keeps most of a game's artwork under /grids/, and
+# the square dimensions are the largest assets it has - which is the whole
+# point here, because the icons endpoint alone returns a handful per game and
+# many of those are 32px, upscaled into a blur by the time they reach a tile.
+GRID_SQUARE_DIMENSIONS = "512x512,1024x1024"
+
+# Below this an asset is being enlarged to fill a tile rather than fitted into
+# one. Still offered - a small official icon may be exactly what you want -
+# but never ranked above something that will actually look sharp.
+SHARP_MIN_EDGE = 128
+
 
 def _fits_as_icon(width: int, height: int) -> bool:
     if not width or not height:
         return True                     # unknown - let the user judge the tile
     return max(width, height) / min(width, height) <= LOGO_MAX_ASPECT
+
+
+def _rank(art: Artwork):
+    """Sharp first, then real icons, then popularity.
+
+    Votes used to outrank resolution, which put a heavily upvoted 32px icon
+    above a 512px one and then enlarged it into the tile. Anything that will
+    render without being stretched now sorts ahead of anything that will not,
+    and only then does the crowd get a say.
+    """
+    edge = min(art.width, art.height) if art.width and art.height else 0
+    return (edge >= SHARP_MIN_EDGE, art.kind == "icon", edge, art.score)
 
 
 class SteamGridDBSource(ArtworkSource):
@@ -96,7 +119,8 @@ class SteamGridDBSource(ArtworkSource):
             pass
         return game_id
 
-    def _assets(self, endpoint: str, game_id: int, kind: str) -> list[Artwork]:
+    def _assets(self, endpoint: str, game_id: int, kind: str,
+                query: str = "") -> list[Artwork]:
         cache = paths.cache_dir() / f"{kind}s_{game_id}.json"
         if cache.is_file():
             try:
@@ -109,7 +133,8 @@ class SteamGridDBSource(ArtworkSource):
         page = 0
         while True:
             response = self._api_get(
-                f"/{endpoint}/game/{game_id}?types=static&nsfw=false&page={page}")
+                f"/{endpoint}/game/{game_id}"
+                f"?types=static&nsfw=false{query}&page={page}")
             batch = response.get("data") or []
             if not batch:
                 break
@@ -148,11 +173,13 @@ class SteamGridDBSource(ArtworkSource):
         return out
 
     def find(self, query: ArtQuery) -> list[Artwork]:
-        """Icons first, then logos square enough to pass as launcher icons.
+        """Everything square enough to serve as a launcher icon.
 
-        Icons alone are often only a handful per game, so logos supply the
-        rest - but icons always outrank them, so auto-assign never picks a
-        wordmark while a real icon exists.
+        The icons endpoint alone returns a handful per game, which is why the
+        browser looked so thin next to the SteamGridDB website: the bulk of a
+        game's artwork lives under /grids/, and its square dimensions are the
+        largest assets on offer. Grids and logos are filtered to roughly
+        square, and ranked so nothing gets enlarged into a tile.
         """
         if not query.steam_appid:
             return []
@@ -161,22 +188,25 @@ class SteamGridDBSource(ArtworkSource):
             return []
 
         assets = self._assets("icons", game_id, "icon")
-        try:
-            logos = self._assets("logos", game_id, "logo")
-            assets += [lg for lg in logos if _fits_as_icon(lg.width, lg.height)]
-        except net.NetworkError:
-            pass            # logos are a bonus; never fail the lookup over them
+        for endpoint, kind, extra in (
+                ("grids", "grid", f"&dimensions={GRID_SQUARE_DIMENSIONS}"),
+                ("logos", "logo", "")):
+            try:
+                extras = self._assets(endpoint, game_id, kind, extra)
+            except net.NetworkError:
+                continue    # a bonus class; never fail the lookup over one
+            assets += [a for a in extras if _fits_as_icon(a.width, a.height)]
 
-        assets.sort(key=lambda a: (a.kind == "icon", a.score, a.width * a.height),
-                    reverse=True)
+        assets.sort(key=_rank, reverse=True)
         return assets
 
     def best_match(self, query: ArtQuery) -> Suggestion | None:
         """Highest confidence available anywhere in Kairo.
 
         The lookup is keyed on the Steam appid, so there is no question of
-        having found the wrong game. find() already ranks real icons above
-        wordmark logos, so the first result is the one to take.
+        having found the wrong game. find() ranks anything that renders sharp
+        ahead of anything that does not, and a true icon ahead of cover art at
+        the same sharpness, so the first result is the one to take.
         """
         results = self.find(query)
         if not results:

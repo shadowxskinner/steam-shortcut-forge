@@ -12,9 +12,8 @@ the real backend; nothing writes to a launcher entry.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMainWindow,
-                               QPushButton, QStackedWidget, QVBoxLayout,
+                               QStackedWidget, QVBoxLayout,
                                QWidget)
 
 from kairo import APP_NAME, adoption, navmodel as nav
@@ -87,10 +86,8 @@ class KairoWindow(QMainWindow):
         self.items = nav.build_items(self.providers)
         self.buttons: dict[str, NavButton] = {}
         self.panes: dict[str, QWidget] = {}
-        self._shortcuts: list = []
 
         self._build()
-        self._install_shortcuts()
         self._adopt()
 
         first = next((item for item in self.items if item.provider is not None),
@@ -109,8 +106,10 @@ class KairoWindow(QMainWindow):
         which left the first eighty pixels of the window as an empty band and
         made the buttons look dropped in rather than placed. They now live in
         each pane's own header, so the top of the window is three columns of
-        content beginning on the same line, and the status text has moved to a
-        footer spanning the whole width instead of stopping at the sidebar.
+        content beginning on the same line. There is no status strip: the
+        window is the three columns and nothing else. Anything that needs
+        saying appears where it happened - a scan failure in the entry list,
+        a lookup failure in the artwork grid.
         """
         root = QWidget()
         root.setObjectName("root")
@@ -126,16 +125,6 @@ class KairoWindow(QMainWindow):
         self.stack = QStackedWidget()
         body.addWidget(self.stack, 1)
         outer.addLayout(body, 1)
-
-        footer = QWidget()
-        footer.setObjectName("footer")
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(Q.PAD_COLUMN, T.S2, Q.PAD_PANE, T.S2)
-        self.status = QLabel("")
-        self.status.setObjectName("status")
-        footer_layout.addWidget(self.status)
-        footer_layout.addStretch(1)
-        outer.addWidget(footer)
 
     def _build_nav(self) -> QWidget:
         column = QWidget()
@@ -186,14 +175,10 @@ class KairoWindow(QMainWindow):
         if key == nav.VIEW_CHANGES:
             pane = ChangesPane(self.ctx)
         elif key == nav.VIEW_SETTINGS:
-            pane = SettingsPane(self.ctx, blur_status=f"blur: {self.blur.status}",
-                                glass=self.glass,
-                                on_glass_change=self.apply_glass)
+            pane = SettingsPane(self.ctx)
         else:
             item = next(i for i in self.items if i.key == key)
             pane = LibraryPane(item.provider, self.ctx)
-            pane.changed.connect(self._refresh_status)
-            pane.status.connect(self.status.setText)
             pane.rescan_requested.connect(self.rescan)
         self.panes[key] = pane
         self.stack.addWidget(pane)
@@ -206,18 +191,6 @@ class KairoWindow(QMainWindow):
             button.setChecked(button_key == key)
         if hasattr(pane, "refresh"):
             pane.refresh()
-        self._refresh_status()
-
-    def _refresh_status(self) -> None:
-        pane = self.stack.currentWidget()
-        if isinstance(pane, LibraryPane):
-            self.status.setText(
-                f"{len(pane.entries)} {pane.provider.noun}  ·  "
-                f"{pane.customized_count()} customized  ·  "
-                f"{len(self.ledger)} change(s) recorded  ·  {self.blur.status}"
-                f"  ·  read-only shell")
-        else:
-            self.status.setText(f"{self.blur.status}  ·  read-only shell")
 
     def rescan(self) -> None:
         self.ledger.prune()
@@ -227,18 +200,16 @@ class KairoWindow(QMainWindow):
                 pane.rescan()
             elif hasattr(pane, "refresh"):
                 pane.refresh()
-        self._refresh_status()
 
     # -- startup -----------------------------------------------------------
 
     def _adopt(self) -> None:
+        # Silent by design: whatever adoption finds is listed under Changes,
+        # which is a better place to read it than a line that scrolls away.
         try:
-            adopted = adoption.adopt_untracked(self.ledger, self.providers)
+            adoption.adopt_untracked(self.ledger, self.providers)
         except Exception:
-            adopted = []
-        if adopted:
-            self.status.setText(f"Found {len(adopted)} existing "
-                                "customization(s) and added them to Changes.")
+            pass
 
     def _request_blur(self) -> None:
         if self._closing:
@@ -249,11 +220,8 @@ class KairoWindow(QMainWindow):
             self.blur.status = "blur skipped — --no-blur"
         else:
             self.blur.apply(self)
+        # Printed once for a terminal launch; the window never mentions it.
         print(f"blur: {self.blur.status}")
-        settings = self.panes.get(nav.VIEW_SETTINGS)
-        if settings is not None and hasattr(settings, "set_blur_status"):
-            settings.set_blur_status(f"blur: {self.blur.status}")
-        self._refresh_status()
 
     def resizeEvent(self, event):
         """Keep the compositor region in step without flooding Wayland."""
@@ -265,54 +233,18 @@ class KairoWindow(QMainWindow):
         if self.blur.active and not self._closing:
             self.blur.update(self)
 
-    # -- live tuning -------------------------------------------------------
-
-    def _install_shortcuts(self) -> None:
-        """Bind the tuning keys as real shortcuts.
-
-        The previous attempt overrode keyPressEvent on the window, which fails
-        twice over: a focused child - the search box, the entry list - consumes
-        the event before the window sees it, and with Control held
-        QKeyEvent.text() returns a control character rather than the digit, so
-        even the branch that did run matched nothing.
-
-        QShortcut with ApplicationShortcut context has neither problem: Qt
-        matches the sequence regardless of which widget holds focus.
-        """
-        names = list(Q.PRESETS)
-        for index, name in enumerate(names[:9], start=1):
-            self._bind(f"Ctrl+{index}",
-                       lambda key=name: self.apply_glass(Q.PRESETS[key]))
-
-        for sequence in ("Ctrl+]", "Ctrl+=", "Ctrl++"):
-            self._bind(sequence, lambda: self.nudge_glass(+0.02))
-        for sequence in ("Ctrl+[", "Ctrl+-"):
-            self._bind(sequence, lambda: self.nudge_glass(-0.02))
-
-    def _bind(self, sequence: str, handler) -> None:
-        shortcut = QShortcut(QKeySequence(sequence), self)
-        shortcut.setContext(Qt.ApplicationShortcut)
-        shortcut.activated.connect(handler)
-        self._shortcuts.append(shortcut)
-
-    def nudge_glass(self, delta: float) -> None:
-        self.apply_glass(self.glass.shifted(delta))
+    # -- appearance --------------------------------------------------------
 
     def apply_glass(self, glass) -> None:
-        """Restyle, and say so everywhere the value is shown.
+        """Restyle the application. Kept for the launch flag, not for the UI.
 
-        A stylesheet swap, not a repaint loop - nothing here is periodic.
+        The sliders and preset shortcuts are gone: the values below are the
+        design now, not a thing to tune at runtime.
         """
         self.glass = Q.resolve(glass)
         application = QApplication.instance()
         if application is not None:
             application.setStyleSheet(Q.stylesheet(self.glass))
-
-        settings = self.panes.get(nav.VIEW_SETTINGS)
-        if settings is not None and hasattr(settings, "set_glass"):
-            settings.set_glass(self.glass)
-
-        self.status.setText(f"{self.glass.describe()}   ·   {self.blur.status}")
 
     def closeEvent(self, event):
         self._closing = True

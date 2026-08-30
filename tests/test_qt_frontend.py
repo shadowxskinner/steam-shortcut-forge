@@ -265,50 +265,9 @@ def test_the_milestone_writes_nothing_at_all():
 
 # -- tuning controls that actually reach the user ---------------------------
 
-def test_tuning_uses_real_shortcuts_not_a_key_handler():
-    """Overriding keyPressEvent on the window fails twice over: a focused
-    child consumes the event first, and with Control held QKeyEvent.text()
-    returns a control character rather than the digit. Neither is obvious
-    until nothing happens on a real desktop."""
-    source = (QT_DIR / "shell.py").read_text()
-    body = source.split('"""', 2)[-1]          # skip the module docstring
-
-    assert "QShortcut" in source
-    assert "Qt.ApplicationShortcut" in source
-    assert "def keyPressEvent" not in body, "the handler that never fired is back"
-    assert "event.text()" not in body
 
 
-def test_every_preset_gets_a_shortcut_and_nudging_has_alternatives():
-    source = (QT_DIR / "shell.py").read_text()
-    assert 'f"Ctrl+{index}"' in source
-    for sequence in ("Ctrl+]", "Ctrl+[", "Ctrl+=", "Ctrl+-"):
-        assert f'"{sequence}"' in source, f"{sequence} is not bound"
 
-
-def test_applying_glass_updates_the_status_and_the_panel():
-    source = (QT_DIR / "shell.py").read_text()
-    apply = source.split("def apply_glass")[1].split("\n    def ")[0]
-    assert "setStyleSheet" in apply
-    assert "set_glass" in apply, "the Appearance panel must follow along"
-    assert "self.status.setText" in apply
-
-
-def test_there_is_a_control_that_needs_no_keyboard():
-    """A control reachable only by an unbound shortcut is not a control."""
-    source = (QT_DIR / "settings.py").read_text()
-    assert "class AppearancePanel" in source
-    assert "QSlider" in source
-    assert "def set_preset" in source
-
-
-def test_the_appearance_panel_covers_every_layer():
-    from kairo.qt import theme as Q
-
-    source = (QT_DIR / "settings.py").read_text()
-    assert "for row, name in enumerate(Q.LAYERS)" in source
-    assert set(Q.LAYERS) == {"workspace", "nav", "list", "panel", "card",
-                             "tile", "line"}
 
 
 def test_tuned_values_can_be_reported_back():
@@ -396,17 +355,6 @@ def test_dense_raises_the_backdrop_most():
 
 
 # -- the UI must not imply Kairo can set blur strength ----------------------
-
-def test_appearance_says_who_controls_what():
-    """ext-background-effect-v1 carries a region and nothing else - no radius,
-    no strength. A slider here would be claiming a setting that does not
-    exist."""
-    source = (QT_DIR / "settings.py").read_text()
-    note = source.split("Kairo controls opacity")[1].split('"""')[0]
-
-    assert "compositor controls blur" in note.lower()
-    assert "Desktop Effects" in note
-    assert "no radius or strength" in note
 
 
 def test_no_blur_strength_control_is_offered():
@@ -697,3 +645,49 @@ def test_a_pane_subclass_asks_for_its_own_background():
             if names and "WA_StyledBackground" not in block:
                 offenders.append(f"{path.name}: {match.group(1)} -> {names.group(1)}")
     assert not offenders, offenders
+
+# -- what the window deliberately no longer has -----------------------------
+
+def test_there_is_no_status_strip():
+    """The window is the three columns and nothing else.
+
+    A footer that reports blur state and a read-only banner is scaffolding
+    from the milestone, not part of the product.
+    """
+    shell = (QT_DIR / "shell.py").read_text()
+    assert "objectName(\"footer\")" not in shell
+    assert "read-only shell" not in shell
+    assert "_refresh_status" not in shell
+
+
+def test_blur_state_never_reaches_the_window():
+    """It still prints once for a terminal launch, and stops there."""
+    shell = (QT_DIR / "shell.py").read_text()
+    settings = (QT_DIR / "settings.py").read_text()
+    assert "set_blur_status" not in shell and "set_blur_status" not in settings
+    # It may be assigned and printed; it may never be put into a widget.
+    for line in shell.splitlines():
+        if "blur.status" in line:
+            assert "setText" not in line, line.strip()
+            assert "addWidget" not in line, line.strip()
+
+
+def test_appearance_is_fixed_not_edited():
+    """The glass values are the design now, not a runtime control."""
+    settings = (QT_DIR / "settings.py").read_text()
+    shell = (QT_DIR / "shell.py").read_text()
+    assert "AppearancePanel" not in settings
+    assert "QSlider" not in settings
+    assert "on_glass_change" not in settings and "on_glass_change" not in shell
+    assert "QShortcut" not in shell, "no live retuning keys"
+
+
+def test_the_fixed_appearance_is_still_applied():
+    """Removing the controls must not remove the look they were setting."""
+    from kairo.qt import theme as Q
+
+    shell = (QT_DIR / "shell.py").read_text()
+    assert "def apply_glass" in shell
+    assert "setStyleSheet(Q.stylesheet(self.glass))" in shell
+    frosted = Q.PRESETS[Q.DEFAULT_PRESET]
+    assert (frosted.workspace, frosted.nav, frosted.panel) == (0.78, 0.97, 0.95)

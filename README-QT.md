@@ -39,25 +39,21 @@ Flags:
 --opaque          same as --glass solid
 ```
 
-## Tuning the glass
+## The glass is settled
 
-**Settings → Appearance.** A slider per layer, a button per preset, and the
-resulting values printed in a form you can paste back to me:
+The per-layer sliders, the preset buttons and the tuning shortcuts are gone.
+The values below are the design now, not something to adjust at runtime:
 
 ```
-Glass(nav=0.94, list=0.93, panel=0.92, card=0.88, tile=0.84, line=0.55)
+Glass(workspace=0.78, nav=0.97, list=0.96, panel=0.95, card=0.92,
+      tile=0.88, line=0.62)
 ```
 
-"Copy values" puts that on the clipboard. Send me the line you settle on and it
-becomes the default.
+`--glass` and `--opaque` still exist on the command line for a one-off look,
+but nothing in the window edits them, and the window no longer reports blur
+state or a read-only banner along the bottom. Blur is printed once at startup
+for a terminal launch and never mentioned again.
 
-Shortcuts also work — **Ctrl+1…4** for the presets, **Ctrl+]** / **Ctrl+[** to
-nudge everything together, with **Ctrl+=** and **Ctrl+-** bound to the same
-thing in case the bracket keys are taken. They are convenience, not the only
-route: the earlier build had shortcuts and nothing else, and when they silently
-failed there was no way to tune at all.
-
-Restyling is a stylesheet swap, so this costs nothing and needs no restart.
 
 ## Glass
 

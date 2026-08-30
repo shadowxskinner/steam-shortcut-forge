@@ -5,6 +5,8 @@ to click something that cannot work. Sources are asked whether they have
 anything before they are offered.
 """
 
+from pathlib import Path
+
 import pytest
 
 from kairo.artwork.iconify import IconifySource
@@ -151,3 +153,92 @@ def test_local_file_is_never_in_the_picker_and_always_available():
             s.id for s in registry.browsable_for(provider_id)}
     assert LocalFileSource().supports("steam") is True
     assert LocalFileSource().available() is True
+
+
+# ---------------------------------------------------------------------------
+# SteamGridDB: enough artwork, and sharp
+#
+# The browser used to show a handful of assets per game against hundreds on
+# the website, and many of those were 32px upscaled into a blur. Both had the
+# same two causes: only /icons/ and /logos/ were ever requested, and votes
+# outranked resolution.
+# ---------------------------------------------------------------------------
+
+def _art(kind, edge, score=0.0, official=False):
+    from kairo.models import Artwork
+    return Artwork(id=f"{kind}{edge}{score}", source_id="steamgriddb",
+                   kind=kind, width=edge, height=edge, score=score,
+                   official=official, locator="https://example.invalid/a.png")
+
+
+def test_a_popular_tiny_icon_never_outranks_a_sharp_asset():
+    """This is the blur, exactly: 32px enlarged to fill a 116px tile."""
+    from kairo.artwork.steamgriddb import _rank
+
+    tiny = _art("icon", 32, score=900)
+    sharp = _art("grid", 512, score=1)
+    assert max([tiny, sharp], key=_rank) is sharp
+
+
+def test_a_real_icon_still_wins_among_equally_sharp_assets():
+    """Cover art fills the gap; it does not get to displace a drawn icon."""
+    from kairo.artwork.steamgriddb import _rank
+
+    icon = _art("icon", 512, score=1)
+    cover = _art("grid", 512, score=900)
+    assert max([icon, cover], key=_rank) is icon
+
+
+def test_resolution_breaks_ties_before_the_crowd_does():
+    from kairo.artwork.steamgriddb import _rank
+
+    bigger = _art("icon", 1024, score=0)
+    smaller = _art("icon", 256, score=500)
+    assert max([bigger, smaller], key=_rank) is bigger
+
+
+def test_the_lookup_asks_for_square_grids_as_well(monkeypatch):
+    """Most of a game's artwork lives under /grids/, not /icons/."""
+    from kairo.artwork import steamgriddb as sgdb
+    from kairo.models import ArtQuery
+
+    asked = []
+    source = sgdb.SteamGridDBSource(api_key="k")
+    monkeypatch.setattr(source, "game_id", lambda appid: 7)
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+
+    def fake_get(path):
+        asked.append(path)
+        return {"data": [], "total": 0}
+
+    monkeypatch.setattr(source, "_api_get", fake_get)
+    source.find(ArtQuery(entry=entry(), steam_appid="42700"))
+
+    endpoints = {path.split("/")[1] for path in asked}
+    assert {"icons", "grids", "logos"} <= endpoints, asked
+    grid_call = next(p for p in asked if p.startswith("/grids"))
+    assert "dimensions=512x512,1024x1024" in grid_call
+
+
+def test_one_failing_asset_class_does_not_lose_the_others(monkeypatch):
+    """Grids are a bonus. Losing them must not empty the browser."""
+    from kairo import net
+    from kairo.artwork import steamgriddb as sgdb
+    from kairo.models import ArtQuery
+
+    source = sgdb.SteamGridDBSource(api_key="k")
+    monkeypatch.setattr(source, "game_id", lambda appid: 7)
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+
+    def fake_get(path):
+        if path.startswith("/grids"):
+            raise net.NetworkError("down")
+        if path.startswith("/icons"):
+            return {"data": [{"id": 1, "url": "https://e.invalid/i.png",
+                              "width": 512, "height": 512, "style": "official"}],
+                    "total": 1}
+        return {"data": [], "total": 0}
+
+    monkeypatch.setattr(source, "_api_get", fake_get)
+    found = source.find(ArtQuery(entry=entry(), steam_appid="42700"))
+    assert [a.kind for a in found] == ["icon"]

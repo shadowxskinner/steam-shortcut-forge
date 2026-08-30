@@ -320,8 +320,12 @@ class ArtworkTile(QFrame):
         layout.addWidget(self.well, 0, Qt.AlignHCenter)
 
         caption = art.label or ("official" if art.official else "")
-        if art.kind == "logo":
-            caption = f"{caption} logo".strip()
+        # Say what a tile actually is. A square grid is cover art cropped to
+        # fit, not an icon somebody drew, and that is worth knowing before
+        # you put it on a launcher.
+        noun = {"logo": "logo", "grid": "cover"}.get(art.kind, "")
+        if noun:
+            caption = f"{caption} {noun}".strip()
         self.caption = QLabel(T.ellipsize(caption or art.dimensions or " ", 16), self)
         self.caption.setObjectName("meta")
         self.caption.setAlignment(Qt.AlignCenter)
