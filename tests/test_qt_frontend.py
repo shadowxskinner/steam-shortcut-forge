@@ -252,3 +252,85 @@ def test_the_milestone_writes_nothing_at_all():
                         "actions.restore_all", "actions.apply_many",
                         "config_store.save", "housekeeping.sweep"):
             assert writing not in source, f"{path.name} calls {writing}"
+
+
+# -- tuning controls that actually reach the user ---------------------------
+
+def test_tuning_uses_real_shortcuts_not_a_key_handler():
+    """Overriding keyPressEvent on the window fails twice over: a focused
+    child consumes the event first, and with Control held QKeyEvent.text()
+    returns a control character rather than the digit. Neither is obvious
+    until nothing happens on a real desktop."""
+    source = (QT_DIR / "shell.py").read_text()
+    body = source.split('"""', 2)[-1]          # skip the module docstring
+
+    assert "QShortcut" in source
+    assert "Qt.ApplicationShortcut" in source
+    assert "def keyPressEvent" not in body, "the handler that never fired is back"
+    assert "event.text()" not in body
+
+
+def test_every_preset_gets_a_shortcut_and_nudging_has_alternatives():
+    source = (QT_DIR / "shell.py").read_text()
+    assert 'f"Ctrl+{index}"' in source
+    for sequence in ("Ctrl+]", "Ctrl+[", "Ctrl+=", "Ctrl+-"):
+        assert f'"{sequence}"' in source, f"{sequence} is not bound"
+
+
+def test_applying_glass_updates_the_status_and_the_panel():
+    source = (QT_DIR / "shell.py").read_text()
+    apply = source.split("def apply_glass")[1].split("\n    def ")[0]
+    assert "setStyleSheet" in apply
+    assert "set_glass" in apply, "the Appearance panel must follow along"
+    assert "self.status.setText" in apply
+
+
+def test_there_is_a_control_that_needs_no_keyboard():
+    """A control reachable only by an unbound shortcut is not a control."""
+    source = (QT_DIR / "settings.py").read_text()
+    assert "class AppearancePanel" in source
+    assert "QSlider" in source
+    assert "def set_preset" in source
+
+
+def test_the_appearance_panel_covers_every_layer():
+    from kairo.qt import theme as Q
+
+    source = (QT_DIR / "settings.py").read_text()
+    assert "for row, name in enumerate(Q.LAYERS)" in source
+    assert set(Q.LAYERS) == {"nav", "list", "panel", "card", "tile", "line"}
+
+
+def test_tuned_values_can_be_reported_back():
+    """Six numbers found by eye are useless if they cannot leave the window."""
+    from kairo.qt import theme as Q
+
+    described = Q.PRESETS["frosted"].describe()
+    assert described.startswith("Glass(") and described.endswith(")")
+    for layer in Q.LAYERS:
+        assert f"{layer}=" in described
+
+    namespace = {"Glass": Q.Glass}
+    assert eval(described, namespace) == Q.PRESETS["frosted"]
+
+
+def test_replaced_clamps_without_reordering_the_intent():
+    from kairo.qt import theme as Q
+
+    tuned = Q.PRESETS["frosted"].replaced(panel=0.99, tile=4.0, card=-1.0)
+    assert tuned.panel == 0.99
+    assert tuned.tile == 1.0
+    assert tuned.card == 0.30
+    assert tuned.nav == Q.PRESETS["frosted"].nav
+
+
+def test_a_denser_preset_exists_to_compare_against():
+    """0.92 still let terminal text read through on a real display, so the
+    denser option is a preset to try rather than a new default guessed at."""
+    from kairo.qt import theme as Q
+
+    dense = Q.PRESETS["dense"]
+    frosted = Q.PRESETS["frosted"]
+    assert dense.panel > frosted.panel
+    assert dense.nav >= dense.list >= dense.panel >= dense.card >= dense.tile
+    assert dense.panel < 1.0, "dense is still glass, not a wall"

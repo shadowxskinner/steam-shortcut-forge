@@ -36,6 +36,21 @@ class Glass:
     tile: float = 0.84       # artwork tiles, lightest for depth
     line: float = 0.55       # borders and separators
 
+    def describe(self) -> str:
+        """The constructor line for these values.
+
+        Tuning happens by eye at runtime; this is how the result gets back
+        into the source without anyone transcribing six numbers.
+        """
+        return ("Glass(nav={0.nav:.2f}, list={0.list:.2f}, panel={0.panel:.2f}, "
+                "card={0.card:.2f}, tile={0.tile:.2f}, "
+                "line={0.line:.2f})".format(self))
+
+    def replaced(self, **values) -> "Glass":
+        clean = {name: max(0.30, min(1.0, float(value)))
+                 for name, value in values.items()}
+        return replace(self, **clean)
+
     def shifted(self, delta: float) -> "Glass":
         clamp = lambda value: max(0.30, min(1.0, value + delta))
         return replace(self, nav=clamp(self.nav), list=clamp(self.list),
@@ -44,13 +59,18 @@ class Glass:
 
 
 #: Frosted is the default: content behind a panel should be shape and colour,
-#: never legible text.
+#: never legible text. Dense exists because on a real display 0.92 still let
+#: terminal text read through - kept as a preset rather than a new default so
+#: the two can be compared side by side before either is baked in.
 PRESETS = {
     "frosted": Glass(),
+    "dense": Glass(nav=0.985, list=0.98, panel=0.975, card=0.95, tile=0.92,
+                   line=0.70),
     "clear": Glass(nav=0.78, list=0.76, panel=0.74, card=0.70, tile=0.66,
                    line=0.45),
     "solid": Glass(nav=1.0, list=1.0, panel=1.0, card=1.0, tile=1.0, line=1.0),
 }
+LAYERS = ("nav", "list", "panel", "card", "tile", "line")
 DEFAULT_PRESET = "frosted"
 
 # Kept so older callers and the entry point keep working.

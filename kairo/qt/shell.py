@@ -12,8 +12,10 @@ the real backend; nothing writes to a launcher entry.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMainWindow, QPushButton,
-                               QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMainWindow,
+                               QPushButton, QStackedWidget, QVBoxLayout,
+                               QWidget)
 
 from kairo import APP_NAME, adoption, navmodel as nav
 from kairo import config as config_store
@@ -75,8 +77,10 @@ class KairoWindow(QMainWindow):
         self.items = nav.build_items(self.providers)
         self.buttons: dict[str, NavButton] = {}
         self.panes: dict[str, QWidget] = {}
+        self._shortcuts: list = []
 
         self._build()
+        self._install_shortcuts()
         self._adopt()
 
         first = next((item for item in self.items if item.provider is not None),
@@ -105,8 +109,9 @@ class KairoWindow(QMainWindow):
 
         bar = QHBoxLayout()
         bar.setContentsMargins(T.PAD_WINDOW, T.S4, T.PAD_WINDOW, 0)
-        self.banner = QLabel("Shell milestone — read-only. Apply, Reset, "
-                             "Remove and Restore are not wired yet.")
+        self.banner = QLabel("Shell milestone — read-only. Tune the glass "
+                             "under Settings → Appearance, or Ctrl+1…4.")
+        self.banner.setObjectName("banner")
         self.banner.setObjectName("meta")
         bar.addWidget(self.banner)
         bar.addStretch(1)
@@ -175,7 +180,9 @@ class KairoWindow(QMainWindow):
         if key == nav.VIEW_CHANGES:
             pane = ChangesPane(self.ctx)
         elif key == nav.VIEW_SETTINGS:
-            pane = SettingsPane(self.ctx, blur_status=f"blur: {self.blur.status}")
+            pane = SettingsPane(self.ctx, blur_status=f"blur: {self.blur.status}",
+                                glass=self.glass,
+                                on_glass_change=self.apply_glass)
         else:
             item = next(i for i in self.items if i.key == key)
             pane = LibraryPane(item.provider, self.ctx)
@@ -233,41 +240,59 @@ class KairoWindow(QMainWindow):
         else:
             self.blur.apply(self)
         print(f"blur: {self.blur.status}")
+        settings = self.panes.get(nav.VIEW_SETTINGS)
+        if settings is not None and hasattr(settings, "set_blur_status"):
+            settings.set_blur_status(f"blur: {self.blur.status}")
         self._refresh_status()
 
     # -- live tuning -------------------------------------------------------
 
-    def keyPressEvent(self, event):
-        """Ctrl+1/2/3 switch glass presets, Ctrl+[ and Ctrl+] nudge them.
+    def _install_shortcuts(self) -> None:
+        """Bind the tuning keys as real shortcuts.
 
-        Restyling is a stylesheet swap, not a repaint loop - there is nothing
-        periodic here, and judging the material by eye is much easier than
-        restarting between values.
+        The previous attempt overrode keyPressEvent on the window, which fails
+        twice over: a focused child - the search box, the entry list - consumes
+        the event before the window sees it, and with Control held
+        QKeyEvent.text() returns a control character rather than the digit, so
+        even the branch that did run matched nothing.
+
+        QShortcut with ApplicationShortcut context has neither problem: Qt
+        matches the sequence regardless of which widget holds focus.
         """
-        from PySide6.QtCore import Qt as _Qt
-
-        if not event.modifiers() & _Qt.ControlModifier:
-            super().keyPressEvent(event)
-            return
-
         names = list(Q.PRESETS)
-        text = event.text()
-        if text in ("1", "2", "3"):
-            self.glass = Q.PRESETS[names[int(text) - 1]]
-        elif text == "[":
-            self.glass = self.glass.shifted(-0.04)
-        elif text == "]":
-            self.glass = self.glass.shifted(0.04)
-        else:
-            super().keyPressEvent(event)
-            return
+        for index, name in enumerate(names[:9], start=1):
+            self._bind(f"Ctrl+{index}",
+                       lambda key=name: self.apply_glass(Q.PRESETS[key]))
 
-        from PySide6.QtWidgets import QApplication
+        for sequence in ("Ctrl+]", "Ctrl+=", "Ctrl++"):
+            self._bind(sequence, lambda: self.nudge_glass(+0.02))
+        for sequence in ("Ctrl+[", "Ctrl+-"):
+            self._bind(sequence, lambda: self.nudge_glass(-0.02))
 
-        QApplication.instance().setStyleSheet(Q.stylesheet(self.glass))
-        self.status.setText(
-            f"glass: nav {self.glass.nav:.2f} · panel {self.glass.panel:.2f} "
-            f"· tile {self.glass.tile:.2f}   ·   {self.blur.status}")
+    def _bind(self, sequence: str, handler) -> None:
+        shortcut = QShortcut(QKeySequence(sequence), self)
+        shortcut.setContext(Qt.ApplicationShortcut)
+        shortcut.activated.connect(handler)
+        self._shortcuts.append(shortcut)
+
+    def nudge_glass(self, delta: float) -> None:
+        self.apply_glass(self.glass.shifted(delta))
+
+    def apply_glass(self, glass) -> None:
+        """Restyle, and say so everywhere the value is shown.
+
+        A stylesheet swap, not a repaint loop - nothing here is periodic.
+        """
+        self.glass = Q.resolve(glass)
+        application = QApplication.instance()
+        if application is not None:
+            application.setStyleSheet(Q.stylesheet(self.glass))
+
+        settings = self.panes.get(nav.VIEW_SETTINGS)
+        if settings is not None and hasattr(settings, "set_glass"):
+            settings.set_glass(self.glass)
+
+        self.status.setText(f"{self.glass.describe()}   ·   {self.blur.status}")
 
     def closeEvent(self, event):
         self.tokens.cancel_all()
