@@ -558,8 +558,22 @@ class LibraryPane(QWidget):
                     else "Nothing matches the current filter.")
         else:
             self.title.setText(f"No {self.provider.noun} found")
-            note = (f"Kairo found no {self.provider.noun} for "
-                    f"{self.provider.label} on this machine.")
+            # A provider that knows why it is empty should say so. An
+            # emulator pointed at the wrong folder, or at an executable that
+            # is not there, otherwise shows a blank list and no explanation —
+            # the same failure the setup form used to have.
+            reasons = []
+            try:
+                reasons = list(self.provider.problems())
+            except AttributeError:
+                pass
+            except Exception:
+                reasons = []
+            if reasons:
+                note = "\n".join(reasons) + "\n\nFix this under Settings."
+            else:
+                note = (f"Kairo found no {self.provider.noun} for "
+                        f"{self.provider.label} on this machine.")
         self.subtitle.setText("")
         self.current_well.show_placeholder("—")
         self._clear_grid()

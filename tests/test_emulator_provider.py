@@ -116,3 +116,24 @@ def test_a_retitled_rom_keeps_its_key(tmp_path):
     entries = provider.scan()
     entries[0].name = "Something Entirely Different"
     assert {e.key for e in provider.scan()} == before
+
+
+def test_an_empty_library_explains_itself():
+    """A blank list with no reason is the failure the setup form had."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "kairo" / "qt"
+              / "library.py").read_text()
+    empty = source.split("def _empty_workspace")[1].split("\n    def ")[0]
+    assert "self.provider.problems()" in empty
+    assert "AttributeError" in empty, "providers without problems() must not break"
+    assert "Settings" in empty, "it must say where to fix it"
+
+
+def test_only_emulators_claim_to_have_problems():
+    """Steam and Applications discover; there is nothing to misconfigure."""
+    from kairo.providers.desktop_entry import DesktopEntryProvider
+    from kairo.providers.steam import SteamProvider
+
+    assert not hasattr(SteamProvider(), "problems")
+    assert not hasattr(DesktopEntryProvider(), "problems")

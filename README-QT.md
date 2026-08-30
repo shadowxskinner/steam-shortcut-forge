@@ -130,6 +130,36 @@ every native call and releases the effect with the cached surface pointer
 before Qt tears that surface down. It never changes KWin configuration or
 forces Qt onto XWayland.
 
+## Emulators
+
+Settings → Emulators → Add emulator… opens a catalogue of seventeen systems.
+Pick one and the file types, the emulator command and its arguments are
+already filled in; the only thing to point at is the folder your games are
+in, and even that is pre-filled when the collection sits somewhere
+conventional. Systems whose emulator is installed are listed first.
+
+This follows what every comparable tool does — ES-DE ships `es_systems.xml`,
+Steam ROM Manager ships community presets — because the alternative is asking
+someone to know that GameCube means `.rvz`.
+
+One emulator can cover several systems. Dolphin takes two folder rows,
+GameCube and Wii, each with its own extensions and its own label, and the
+label rides along to the entry so the library reads as both rather than as
+one pile. Cemu and PCSX2 take one row and leave the label blank.
+
+Each row reports how many files it matches as you type, so a folder in the
+wrong box or an extension typed `.rvs` shows `0 files` before you save. An
+emulator that cannot work refuses to save and names the problem, and a
+library that comes up empty says why rather than showing a blank list.
+
+Anything not in the catalogue is still reachable: **Something else — describe
+it myself** takes the executable, arguments and extensions directly.
+
+ROM artwork comes from SteamGridDB by title. It indexes plenty of games that
+were never on Steam, which is most of an emulator library; the Steam-only
+restriction was Kairo's rather than the API's. A title match is scored as a
+search hit rather than as an identifier, so an appid always outranks it.
+
 ## The portal warning
 
 Set `QGuiApplication.setDesktopFileName()` to the application id and install a
