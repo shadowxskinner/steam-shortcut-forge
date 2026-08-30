@@ -57,6 +57,7 @@ class LibraryPane(QWidget):
         self.selected: EntryRow | None = None
         self.proposed = None
         self.tiles: list[ArtworkTile] = []
+        self._tile_at: dict[int, ArtworkTile] = {}
         self.chosen_tile = None
         self._sources: dict[str, str] = {}
         self._probe_cache: dict[tuple, bool] = {}
@@ -589,6 +590,7 @@ class LibraryPane(QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
         self.tiles.clear()
+        self._tile_at.clear()
         self.chosen_tile = None
 
     def _grid_note(self, text: str) -> None:
@@ -663,11 +665,17 @@ class LibraryPane(QWidget):
     def _build_tiles(self, results) -> None:
         self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         columns = self._columns()
+        # Previews arrive by their index in `results`, and tiles get dropped
+        # as they arrive, so position in self.tiles stops matching almost
+        # immediately. Keyed lookup instead: drop one tile and the rest still
+        # receive their own image.
+        self._tile_at = {}
         for index, art in enumerate(results):
             tile = ArtworkTile(art, self.grid_holder)
             tile.picked.connect(self._propose)
             self.grid.addWidget(tile, index // columns, index % columns)
             self.tiles.append(tile)
+            self._tile_at[index] = tile
 
     def _stream_previews(self, source, results, token, key) -> None:
         """Fetch each preview on a pool thread, painting them as they land.
@@ -686,7 +694,7 @@ class LibraryPane(QWidget):
                 try:
                     data = source.preview(art)
                 except Exception:
-                    continue
+                    data = None         # say so, rather than leaving a blank
                 if token.cancelled:
                     return
                 streamer.item.emit(index, data, key)
@@ -696,11 +704,12 @@ class LibraryPane(QWidget):
     def _fill_tile(self, index: int, data: object, key: str) -> None:
         if self.selected is None or self.selected.entry.key != key:
             return
-        if not (0 <= index < len(self.tiles)):
+        tile = self._tile_at.get(index)
+        if tile is None:
             return
-        tile = self.tiles[index]
-        if images.native_edge(data) < MIN_USABLE_EDGE:
-            # Too small to show without enlarging it. Nobody would pick it.
+        # data is None when the preview could not be fetched at all. Either
+        # way there is nothing to show, and an empty tile is worse than none.
+        if data is None or images.native_edge(data) < MIN_USABLE_EDGE:
             self._drop_tile(tile)
             return
         tile.set_image(data)
@@ -712,6 +721,9 @@ class LibraryPane(QWidget):
         if tile is self.chosen_tile:
             self._clear_proposal()
         self.tiles.remove(tile)
+        for index, known in list(self._tile_at.items()):
+            if known is tile:
+                del self._tile_at[index]
         self.grid.removeWidget(tile)
         tile.setParent(None)
         tile.deleteLater()

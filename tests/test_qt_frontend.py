@@ -863,3 +863,58 @@ def test_clearing_the_proposal_also_withdraws_apply():
     source = (QT_DIR / "library.py").read_text()
     clear = source.split("def _clear_proposal")[1].split("\n    def ")[0]
     assert "self.apply_btn.setEnabled(False)" in clear
+
+
+def test_previews_are_delivered_by_identity_not_by_position():
+    """Dropping one tile must not misdirect every preview after it.
+
+    Previews arrive keyed by their index in the result list while tiles are
+    being removed as they land, so position in self.tiles stops matching the
+    moment anything is dropped: later images went to the wrong tile and the
+    tail was never filled at all, which is what showed up as blank squares.
+    """
+    source = (QT_DIR / "library.py").read_text()
+    fill = source.split("def _fill_tile")[1].split("\n    def ")[0]
+    assert "self._tile_at.get(index)" in fill
+    assert "self.tiles[index]" not in fill, "positional lookup is the bug"
+
+    drop = source.split("def _drop_tile")[1].split("\n    def ")[0]
+    assert "del self._tile_at[index]" in drop, "a dropped tile must be unkeyed"
+
+
+def test_a_preview_that_cannot_be_fetched_drops_its_tile():
+    """An empty square is worse than one fewer choice."""
+    source = (QT_DIR / "library.py").read_text()
+    pump = source.split("def _stream_previews")[1].split("\n    def ")[0]
+    assert "data = None" in pump, "a failure must be reported, not skipped"
+    assert "continue" not in pump, "skipping leaves the tile blank forever"
+
+    fill = source.split("def _fill_tile")[1].split("\n    def ")[0]
+    assert "data is None" in fill
+
+
+def test_the_app_id_is_only_claimed_when_a_desktop_file_backs_it(
+        monkeypatch, tmp_path):
+    """The portal logs a failure for an id it cannot look up.
+
+    Announcing io.github.shadowxskinner.Kairo without the .desktop file
+    installed is what produced "App info not found" on every launch.
+    """
+    from kairo import APP_ID
+    from kairo.qt.__main__ import _desktop_file_installed
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_DATA_DIRS", str(tmp_path / "none"))
+    assert _desktop_file_installed(APP_ID) is False
+
+    applications = tmp_path / "applications"
+    applications.mkdir()
+    (applications / f"{APP_ID}.desktop").write_text("[Desktop Entry]\n")
+    assert _desktop_file_installed(APP_ID) is True
+
+
+def test_a_system_wide_install_counts_too():
+    """XDG_DATA_DIRS, not a guess at ~/.local/share."""
+    source = (QT_DIR / "__main__.py").read_text()
+    assert "XDG_DATA_DIRS" in source
+    assert "XDG_DATA_HOME" in source

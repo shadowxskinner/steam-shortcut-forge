@@ -7,6 +7,7 @@ same backend; only the frontend differs.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 HELP = """Kairo — automatic launcher artwork for Linux (Qt shell milestone)
 
@@ -21,6 +22,22 @@ HELP = """Kairo — automatic launcher artwork for Linux (Qt shell milestone)
 
   python -m kairo                 the CustomTkinter shell, unchanged
 """
+
+
+def _desktop_file_installed(app_id: str) -> bool:
+    """True when ``app_id``.desktop exists where the portal will look.
+
+    Follows the XDG data directory search path rather than guessing at
+    ~/.local/share, so a system-wide install counts too.
+    """
+    import os
+
+    home = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local/share")
+    dirs = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    for base in [home, *dirs.split(":")]:
+        if base and (Path(base) / "applications" / f"{app_id}.desktop").is_file():
+            return True
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -74,11 +91,15 @@ def main(argv: list[str] | None = None) -> int:
     if opaque:
         glass = Q.PRESETS["solid"]
 
-    # Set before the QApplication exists: this is what the portal reads, and
-    # matching it to the installed .desktop is what stops it complaining.
-    QGuiApplication.setDesktopFileName(APP_ID)
+    # Claim the application id only if a .desktop file actually backs it.
+    # The portal looks the id up and logs a failure when it finds nothing,
+    # which is where "App info not found" came from: Kairo was announcing an
+    # identity that is only real once the file is installed.
+    installed = _desktop_file_installed(APP_ID)
+    if installed:
+        QGuiApplication.setDesktopFileName(APP_ID)
     application = QApplication(sys.argv)
-    application.setApplicationName(APP_ID)
+    application.setApplicationName(APP_ID if installed else "Kairo")
     application.setApplicationDisplayName("Kairo")
     application.setOrganizationName("Kairo")
     application.setFont(QFont("Inter", 10))
