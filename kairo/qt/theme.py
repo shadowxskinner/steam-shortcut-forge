@@ -202,6 +202,10 @@ def stylesheet(glass=None) -> str:
     QWidget#list      {{ background: {rgba(T.C_LIST, g.list)};
                          border-right: 1px solid {edge}; }}
     QWidget#workspace {{ background: {rgba(T.C_BG, g.workspace)}; }}
+    /* A dialog is its own top-level window, so it gets its own surface id
+       rather than borrowing the pane's: two #workspace widgets in one file
+       usually means one nested inside the other, which double-paints. */
+    QDialog#dialog    {{ background: {rgba(T.C_NAV, 1.0)}; }}
     QWidget#footer    {{ background: {rgba(T.C_NAV, g.nav)};
                          border-top: 1px solid {edge}; }}
     /* The inspector is a surface, not a box: no outline, just a lift. */

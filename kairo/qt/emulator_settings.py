@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QFrame,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from kairo import emulators as emu
+from kairo import systems
 from kairo.qt import theme as Q
 from kairo.ui import theme as T
 
@@ -110,6 +111,106 @@ class FolderRow(QWidget):
                              self.system.text()).normalised()
 
 
+class SystemPicker(QDialog):
+    """Pick a system rather than describe one.
+
+    Every comparable tool ships a catalogue - ES-DE's es_systems.xml, Steam
+    ROM Manager's community presets - because the alternative is asking a
+    person to know that GameCube means .rvz. Systems whose emulator is
+    already installed are listed first; the rest stay reachable, and so does
+    describing something by hand.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add emulator")
+        self.setMinimumWidth(560)
+        self.setObjectName("dialog")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.chosen: systems.Detection | None = None
+        self.manual = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD, Q.PAD_CARD, Q.PAD_CARD)
+        layout.setSpacing(Q.GAP)
+
+        note = QLabel("Kairo knows the file types and the usual emulator for "
+                      "each of these. Pick one and all you have to point at "
+                      "is the folder your games are in.")
+        note.setObjectName("meta")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        holder = QWidget()
+        listing = QVBoxLayout(holder)
+        listing.setContentsMargins(0, 0, 0, 0)
+        listing.setSpacing(T.S1)
+        for found in systems.detect():
+            listing.addWidget(self._row(found))
+        listing.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(holder)
+        layout.addWidget(scroll, 1)
+
+        other = QPushButton("Something else — describe it myself")
+        other.setObjectName("secondary")
+        other.setFixedHeight(Q.H_BUTTON)
+        other.clicked.connect(self._describe)
+        layout.addWidget(other, 0, Qt.AlignLeft)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _row(self, found: "systems.Detection") -> QWidget:
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(T.S2)
+
+        name = QLabel(found.system.display())
+        name.setObjectName("rowNameOn" if found.installed else "rowName")
+        detail = QLabel(" ".join(found.system.extensions[:4]))
+        detail.setObjectName("meta")
+
+        state = QLabel("installed" if found.installed else "not found")
+        state.setObjectName("meta")
+        state.setFixedWidth(Q.W_LABEL)
+
+        add = QPushButton("Add")
+        add.setObjectName("primary" if found.installed else "secondary")
+        add.setFixedHeight(Q.H_BUTTON)
+        add.clicked.connect(lambda _c, f=found: self._take(f))
+
+        line.addWidget(name)
+        line.addWidget(detail, 1)
+        line.addWidget(state)
+        line.addWidget(add)
+        return row
+
+    def _take(self, found: "systems.Detection") -> None:
+        self.chosen = found
+        self.accept()
+
+    def _describe(self) -> None:
+        self.manual = True
+        self.accept()
+
+    def emulator(self) -> emu.Emulator:
+        """The catalogue entry as a configured emulator, ready to edit."""
+        if self.chosen is None:
+            return emu.Emulator()
+        system = self.chosen.system
+        return emu.Emulator(
+            name=system.emulator or system.name,
+            executable=self.chosen.executable,
+            arguments=(*self.chosen.arguments, emu.ROM_PLACEHOLDER),
+            folders=(emu.RomFolder(self.chosen.roms, system.extensions,
+                                   system.name),)).normalised()
+
+
 class EmulatorDialog(QDialog):
     """Add or edit one emulator."""
 
@@ -120,7 +221,7 @@ class EmulatorDialog(QDialog):
         # Without this the dialog takes the system palette, so it is dark on
         # a dark desktop theme and light on a light one while the window
         # behind it stays Kairo's own colour either way.
-        self.setObjectName("workspace")
+        self.setObjectName("dialog")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._original = emulator
         emulator = emulator or emu.Emulator()
@@ -369,7 +470,12 @@ class EmulatorsCard(QFrame):
     # -- actions -----------------------------------------------------------
 
     def _add(self) -> None:
-        dialog = EmulatorDialog(None, self)
+        """Catalogue first, hand-written second."""
+        picker = SystemPicker(self)
+        if picker.exec() != QDialog.Accepted:
+            return
+        prefilled = None if picker.manual else picker.emulator()
+        dialog = EmulatorDialog(prefilled, self)
         if dialog.exec() == QDialog.Accepted:
             self._write([*self._configured(), dialog.value()])
 

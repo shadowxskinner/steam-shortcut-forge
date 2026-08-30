@@ -92,7 +92,7 @@ def test_no_button_is_narrower_than_its_own_label():
 
 def test_the_dialog_wears_kairos_colours_not_the_desktops():
     source = (QT_DIR / "emulator_settings.py").read_text()
-    assert 'self.setObjectName("workspace")' in source
+    assert 'self.setObjectName("dialog")' in source
     assert "WA_StyledBackground" in source
 
 
@@ -125,3 +125,26 @@ def test_arguments_come_after_the_folders_and_say_they_are_optional():
     assert source.index("ROM FOLDERS") < source.index('QLabel("Arguments")')
     assert "Optional." in source
     assert "not where the ROM folder goes" in source
+
+
+def test_adding_an_emulator_offers_the_catalogue_first():
+    """Describing one by hand is the fallback, not the front door."""
+    source = (QT_DIR / "emulator_settings.py").read_text()
+    assert "class SystemPicker" in source
+    add = source.split("def _add(self)")[1].split("\n    def ")[0]
+    assert "SystemPicker(self)" in add
+    assert "picker.manual" in add, "describing it by hand must stay reachable"
+
+
+def test_a_picked_system_arrives_already_filled_in():
+    """One click plus a folder, not four fields."""
+    from kairo import systems
+    from kairo.qt.emulator_settings import SystemPicker
+
+    source = (QT_DIR / "emulator_settings.py").read_text()
+    build = source.split("def emulator(self)")[1].split("\n    def ")[0]
+    assert "system.extensions" in build
+    assert "self.chosen.executable" in build
+    assert "ROM_PLACEHOLDER" in build
+    assert callable(SystemPicker.emulator)
+    assert systems.by_id("gamecube").extensions
