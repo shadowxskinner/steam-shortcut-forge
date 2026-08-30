@@ -26,6 +26,12 @@ dependencies = [
     "Pillow>=10.0.0",
 ]
 
+[project.scripts]
+# The .desktop file and the PKGBUILD both say Exec=kairo, so the command has
+# to exist. Without this the packaged app installed fine and then had nothing
+# to launch.
+kairo = "kairo.qt.__main__:main"
+
 [project.optional-dependencies]
 # The two frontends. Neither is required by the other, and the backend needs
 # neither: providers, artwork, the ledger, migration and matching are all
