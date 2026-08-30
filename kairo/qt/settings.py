@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QApplication, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QPushButton, QSlider,
-                               QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QPushButton, QScrollArea,
+                               QSlider, QVBoxLayout, QWidget)
 
 from kairo import APP_ID, APP_NAME, TAGLINE, __version__
 from kairo import migration, paths
@@ -37,7 +37,7 @@ class AppearancePanel(QFrame):
         layout.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD, Q.PAD_CARD, Q.PAD_CARD)
         layout.setSpacing(T.S3)
 
-        heading = QLabel("A P P E A R A N C E")
+        heading = QLabel("APPEARANCE")
         heading.setObjectName("micro")
         layout.addWidget(heading)
 
@@ -62,31 +62,38 @@ class AppearancePanel(QFrame):
             "cards sit on.")
         explain.setObjectName("meta")
         explain.setWordWrap(True)
+        explain.setMaximumWidth(Q.W_MEASURE)
         layout.addWidget(explain)
 
         presets = QHBoxLayout()
         presets.setSpacing(T.S2)
         label = QLabel("Preset")
         label.setObjectName("meta")
-        label.setFixedWidth(70)
+        label.setFixedWidth(Q.W_LABEL)
         presets.addWidget(label)
         for name in Q.PRESETS:
             button = QPushButton(name.title())
             button.setObjectName("secondary")
             button.setCursor(Qt.PointingHandCursor)
             button.clicked.connect(lambda _checked, key=name: self.set_preset(key))
+            button.setFixedHeight(Q.H_BUTTON)
             presets.addWidget(button)
         presets.addStretch(1)
         layout.addLayout(presets)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(T.S3)
-        grid.setVerticalSpacing(T.S2)
+        grid.setVerticalSpacing(T.S1)
         for row, name in enumerate(Q.LAYERS):
             caption = QLabel(name)
             caption.setObjectName("meta")
-            caption.setFixedWidth(70)
+            caption.setFixedWidth(Q.W_LABEL)
+            caption.setMinimumHeight(Q.H_PILLS)
             slider = QSlider(Qt.Horizontal)
+            # A QSlider styled only through its sub-controls has no height of
+            # its own: the groove is three pixels, so the row collapses and
+            # squeezes the labels beside it down to nothing.
+            slider.setFixedHeight(Q.H_PILLS)
             slider.setMinimum(30)
             slider.setMaximum(100)
             slider.setValue(int(round(getattr(self._glass, name) * 100)))
@@ -94,7 +101,8 @@ class AppearancePanel(QFrame):
                 lambda value, key=name: self._slider_moved(key, value))
             readout = QLabel(f"{getattr(self._glass, name):.2f}")
             readout.setObjectName("rowMeta")
-            readout.setFixedWidth(40)
+            readout.setFixedWidth(Q.W_READOUT)
+            readout.setMinimumHeight(Q.H_PILLS)
             grid.addWidget(caption, row, 0)
             grid.addWidget(slider, row, 1)
             grid.addWidget(readout, row, 2)
@@ -108,6 +116,7 @@ class AppearancePanel(QFrame):
         self.readout.setTextInteractionFlags(Qt.TextSelectableByMouse)
         bottom.addWidget(self.readout, 1)
         copy = QPushButton("Copy values")
+        copy.setFixedHeight(Q.H_BUTTON)
         copy.setObjectName("secondary")
         copy.setCursor(Qt.PointingHandCursor)
         copy.clicked.connect(self._copy)
@@ -165,15 +174,42 @@ class SettingsPane(QWidget):
         super().__init__(parent)
         self.ctx = context
         self.setObjectName("workspace")
+        # A QWidget *subclass* does not paint a stylesheet background unless
+        # it is told to; plain QWidget instances do. Both panes name
+        # themselves #workspace, so without this they showed the default
+        # palette instead of Kairo's backdrop — the reason Settings and
+        # Changes read lighter than the library.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self._on_glass_change = on_glass_change
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE)
-        layout.setSpacing(Q.GAP_WIDE)
+        # The pane used to lay its cards straight into the window with
+        # nothing to scroll, so once the content was taller than the window
+        # Qt had no choice but to squeeze it — the sliders and their labels
+        # collapsed into each other.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(Q.PAD_PANE, 0, Q.PAD_PANE, 0)
+        outer.setSpacing(0)
 
+        header = QWidget()
+        header.setFixedHeight(Q.H_HEADER)
+        head = QHBoxLayout(header)
+        head.setContentsMargins(0, 0, 0, 0)
         title = QLabel("Settings")
         title.setObjectName("title")
-        layout.addWidget(title)
+        head.addWidget(title, 0, Qt.AlignVCenter)
+        head.addStretch(1)
+        outer.addWidget(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body = QWidget()          # deliberately unnamed: painting #workspace
+        scroll.setWidget(body)    # twice lightens the whole scrolled region
+        outer.addWidget(scroll, 1)
+
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, T.S3, Q.PAD_PANE)
+        layout.setSpacing(Q.GAP_WIDE)
 
         # -- artwork source key -------------------------------------------
         card = QFrame()
@@ -183,16 +219,18 @@ class SettingsPane(QWidget):
                                        Q.PAD_CARD, Q.PAD_CARD)
         card_layout.setSpacing(T.S3)
         heading = QLabel("SteamGridDB API key")
-        heading.setObjectName("rowNameOn")
+        heading.setObjectName("pane")
         note = QLabel("Optional. Only needed for Steam game artwork — icon "
                       "themes, Iconify and your own files work without it.")
         note.setObjectName("meta")
         note.setWordWrap(True)
+        note.setMaximumWidth(Q.W_MEASURE)
         self.key = QLineEdit(context.config.get(SGDB_KEY, ""))
         self.key.setPlaceholderText("Paste API key")
         self.key.setEnabled(False)
         save = QPushButton("Save")
         save.setObjectName("primary")
+        save.setFixedHeight(Q.H_BUTTON)
         save.setEnabled(False)
         save.setToolTip("Not wired yet — this milestone is read-only")
         row = QHBoxLayout()
@@ -211,7 +249,7 @@ class SettingsPane(QWidget):
         places_layout.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD,
                                          Q.PAD_CARD, Q.PAD_CARD)
         places_layout.setSpacing(T.S2)
-        section = QLabel("W H E R E   T H I N G S   L I V E")
+        section = QLabel("WHERE THINGS LIVE")
         section.setObjectName("micro")
         places_layout.addWidget(section)
         for label, value in (("Settings", paths.config_file()),
@@ -221,7 +259,7 @@ class SettingsPane(QWidget):
             line = QHBoxLayout()
             key = QLabel(label)
             key.setObjectName("meta")
-            key.setFixedWidth(190)
+            key.setFixedWidth(Q.W_KEY)
             path = QLabel(str(value))
             path.setObjectName("rowMeta")
             line.addWidget(key)

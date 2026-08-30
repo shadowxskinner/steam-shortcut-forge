@@ -402,3 +402,75 @@ def test_no_blur_strength_control_is_offered():
         source = path.read_text().lower()
         assert "blurstrength" not in source
         assert "blur_radius" not in source
+
+
+def test_a_clicked_signal_is_never_wired_straight_to_a_bare_signal():
+    """QPushButton.clicked carries a checked flag.
+
+    Connecting it to the emit of a zero-argument Signal type-checks fine and
+    fails at the first press — exactly what a read-only milestone with no
+    display cannot catch by itself.
+    """
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "kairo" / "qt"
+    pattern = re.compile(r"clicked\.connect\(\s*self\.\w+\.emit\s*\)")
+    offenders = [path.name for path in sorted(root.glob("*.py"))
+                 if pattern.search(path.read_text())]
+    assert not offenders, offenders
+
+
+def test_a_disabled_button_never_keeps_its_accent():
+    """ID selectors outrank bare pseudo-classes in QSS.
+
+    QPushButton:disabled alone loses to QPushButton#primary, so a disabled
+    Apply rendered in full accent and read as live. Caught by rendering it.
+    """
+    from kairo.qt import theme as Q
+    for preset in ("frosted", "dense", "clear", "solid"):
+        assert "QPushButton#primary:disabled" in Q.stylesheet(preset), preset
+
+
+def test_only_one_primary_action_is_offered_at_a_time():
+    """Apply is the primary action; nothing else competes with it."""
+    from pathlib import Path
+    source = (Path(__file__).resolve().parent.parent
+              / "kairo" / "qt" / "library.py").read_text()
+    primaries = [line.strip() for line in source.splitlines()
+                 if 'setObjectName("primary")' in line]
+    assert len(primaries) == 1, primaries
+    assert "apply_btn" in primaries[0]
+
+
+def test_a_cleared_widget_is_unparented_before_it_is_deleted():
+    """deleteLater only runs on the next event-loop turn.
+
+    Until then the old tiles keep painting over the new grid, so a source
+    switch flickers the previous results on top of the incoming ones.
+    """
+    from pathlib import Path
+    source = (Path(__file__).resolve().parent.parent
+              / "kairo" / "qt" / "library.py").read_text()
+    index = source.index("widget.deleteLater()")
+    assert "widget.setParent(None)" in source[index - 200:index]
+
+
+def test_a_pane_subclass_asks_for_its_own_background():
+    """QSS backgrounds are opt-in for QWidget subclasses.
+
+    A plain QWidget instance painted #workspace fine, so the library looked
+    right while Settings and Changes silently fell back to the default
+    palette and read as light grey panels.
+    """
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "kairo" / "qt"
+    offenders = []
+    for path in sorted(root.glob("*.py")):
+        body = path.read_text()
+        for match in re.finditer(r"class (\w+)\(QWidget\):", body):
+            block = body[match.start():match.start() + 2600]
+            names = re.search(r'self\.setObjectName\("(\w+)"\)', block)
+            if names and "WA_StyledBackground" not in block:
+                offenders.append(f"{path.name}: {match.group(1)} -> {names.group(1)}")
+    assert not offenders, offenders

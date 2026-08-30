@@ -93,68 +93,63 @@ class KairoWindow(QMainWindow):
     # -- layout ------------------------------------------------------------
 
     def _build(self) -> None:
+        """One composition from the top edge down.
+
+        The actions used to sit in a strip of their own above everything,
+        which left the first eighty pixels of the window as an empty band and
+        made the buttons look dropped in rather than placed. They now live in
+        each pane's own header, so the top of the window is three columns of
+        content beginning on the same line, and the status text has moved to a
+        footer spanning the whole width instead of stopping at the sidebar.
+        """
         root = QWidget()
         root.setObjectName("root")
         self.setCentralWidget(root)
-        layout = QHBoxLayout(root)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self._build_nav())
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        right = QWidget()
-        right.setObjectName("workspace")
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-
-        bar = QHBoxLayout()
-        bar.setContentsMargins(Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE, 0)
-        bar.setSpacing(Q.GAP)
-        # The read-only note used to sit here as a full-width strip, which put
-        # the least important sentence on screen in the most prominent row.
-        # It belongs on the status line; this row is for actions.
-        bar.addStretch(1)
-        for label in ("Rescan", "Auto Match"):
-            button = QPushButton(label)
-            button.setObjectName("secondary" if label == "Rescan" else "primary")
-            button.setFixedHeight(Q.H_ACTION)
-            if label == "Rescan":
-                button.clicked.connect(self.rescan)
-            else:
-                button.setEnabled(False)
-                button.setToolTip("Not wired yet — this milestone is read-only")
-            bar.addWidget(button)
-        right_layout.addLayout(bar)
-
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(self._build_nav())
         self.stack = QStackedWidget()
-        right_layout.addWidget(self.stack, 1)
+        body.addWidget(self.stack, 1)
+        outer.addLayout(body, 1)
 
+        footer = QWidget()
+        footer.setObjectName("footer")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(Q.PAD_COLUMN, T.S2, Q.PAD_PANE, T.S2)
         self.status = QLabel("")
-        self.status.setObjectName("meta")
-        self.status.setContentsMargins(Q.PAD_PANE, 0, Q.PAD_PANE, T.S4)
-        right_layout.addWidget(self.status)
-
-        layout.addWidget(right, 1)
+        self.status.setObjectName("status")
+        footer_layout.addWidget(self.status)
+        footer_layout.addStretch(1)
+        outer.addWidget(footer)
 
     def _build_nav(self) -> QWidget:
         column = QWidget()
         column.setObjectName("nav")
         column.setFixedWidth(Q.W_NAV)
         layout = QVBoxLayout(column)
-        layout.setContentsMargins(T.S3, Q.PAD_PANE, T.S3, Q.PAD_COLUMN)
-        layout.setSpacing(T.S1)
+        layout.setContentsMargins(T.S2, 0, T.S2, Q.PAD_COLUMN)
+        layout.setSpacing(1)
 
-        header = QHBoxLayout()
-        header.setContentsMargins(T.S3, 0, T.S3, Q.PAD_PANE)
-        header.setSpacing(T.S2)
+        # The header band every column uses, so the wordmark, the provider
+        # name and the selected item's title all begin on one line.
+        header = QWidget()
+        header.setFixedHeight(Q.H_HEADER)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(T.S3, 0, T.S3, 0)
+        header_layout.setSpacing(T.S2)
         logo = QLabel("KAIRO")
         logo.setObjectName("logo")
         sub = QLabel("回路")
         sub.setObjectName("logoSub")
-        header.addWidget(logo)
-        header.addWidget(sub)
-        header.addStretch(1)
-        layout.addLayout(header)
+        header_layout.addWidget(logo, 0, Qt.AlignVCenter)
+        header_layout.addWidget(sub, 0, Qt.AlignVCenter)
+        header_layout.addStretch(1)
+        layout.addWidget(header)
 
         current_group = None
         for item in self.items:
@@ -162,7 +157,7 @@ class KairoWindow(QMainWindow):
                 current_group = item.group
                 heading = QLabel(item.group.upper())
                 heading.setObjectName("micro")
-                heading.setContentsMargins(T.S4, Q.GAP_WIDE, 0, T.S2)
+                heading.setContentsMargins(T.S3, Q.GAP_WIDE, 0, T.S2)
                 layout.addWidget(heading)
             button = NavButton(item.key, item.label, nav.icon_for(item), column)
             button.clicked.connect(lambda _checked, key=item.key: self._select(key))
@@ -189,6 +184,7 @@ class KairoWindow(QMainWindow):
             pane = LibraryPane(item.provider, self.ctx)
             pane.changed.connect(self._refresh_status)
             pane.status.connect(self.status.setText)
+            pane.rescan_requested.connect(self.rescan)
         self.panes[key] = pane
         self.stack.addWidget(pane)
         return pane

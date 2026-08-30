@@ -14,7 +14,6 @@ def test_qt_layout_is_roomier_than_the_tk_scale():
     from kairo.ui import theme as T
     assert Q.H_ROW > T.H_ROW
     assert Q.W_NAV > T.W_NAV
-    assert Q.W_LIST > T.W_LIST
     assert Q.WELL_ROW > T.THUMB_SIZE
     assert Q.TILE >= T.TILE_SIZE
     assert Q.PAD_PANE > T.PAD_WINDOW
@@ -33,7 +32,8 @@ def test_qt_panes_do_not_reach_back_for_tk_geometry():
     from pathlib import Path
     banned = ("T.H_ROW", "T.W_NAV", "T.W_LIST", "T.TILE_SIZE", "T.WELL_SIZE",
               "T.THUMB_SIZE", "T.PAD_WINDOW", "T.PAD_COLUMN", "T.PAD_CARD",
-              "T.H_CONTROL", "T.H_ACTION", "T.R_LG", "T.R_MD")
+              "T.H_CONTROL", "T.H_ACTION", "T.R_LG", "T.R_MD",
+              "T.LIST_NAME_CHARS")
     root = Path(__file__).resolve().parent.parent / "kairo" / "qt"
     offenders = []
     for path in sorted(root.rglob("*.py")):
@@ -50,3 +50,115 @@ def test_divider_is_a_hairline_not_a_gap():
     sheet = Q.stylesheet("frosted")
     assert "QFrame#divider" in sheet
     assert "max-height: 1px" in sheet
+
+
+def test_the_artwork_browser_is_the_largest_region():
+    """Hierarchy in plan, not just in type.
+
+    The entry list was widened on the theory that more room is always better.
+    It is the thing you leave in order to go and work, so it gets less width
+    than the thing you work in — even in the smallest window Kairo opens at.
+    """
+    from kairo.qt import theme as Q
+    minimum_width = 1120                       # KairoWindow.setMinimumSize
+    workspace = minimum_width - Q.W_NAV - Q.W_LIST
+    assert workspace > Q.W_LIST
+    assert workspace > Q.W_NAV
+
+
+def test_one_header_band_across_all_three_columns():
+    """The first hundred pixels are a register, not leftover container space."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "kairo" / "qt"
+    users = {path.name for path in sorted(root.glob("*.py"))
+             if "H_HEADER" in path.read_text()}
+    assert {"library.py", "shell.py", "settings.py", "changes.py"} <= users, users
+
+
+def test_weight_is_the_last_resort():
+    """Size, spacing and colour carry hierarchy; nothing is heavier than 600."""
+    import re
+    from pathlib import Path
+    from kairo.qt import theme as Q
+    assert Q.WT_SEMI == 600
+    source = Path(__file__).resolve().parent.parent / "kairo" / "qt" / "theme.py"
+    sheet = source.read_text()
+    assert "font-weight: 700" not in sheet
+    assert "font-weight: bold" not in sheet
+    weights = {int(v) for v in re.findall(r"font-weight: (\d{3})", sheet)}
+    assert weights <= {400, 500, 600}, weights
+
+
+def test_chrome_is_earned_not_default():
+    """A row, a tile and the inspector carry no outline at rest."""
+    from kairo.qt import theme as Q
+    sheet = Q.stylesheet("frosted")
+    for rule in ("QFrame#row ", "QFrame#tile ", "QFrame#card "):
+        block = sheet.split(rule, 1)[1].split("}", 1)[0]
+        assert "border: none" in block, (rule, block)
+
+
+def test_no_one_off_geometry_in_the_panes():
+    """Every dimension has a name on the scale, or it is not a dimension."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "kairo" / "qt"
+    pattern = re.compile(r"setFixed(?:Width|Height|Size)\(\s*\d{2,}")
+    offenders = []
+    for path in sorted(root.glob("*.py")):
+        if path.name == "theme.py":
+            continue
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if pattern.search(line):
+                offenders.append(f"{path.name}:{number}: {line.strip()}")
+    assert not offenders, offenders
+
+
+def test_controls_share_one_height():
+    """Search, query and every button line up; pills sit inside that line."""
+    from kairo.qt import theme as Q
+    assert Q.H_FIELD == Q.H_BUTTON
+    assert Q.H_PILLS < Q.H_BUTTON
+
+
+def test_letter_spacing_is_styled_not_typed():
+    """Tracking belongs to the stylesheet.
+
+    Spacing a heading out by hand and then tracking it in QSS applies the
+    effect twice, which is how APPEARANCE came to occupy a third of a card.
+    """
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "kairo" / "qt"
+    spaced = re.compile(r'QLabel\(\s*"(?:[A-Z] ){3,}')
+    offenders = [path.name for path in sorted(root.glob("*.py"))
+                 if spaced.search(path.read_text())]
+    assert not offenders, offenders
+
+
+def test_a_slider_is_given_a_height_of_its_own():
+    """Styling only a QSlider's sub-controls leaves the widget 3px tall."""
+    from pathlib import Path
+    source = (Path(__file__).resolve().parent.parent
+              / "kairo" / "qt" / "settings.py").read_text()
+    assert "slider.setFixedHeight(Q.H_PILLS)" in source
+
+
+def test_a_translucent_surface_is_never_painted_twice():
+    """Nesting #workspace inside #workspace doubles the fill.
+
+    Every surface id carries an alpha, so a widget repeating its parent's id
+    composites the same colour twice and reads as a lighter panel with a seam
+    along the edge where it begins.
+    """
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent / "kairo" / "qt"
+    offenders = []
+    for path in sorted(root.glob("*.py")):
+        body = path.read_text()
+        for surface in ("workspace", "nav", "list", "footer"):
+            uses = re.findall(rf'setObjectName\("{surface}"\)', body)
+            if len(uses) > 1:
+                offenders.append(f"{path.name}: {surface} x{len(uses)}")
+    assert not offenders, offenders

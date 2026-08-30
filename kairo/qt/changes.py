@@ -78,20 +78,33 @@ class ChangesPane(QWidget):
         super().__init__(parent)
         self.ctx = context
         self.setObjectName("workspace")
+        # A QWidget *subclass* does not paint a stylesheet background unless
+        # it is told to; plain QWidget instances do. Both panes name
+        # themselves #workspace, so without this they showed the default
+        # palette instead of Kairo's backdrop — the reason Settings and
+        # Changes read lighter than the library.
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE)
+        layout.setContentsMargins(Q.PAD_PANE, 0, Q.PAD_PANE, Q.PAD_PANE)
         layout.setSpacing(Q.GAP_WIDE)
 
-        head = QHBoxLayout()
+        header = QWidget()
+        header.setFixedHeight(Q.H_HEADER)
+        head = QHBoxLayout(header)
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(T.S2)
         titles = QVBoxLayout()
-        titles.setSpacing(4)
+        titles.setContentsMargins(0, 0, 0, 0)
+        titles.setSpacing(2)
         title = QLabel("Changes")
         title.setObjectName("title")
         self.count = QLabel("")
-        self.count.setObjectName("meta")
+        self.count.setObjectName("subtitle")
+        titles.addStretch(1)
         titles.addWidget(title)
         titles.addWidget(self.count)
+        titles.addStretch(1)
         head.addLayout(titles)
         head.addStretch(1)
         for label, name in (("Clean up unused artwork", "secondary"),
@@ -100,13 +113,14 @@ class ChangesPane(QWidget):
             button.setObjectName(name)
             button.setEnabled(False)
             button.setToolTip("Not wired yet — this milestone is read-only")
-            head.addWidget(button)
-        layout.addLayout(head)
+            button.setFixedHeight(Q.H_BUTTON)
+            head.addWidget(button, 0, Qt.AlignVCenter)
+        layout.addWidget(header)
 
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(T.S3, T.S3, T.S3, T.S3)
+        card_layout.setContentsMargins(T.S2, T.S3, T.S2, T.S3)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -135,7 +149,10 @@ class ChangesPane(QWidget):
                            "Artwork you apply appears here, and you can put "
                            "any of it back.")
             empty.setObjectName("empty")
-            self.rows.insertWidget(0, empty)
+            # An empty state pinned to the top-left of a large surface reads
+            # as a failure to load. Centred, it reads as a state.
+            empty.setAlignment(Qt.AlignCenter)
+            self.rows.insertWidget(0, empty, 1, Qt.AlignCenter)
             return
         for index, record in enumerate(records):
             self.rows.insertWidget(index, ChangeRow(record, self.holder))

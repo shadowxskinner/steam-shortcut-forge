@@ -98,42 +98,61 @@ MIN_ALPHA, MAX_ALPHA = 0.0, 1.0
 # proportions around behind it.
 # ---------------------------------------------------------------------------
 
-W_NAV = 240
-W_LIST = 404
+W_NAV = 244
+W_LIST = 372                 # narrower than the workspace: artwork is the work
 
-H_NAV_ITEM = 42
+H_HEADER = 88                # the header band, shared by all three columns
+H_NAV_ITEM = 40
 H_ROW = 76
-H_CONTROL = 40
-H_ACTION = 44
+H_FIELD = 36                 # search, artwork query
+H_BUTTON = 36                # every button, everywhere
+H_PILLS = 30
 
 WELL_ROW = 44                # icon inside an entry row
-WELL_COMPARE = 76            # current / proposed
+WELL_COMPARE = 64            # current / proposed — deliberately secondary
 TILE = 116                   # artwork tile
 
 PAD_PANE = 28                # outer margin of a pane
-PAD_COLUMN = 20              # inside the nav and entry columns
-PAD_CARD = 24                # inside a card
+PAD_COLUMN = 18              # inside the nav and entry columns
+PAD_CARD = 22                # inside the inspector
 GAP = 12                     # between related things
 GAP_WIDE = 20                # between blocks
-GAP_ROW = 6                  # between list rows
+GAP_ROW = 4                  # between list rows: they carry no chrome at rest
 
-R_CARD = 18
-R_CONTROL = 12
-R_WELL = 14
+R_CARD = 14
+R_CONTROL = 9
+R_WELL = 11
 R_PILL = 999
 
-# Type. A wider spread than the Tk scale: the reference leans hard on size to
-# carry hierarchy, so bold has less work to do.
-FS_LOGO = 20
-FS_TITLE = 30
-FS_PANE = 18
-FS_ROW = 14
-FS_ROW_META = 12
+# Type. Hierarchy is carried by size, spacing and colour; weight is the last
+# resort, and never goes above 600. The selected item's name is the loudest
+# thing on screen by a wide margin, and everything else steps down from there.
+FS_LOGO = 14
+FS_TITLE = 28
+FS_PANE = 15
+FS_ROW = 13
+FS_ROW_META = 11
 FS_BODY = 13
-FS_META = 12
+FS_META = 11
 FS_MICRO = 10
 FS_BUTTON = 13
 FS_PILL = 12
+
+WT_REGULAR = 400
+WT_MEDIUM = 500
+WT_SEMI = 600                # the heaviest weight in the product
+
+# Truncation. Sized to the column rather than inherited, so a narrower list
+# does not clip mid-glyph — an explicit ellipsis reads as a choice.
+LIST_NAME_CHARS = 30
+LIST_META_CHARS = 34
+
+# Named columns, so labels and readouts share one left edge.
+W_QUERY = 240                # artwork search field
+W_LABEL = 76                 # settings label gutter
+W_READOUT = 44               # numeric readout beside a slider
+W_KEY = 190                  # key column in the paths table
+W_MEASURE = 660              # comfortable line length for prose
 
 
 def rgba(colour: str, alpha: float = 1.0) -> str:
@@ -166,126 +185,152 @@ def stylesheet(glass=None) -> str:
     """
     g = resolve(glass)
 
+    # Borders are the first thing to go when an interface is asked to feel
+    # calm: a box around everything makes every element argue for attention.
+    # Separators run below the tunable line alpha but never vanish, and
+    # surfaces carry the grouping instead.
+    hair = rgba(T.C_BORDER_STRONG, max(g.line, 0.5))
+    edge = rgba(T.C_BORDER, g.line * 0.30)
+
     return f"""
     /* ---------- surfaces ---------- */
     QWidget#root      {{ background: transparent; }}
     QWidget#nav       {{ background: {rgba(T.C_NAV, g.nav)};
-                         border-right: 1px solid {rgba(T.C_BORDER, g.line)}; }}
+                         border-right: 1px solid {edge}; }}
     QWidget#list      {{ background: {rgba(T.C_LIST, g.list)};
-                         border-right: 1px solid {rgba(T.C_BORDER, g.line)}; }}
+                         border-right: 1px solid {edge}; }}
     QWidget#workspace {{ background: {rgba(T.C_BG, g.workspace)}; }}
+    QWidget#footer    {{ background: {rgba(T.C_NAV, g.nav)};
+                         border-top: 1px solid {edge}; }}
+    /* The inspector is a surface, not a box: no outline, just a lift. */
     QFrame#card       {{ background: {rgba(T.C_PANEL, g.panel)};
-                         border: 1px solid {rgba(T.C_BORDER, g.line)};
-                         border-radius: {R_CARD}px; }}
+                         border: none; border-radius: {R_CARD}px; }}
     QFrame#well       {{ background: {rgba(T.C_CARD, g.card)};
                          border-radius: {R_WELL}px; }}
-    QFrame#divider    {{ background: {rgba(T.C_BORDER, g.line)};
-                         border: none; max-height: 1px; }}
+    QFrame#divider    {{ background: {hair}; border: none; max-height: 1px; }}
 
-    /* ---------- type: never translucent ---------- */
+    /* ---------- type ---------- */
     QLabel            {{ background: transparent; color: {T.C_TEXT2}; }}
     QLabel#logo       {{ color: {T.C_TEXT}; font-size: {FS_LOGO}px;
-                         font-weight: 700; letter-spacing: 1px; }}
-    QLabel#logoSub    {{ color: {T.C_TEXT3}; font-size: {FS_META}px; }}
+                         font-weight: {WT_SEMI}; letter-spacing: 2.5px; }}
+    QLabel#logoSub    {{ color: {T.C_TEXT3}; font-size: {FS_META}px;
+                         letter-spacing: 1px; }}
     QLabel#title      {{ color: {T.C_TEXT}; font-size: {FS_TITLE}px;
-                         font-weight: 700; }}
+                         font-weight: {WT_SEMI}; letter-spacing: -0.4px; }}
     QLabel#pane       {{ color: {T.C_TEXT}; font-size: {FS_PANE}px;
-                         font-weight: 700; }}
+                         font-weight: {WT_SEMI}; letter-spacing: -0.1px; }}
     QLabel#meta       {{ color: {T.C_TEXT3}; font-size: {FS_META}px; }}
+    QLabel#subtitle   {{ color: {rgba(T.C_TEXT2, 0.62)};
+                         font-size: {FS_BODY}px; }}
+    QLabel#count      {{ color: {T.C_TEXT3}; font-size: {FS_META}px; }}
     QLabel#micro      {{ color: {T.C_TEXT3}; font-size: {FS_MICRO}px;
-                         font-weight: 700; letter-spacing: 1px; }}
+                         font-weight: {WT_MEDIUM}; letter-spacing: 1.4px; }}
     QLabel#rowName    {{ color: {T.C_TEXT2}; font-size: {FS_ROW}px; }}
     QLabel#rowNameOn  {{ color: {T.C_TEXT}; font-size: {FS_ROW}px;
-                         font-weight: 700; }}
+                         font-weight: {WT_MEDIUM}; }}
     QLabel#rowMeta    {{ color: {T.C_TEXT3}; font-size: {FS_ROW_META}px; }}
-    QLabel#rowMetaOn  {{ color: {T.C_ACCENT_TEXT}; font-size: {FS_ROW_META}px; }}
-    QLabel#dot        {{ color: {T.C_SUCCESS}; font-size: {FS_META}px; }}
+    QLabel#rowMetaOn  {{ color: {T.C_TEXT2}; font-size: {FS_ROW_META}px; }}
+    QLabel#navName    {{ color: {T.C_TEXT2}; font-size: {FS_ROW}px; }}
+    QLabel#navNameOn  {{ color: {T.C_TEXT}; font-size: {FS_ROW}px;
+                         font-weight: {WT_MEDIUM}; }}
+    QLabel#navCount   {{ color: {T.C_TEXT3}; font-size: {FS_META}px; }}
+    QLabel#wellMark   {{ color: {rgba(T.C_TEXT3, 0.75)};
+                         font-size: {FS_PANE}px; font-weight: {WT_MEDIUM}; }}
+    QLabel#dot        {{ color: {rgba(T.C_SUCCESS, 0.55)};
+                         font-size: {FS_MICRO}px; }}
     QLabel#empty      {{ color: {T.C_TEXT3}; font-size: {FS_BODY}px; }}
-    QLabel#banner     {{ color: {T.C_TEXT3}; font-size: {FS_META}px; }}
-    QLabel#count      {{ color: {T.C_TEXT2}; font-size: {FS_META}px;
-                         background: {rgba(T.C_CARD, g.card)};
-                         border-radius: 11px; padding: 3px 10px; }}
+    QLabel#status     {{ color: {T.C_TEXT3}; font-size: {FS_META}px; }}
 
     /* ---------- navigation ---------- */
+    /* A destination, not a button: no border, no bold, a soft fill when it
+       is the one you are looking at. */
     QPushButton#nav        {{ background: transparent; border: none;
-                              border-radius: {R_CONTROL}px;
-                              padding: 0px 14px; text-align: left;
-                              color: {T.C_TEXT2}; font-size: {FS_ROW}px; }}
-    QPushButton#nav:hover  {{ background: {rgba(T.C_CARD, g.card)}; }}
-    QPushButton#nav:checked{{ background: {rgba(T.C_SELECTED_NAV, g.card)};
-                              color: {T.C_TEXT}; font-weight: 700; }}
+                              border-radius: {R_CONTROL}px; text-align: left;
+                              padding: 0px; }}
+    QPushButton#nav:hover  {{ background: {rgba(T.C_CARD, g.card * 0.5)}; }}
+    QPushButton#nav:checked{{ background: {rgba(T.C_SELECTED_NAV, g.card)}; }}
 
     /* ---------- entry rows ---------- */
-    QFrame#row         {{ background: {rgba(T.C_CARD, g.card)};
-                          border: 1px solid transparent;
+    /* At rest a row is nothing at all — the icon and the name are the row.
+       Chrome appears on hover, and selection is a filled surface. */
+    QFrame#row         {{ background: transparent; border: none;
                           border-radius: {R_CONTROL}px; }}
-    QFrame#row:hover   {{ background: {rgba(T.C_CARD_HOVER, g.card)}; }}
+    QFrame#row:hover   {{ background: {rgba(T.C_CARD, g.card * 0.55)}; }}
     QFrame#rowOn       {{ background: {rgba(T.C_SELECTED, g.card)};
-                          border: 1px solid {T.C_ACCENT};
-                          border-radius: {R_CONTROL}px; }}
+                          border: none; border-radius: {R_CONTROL}px; }}
 
     /* ---------- artwork tiles ---------- */
-    QFrame#tile        {{ background: {rgba(T.C_CARD, g.tile)};
-                          border: 2px solid transparent;
+    QFrame#tile        {{ background: transparent; border: none;
                           border-radius: {R_CONTROL}px; }}
-    QFrame#tile:hover  {{ border: 2px solid {T.C_BORDER_STRONG}; }}
+    QFrame#tile:hover  {{ background: {rgba(T.C_CARD, g.tile * 0.6)}; }}
     QFrame#tileOn      {{ background: {rgba(T.C_ACCENT_SOFT, g.card)};
-                          border: 2px solid {T.C_ACCENT_BRIGHT};
-                          border-radius: {R_CONTROL}px; }}
+                          border: none; border-radius: {R_CONTROL}px; }}
 
-    /* ---------- controls ---------- */
-    QLineEdit          {{ background: {rgba(T.C_CARD, g.card)};
-                          border: 1px solid {rgba(T.C_BORDER, g.line)};
-                          border-radius: {R_CONTROL}px;
-                          padding: 10px 14px; min-height: {H_CONTROL - 22}px;
+    /* ---------- fields ---------- */
+    QLineEdit          {{ background: {rgba(T.C_CARD, g.card * 0.8)};
+                          border: none; border-radius: {R_CONTROL}px;
+                          padding: 0px 12px; min-height: {H_FIELD}px;
+                          max-height: {H_FIELD}px;
                           color: {T.C_TEXT}; font-size: {FS_BODY}px;
                           selection-background-color: {T.C_ACCENT}; }}
-    QLineEdit:focus    {{ border: 1px solid {T.C_ACCENT}; }}
+    QLineEdit:focus    {{ background: {rgba(T.C_CARD_HOVER, g.card)}; }}
 
-    QPushButton#pill        {{ background: transparent; border: none;
-                               border-radius: {R_PILL}px; padding: 7px 16px;
-                               color: {T.C_TEXT3}; font-size: {FS_PILL}px;
-                               font-weight: 700; }}
-    QPushButton#pill:hover  {{ background: {rgba(T.C_CARD_HOVER, g.card)}; }}
-    QPushButton#pill:checked{{ background: {T.C_ACCENT_BRIGHT};
-                               color: {T.C_TEXT}; }}
-    QWidget#pillGroup       {{ background: {rgba(T.C_CARD, g.card)};
+    /* ---------- pills ---------- */
+    QWidget#pillGroup       {{ background: {rgba(T.C_CARD, g.card * 0.7)};
                                border-radius: {R_PILL}px; }}
+    QPushButton#pill        {{ background: transparent; border: none;
+                               border-radius: {R_PILL}px; padding: 0px 14px;
+                               min-height: {H_PILLS - 6}px;
+                               color: {T.C_TEXT3}; font-size: {FS_PILL}px; }}
+    QPushButton#pill:hover  {{ color: {T.C_TEXT2}; }}
+    QPushButton#pill:checked{{ background: {rgba(T.C_SELECTED, 0.95)};
+                               color: {T.C_TEXT}; font-weight: {WT_MEDIUM}; }}
 
-    QPushButton#secondary       {{ background: {rgba(T.C_CARD, g.card)};
-                                   border: 1px solid {rgba(T.C_BORDER, g.line)};
-                                   border-radius: {R_CONTROL}px;
-                                   padding: 11px 20px; color: {T.C_TEXT};
-                                   font-size: {FS_BUTTON}px; font-weight: 700; }}
-    QPushButton#secondary:hover {{ background: {rgba(T.C_CARD_HOVER, g.card)}; }}
+    /* ---------- buttons: one family, three volumes ---------- */
+    QPushButton#secondary       {{ background: {rgba(T.C_CARD, g.card * 0.8)};
+                                   border: none; border-radius: {R_CONTROL}px;
+                                   padding: 0px 16px; min-height: {H_BUTTON}px;
+                                   color: {T.C_TEXT2};
+                                   font-size: {FS_BUTTON}px; }}
+    QPushButton#secondary:hover {{ background: {rgba(T.C_CARD_HOVER, g.card)};
+                                   color: {T.C_TEXT}; }}
     QPushButton#primary         {{ background: {T.C_ACCENT_BRIGHT};
                                    border: none; border-radius: {R_CONTROL}px;
-                                   padding: 11px 26px; color: {T.C_TEXT};
-                                   font-size: {FS_BUTTON}px; font-weight: 700; }}
+                                   padding: 0px 22px; min-height: {H_BUTTON}px;
+                                   color: {T.C_TEXT}; font-size: {FS_BUTTON}px;
+                                   font-weight: {WT_MEDIUM}; }}
     QPushButton#primary:hover   {{ background: {T.C_ACCENT_HOVER}; }}
-    QPushButton#danger          {{ background: {rgba(T.C_DANGER_BG, g.card)};
-                                   border: 1px solid {rgba(T.C_DANGER, 0.35)};
+    /* Destructive, and quiet until you reach for it. */
+    QPushButton#danger          {{ background: transparent; border: none;
                                    border-radius: {R_CONTROL}px;
-                                   padding: 11px 20px; color: {T.C_DANGER};
-                                   font-size: {FS_BUTTON}px; font-weight: 700; }}
-    /* Disabled reads as unavailable, not merely as dimmer text. */
-    QPushButton:disabled        {{ background: {rgba(T.C_CARD, g.card)};
-                                   border: 1px solid {rgba(T.C_BORDER, g.line)};
-                                   color: {T.C_TEXT3}; }}
+                                   padding: 0px 16px; min-height: {H_BUTTON}px;
+                                   color: {T.C_TEXT3};
+                                   font-size: {FS_BUTTON}px; }}
+    QPushButton#danger:hover    {{ background: {rgba(T.C_DANGER_BG, g.card)};
+                                   color: {T.C_DANGER}; }}
+    /* An id selector outranks a bare pseudo-class, so #primary:disabled has
+       to be named or a disabled Apply keeps its accent and reads as live. */
+    QPushButton:disabled,
+    QPushButton#secondary:disabled,
+    QPushButton#primary:disabled {{ background: {rgba(T.C_CARD, g.card * 0.55)};
+                                   color: {rgba(T.C_TEXT3, 0.8)};
+                                   font-weight: {WT_REGULAR}; }}
+    QPushButton#danger:disabled {{ background: transparent;
+                                   color: {rgba(T.C_TEXT3, 0.6)}; }}
 
-    QSlider::groove:horizontal  {{ height: 4px; border-radius: 2px;
+    QSlider::groove:horizontal  {{ height: 3px; border-radius: 2px;
                                    background: {rgba(T.C_CARD_HOVER, g.card)}; }}
     QSlider::sub-page:horizontal{{ background: {T.C_ACCENT}; border-radius: 2px; }}
-    QSlider::handle:horizontal  {{ background: {T.C_ACCENT_BRIGHT};
-                                   width: 14px; margin: -6px 0;
-                                   border-radius: 7px; }}
+    QSlider::handle:horizontal  {{ background: {T.C_TEXT}; width: 13px;
+                                   margin: -5px 0; border-radius: 6px; }}
 
     /* ---------- scrolling ---------- */
     QScrollArea            {{ background: transparent; border: none; }}
     QScrollArea > QWidget > QWidget {{ background: transparent; }}
-    QScrollBar:vertical    {{ background: transparent; width: 10px; margin: 0; }}
-    QScrollBar::handle:vertical {{ background: {rgba(T.C_CARD_HOVER, g.card)};
-                                   border-radius: 5px; min-height: 36px; }}
+    QScrollBar:vertical    {{ background: transparent; width: 8px; margin: 0; }}
+    QScrollBar::handle:vertical {{ background: {rgba(T.C_CARD_HOVER, 0.30)};
+                                   border-radius: 4px; min-height: 40px; }}
+    QScrollBar::handle:vertical:hover {{ background: {rgba(T.C_CARD_HOVER, 0.7)}; }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
                                    background: transparent; }}

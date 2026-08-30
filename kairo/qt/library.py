@@ -30,6 +30,7 @@ class LibraryPane(QWidget):
 
     changed = Signal()
     status = Signal(str)
+    rescan_requested = Signal()
 
     def __init__(self, provider, context, parent=None):
         super().__init__(parent)
@@ -67,20 +68,21 @@ class LibraryPane(QWidget):
         column.setObjectName("list")
         column.setFixedWidth(Q.W_LIST)
         layout = QVBoxLayout(column)
-        layout.setContentsMargins(Q.PAD_COLUMN, Q.PAD_PANE,
-                                  Q.PAD_COLUMN, Q.PAD_COLUMN)
+        layout.setContentsMargins(Q.PAD_COLUMN, 0, Q.PAD_COLUMN, Q.PAD_COLUMN)
         layout.setSpacing(Q.GAP)
 
-        head = QHBoxLayout()
+        head = QWidget()
+        head.setFixedHeight(Q.H_HEADER)
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(T.S1, 0, T.S1, 0)
         title = QLabel(self.provider.label)
         title.setObjectName("pane")
         self.count = QLabel("0")
         self.count.setObjectName("count")
-        head.addWidget(title)
-        head.addStretch(1)
-        head.addWidget(self.count)
-        layout.addLayout(head)
-        layout.addSpacing(T.S1)
+        head_layout.addWidget(title, 0, Qt.AlignVCenter)
+        head_layout.addStretch(1)
+        head_layout.addWidget(self.count, 0, Qt.AlignVCenter)
+        layout.addWidget(head)
 
         self.search = QLineEdit()
         self.search.setPlaceholderText(f"Search {self.provider.noun}…")
@@ -112,94 +114,132 @@ class LibraryPane(QWidget):
         space = QWidget()
         space.setObjectName("workspace")
         layout = QVBoxLayout(space)
-        layout.setContentsMargins(Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE, Q.PAD_PANE)
+        layout.setContentsMargins(Q.PAD_PANE, 0, Q.PAD_PANE, Q.PAD_PANE)
         layout.setSpacing(Q.GAP_WIDE)
 
-        # -- title block: the name is the loudest thing on the screen -------
-        head = QHBoxLayout()
-        head.setSpacing(Q.GAP)
+        header = QWidget()
+        header.setFixedHeight(Q.H_HEADER)
+        head = QHBoxLayout(header)
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(T.S2)
         names = QVBoxLayout()
-        names.setSpacing(4)
+        names.setContentsMargins(0, 0, 0, 0)
+        names.setSpacing(2)
         self.title = QLabel("")
         self.title.setObjectName("title")
         self.subtitle = QLabel("")
-        self.subtitle.setObjectName("meta")
+        self.subtitle.setObjectName("subtitle")
+        # Without the stretches the two labels split the band between them,
+        # which pushes the title flush against the top edge of the window and
+        # leaves the subtitle floating far below it. Stretched top and bottom,
+        # both take their own height, centred in the band — on the same line
+        # as the wordmark and the provider name beside them.
+        names.addStretch(1)
         names.addWidget(self.title)
         names.addWidget(self.subtitle)
+        names.addStretch(1)
         head.addLayout(names)
         head.addStretch(1)
-        layout.addLayout(head)
+        self.rescan_btn = QPushButton("Rescan")
+        self.rescan_btn.setObjectName("secondary")
+        # clicked carries a checked flag; a zero-argument Signal cannot take it.
+        self.rescan_btn.clicked.connect(
+            lambda _checked: self.rescan_requested.emit())
+        self.match_btn = QPushButton("Auto Match")
+        self.match_btn.setObjectName("secondary")
+        self.match_btn.setEnabled(False)
+        self.match_btn.setToolTip("Not wired yet — this milestone is read-only")
+        for button in (self.rescan_btn, self.match_btn):
+            button.setFixedHeight(Q.H_BUTTON)
+            head.addWidget(button, 0, Qt.AlignVCenter)
+        layout.addWidget(header)
 
-        # -- one card, hairline-divided -------------------------------------
-        # The reference groups a subject's fields into a single surface and
-        # separates them with hairlines rather than gaps. Two floating cards
-        # read as two unrelated things; one card reads as one subject.
+        # -- the inspector -------------------------------------------------
+        # One surface, three registers: what is about to change, the browser
+        # you spend your time in, and the actions. Hairlines separate them;
+        # the browser takes all the room left over, and the action bar is
+        # anchored to the bottom of the surface rather than floating under it.
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD,
-                                       Q.PAD_CARD, Q.PAD_CARD)
+        card_layout.setContentsMargins(0, 0, 0, 0)
         card_layout.setSpacing(0)
+        card_layout.addLayout(self._build_compare())
+        card_layout.addWidget(self._divider())
+        card_layout.addLayout(self._build_artwork_controls())
+        card_layout.addWidget(self._build_grid(), 1)
+        card_layout.addWidget(self._divider())
+        card_layout.addLayout(self._build_actions())
+        layout.addWidget(card, 1)
+        self._update_actions()
+        return space
 
-        compare_layout = QHBoxLayout()
-        compare_layout.setContentsMargins(0, 0, 0, Q.PAD_CARD)
-        compare_layout.setSpacing(Q.GAP_WIDE)
+    def _build_compare(self):
+        """Secondary by design: small wells, quiet labels, one line of text."""
+        row = QHBoxLayout()
+        row.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD, Q.PAD_CARD, Q.GAP)
+        row.setSpacing(Q.GAP)
         self.current_well = IconWell(Q.WELL_COMPARE)
         self.proposed_well = IconWell(Q.WELL_COMPARE)
         for caption, well in (("CURRENT", self.current_well),
                               ("PROPOSED", self.proposed_well)):
             box = QVBoxLayout()
+            box.setContentsMargins(0, 0, 0, 0)
             box.setSpacing(T.S2)
             label = QLabel(caption)
             label.setObjectName("micro")
             box.addWidget(label)
             box.addWidget(well)
-            compare_layout.addLayout(box)
+            row.addLayout(box)
             if caption == "CURRENT":
                 arrow = QLabel("→")
                 arrow.setObjectName("meta")
-                compare_layout.addWidget(arrow, 0, Qt.AlignVCenter)
+                row.addSpacing(T.S1)
+                row.addWidget(arrow, 0, Qt.AlignVCenter)
+                row.addSpacing(T.S1)
         self.proposal = QLabel("Choose artwork below")
         self.proposal.setObjectName("meta")
         self.proposal.setWordWrap(True)
-        compare_layout.addWidget(self.proposal, 1, Qt.AlignVCenter)
-        card_layout.addLayout(compare_layout)
-        card_layout.addWidget(self._divider())
+        row.addSpacing(Q.GAP)
+        row.addWidget(self.proposal, 1, Qt.AlignVCenter)
+        return row
 
-        controls = QHBoxLayout()
-        controls.setContentsMargins(0, Q.PAD_CARD, 0, Q.GAP)
-        controls.setSpacing(Q.GAP)
+    def _build_artwork_controls(self):
+        row = QHBoxLayout()
+        row.setContentsMargins(Q.PAD_CARD, Q.GAP, Q.PAD_CARD, Q.GAP)
+        row.setSpacing(Q.GAP)
         heading = QLabel("ARTWORK")
         heading.setObjectName("micro")
-        controls.addWidget(heading)
-        controls.addSpacing(T.S1)
+        row.addWidget(heading, 0, Qt.AlignVCenter)
+        row.addSpacing(T.S1)
         self.source_pills = Pills([])
         self.source_pills.changed.connect(self._source_changed)
-        controls.addWidget(self.source_pills)
-        controls.addStretch(1)
+        row.addWidget(self.source_pills, 0, Qt.AlignVCenter)
+        row.addStretch(1)
         self.query = QLineEdit()
         self.query.setPlaceholderText("Search artwork…")
-        self.query.setFixedWidth(260)
+        self.query.setFixedWidth(Q.W_QUERY)
         self.query.setClearButtonEnabled(True)
         self.query.returnPressed.connect(self._load_artwork)
-        controls.addWidget(self.query)
-        card_layout.addLayout(controls)
+        row.addWidget(self.query, 0, Qt.AlignVCenter)
+        return row
 
+    def _build_grid(self) -> QWidget:
         self.grid_scroll = QScrollArea()
         self.grid_scroll.setWidgetResizable(True)
         self.grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.grid_holder = QWidget()
         self.grid = QGridLayout(self.grid_holder)
-        self.grid.setContentsMargins(0, 0, T.S2, 0)
-        self.grid.setSpacing(Q.GAP)
+        self.grid.setContentsMargins(Q.PAD_CARD - T.S2, 0, Q.PAD_CARD - T.S2, 0)
+        self.grid.setSpacing(T.S1)
         self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.grid_scroll.setWidget(self.grid_holder)
-        card_layout.addWidget(self.grid_scroll, 1)
-        layout.addWidget(card, 1)
+        return self.grid_scroll
 
-        # -- actions: secondary pair, the destructive one apart, primary last
-        bar = QHBoxLayout()
-        bar.setSpacing(Q.GAP)
+    def _build_actions(self):
+        row = QHBoxLayout()
+        row.setContentsMargins(Q.PAD_CARD, Q.GAP, Q.PAD_CARD, Q.GAP)
+        row.setSpacing(T.S2)
         self.browse_btn = QPushButton("Browse local file…")
         self.browse_btn.setObjectName("secondary")
         # Left blank on purpose: _update_actions fills them from the writer,
@@ -212,19 +252,16 @@ class LibraryPane(QWidget):
         self.apply_btn.setObjectName("primary")
         for button in (self.browse_btn, self.restore_btn, self.remove_btn,
                        self.apply_btn):
-            button.setFixedHeight(Q.H_ACTION)
+            button.setFixedHeight(Q.H_BUTTON)
             # Read-only milestone: the layout is being judged, not the wiring.
             button.setEnabled(False)
             button.setToolTip("Not wired yet — this milestone is read-only")
-        bar.addWidget(self.browse_btn)
-        bar.addWidget(self.restore_btn)
-        bar.addSpacing(T.S6)
-        bar.addWidget(self.remove_btn)
-        bar.addStretch(1)
-        bar.addWidget(self.apply_btn)
-        layout.addLayout(bar)
-        self._update_actions()
-        return space
+        row.addWidget(self.browse_btn)
+        row.addWidget(self.restore_btn)
+        row.addWidget(self.remove_btn)
+        row.addStretch(1)
+        row.addWidget(self.apply_btn)
+        return row
 
     @staticmethod
     def _divider() -> QFrame:
@@ -431,14 +468,26 @@ class LibraryPane(QWidget):
             item = self.grid.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                # deleteLater only runs when control returns to the event
+                # loop, so an old tile keeps painting over the new grid until
+                # then. Unparenting first takes it off screen immediately.
+                widget.setParent(None)
                 widget.deleteLater()
         self.tiles.clear()
         self.chosen_tile = None
 
     def _grid_note(self, text: str) -> None:
+        """Centred, because the browser is the largest region on screen.
+
+        Left in the top corner of an otherwise empty rectangle, a status line
+        reads as something that failed to load rather than as a state. The
+        grid's own alignment wins over a per-item one, so it is set here and
+        put back when tiles arrive.
+        """
         label = QLabel(text)
         label.setObjectName("empty")
-        label.setWordWrap(True)
+        label.setAlignment(Qt.AlignCenter)
+        self.grid.setAlignment(Qt.AlignCenter)
         self.grid.addWidget(label, 0, 0)
 
     def _load_artwork(self) -> None:
@@ -493,8 +542,9 @@ class LibraryPane(QWidget):
         work.submit(search, on_done=arrived, on_failed=failed)
 
     def _build_tiles(self, results) -> None:
+        self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         columns = max(1, self.grid_scroll.viewport().width()
-                      // (ArtworkTile.WIDTH + Q.GAP))
+                      // (ArtworkTile.WIDTH + T.S1))
         for index, art in enumerate(results):
             tile = ArtworkTile(art, self.grid_holder)
             tile.picked.connect(self._propose)

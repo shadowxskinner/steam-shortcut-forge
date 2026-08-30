@@ -18,6 +18,18 @@ from kairo.qt import theme as Q
 from kairo.ui import theme as T
 
 
+def restyle(*widgets) -> None:
+    """Re-run the stylesheet after an objectName change.
+
+    Qt resolves QSS by object name at polish time, so changing the name is
+    inert until the widget is repolished. Three classes were each carrying
+    their own copy of this loop.
+    """
+    for widget in widgets:
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+
+
 # ---------------------------------------------------------------------------
 # Navigation icons, drawn
 # ---------------------------------------------------------------------------
@@ -67,29 +79,54 @@ def nav_pixmap(kind: str, colour: str, size: int = 20) -> QPixmap:
 
 
 class NavButton(QPushButton):
-    """One destination. Checkable, so Qt owns the selected state."""
+    """One destination.
+
+    A plain QPushButton puts its icon and text in a single centred run, which
+    leaves the count with nowhere to sit and the glyph off the text's left
+    edge by a variable amount. Laying the three out explicitly puts every
+    icon on one vertical line, every name on another, and the counts flush
+    right — which is most of what makes a sidebar look deliberate.
+    """
 
     def __init__(self, key: str, label: str, icon: str, parent=None):
-        super().__init__(label, parent)
+        super().__init__(parent)
         self.key = key
         self._icon = icon
         self.setObjectName("nav")
         self.setFixedHeight(Q.H_NAV_ITEM)
-        self.setIconSize(QSize(20, 20))
         self.setCheckable(True)
         self.setAutoExclusive(False)
         self.setCursor(Qt.PointingHandCursor)
-        self.setIconSize(QSize(18, 18))
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(T.S3, 0, T.S3, 0)
+        row.setSpacing(T.S3)
+        self.glyph = QLabel(self)
+        self.glyph.setFixedSize(QSize(18, 18))
+        self.glyph.setAlignment(Qt.AlignCenter)
+        self.name = QLabel(label, self)
+        self.name.setObjectName("navName")
+        self.count = QLabel("", self)
+        self.count.setObjectName("navCount")
+        # Children of a button must not swallow the press that reaches it.
+        for child in (self.glyph, self.name, self.count):
+            child.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        row.addWidget(self.glyph)
+        row.addWidget(self.name)
+        row.addStretch(1)
+        row.addWidget(self.count)
+
         self._paint_icon(False)
         self.toggled.connect(self._paint_icon)
 
     def _paint_icon(self, on: bool) -> None:
-        from PySide6.QtGui import QIcon
-
         colour = T.C_ACCENT_TEXT if on else T.C_TEXT3
-        self.setIcon(QIcon(nav_pixmap(self._icon, colour)))
+        self.glyph.setPixmap(nav_pixmap(self._icon, colour, 18))
+        self.name.setObjectName("navNameOn" if on else "navName")
+        restyle(self.name)
 
     def set_count(self, value) -> None:
+        self.count.setText("" if value is None else str(value))
         self.setToolTip("" if value is None else f"{value} items")
 
 
@@ -109,7 +146,7 @@ class IconWell(QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         self.label = QLabel("", self)
         self.label.setAlignment(Qt.AlignCenter)
-        self.label.setObjectName("meta")
+        self.label.setObjectName("wellMark")
         layout.addWidget(self.label)
 
     def show_placeholder(self, text: str = "○") -> None:
@@ -145,9 +182,13 @@ class Pills(QWidget):
     def __init__(self, values=None, parent=None):
         super().__init__(parent)
         self.setObjectName("pillGroup")
+        # QWidget subclasses opt in to stylesheet backgrounds; without this
+        # the group's rounded track never painted and the pills floated.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(3, 3, 3, 3)
         self._layout.setSpacing(2)
+        self.setFixedHeight(Q.H_PILLS)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._buttons: dict[str, QPushButton] = {}
@@ -211,14 +252,15 @@ class EntryRow(QFrame):
         self.setCursor(Qt.PointingHandCursor)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(T.S3, T.S2, T.S4, T.S2)
+        layout.setContentsMargins(T.S3, 0, T.S4, 0)
         layout.setSpacing(T.S3)
 
         self.well = IconWell(Q.WELL_ROW, self)
-        layout.addWidget(self.well)
+        layout.addWidget(self.well, 0, Qt.AlignVCenter)
 
         text = QVBoxLayout()
-        text.setSpacing(3)
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(2)
         self.name = QLabel("", self)
         self.name.setObjectName("rowName")
         self.meta = QLabel("", self)
@@ -229,23 +271,24 @@ class EntryRow(QFrame):
 
         self.dot = QLabel("", self)
         self.dot.setObjectName("dot")
-        layout.addWidget(self.dot)
+        layout.addWidget(self.dot, 0, Qt.AlignVCenter)
 
     def bind(self, entry) -> None:
         self.entry = entry
-        self.name.setText(T.ellipsize(entry.name, T.LIST_NAME_CHARS))
-        self.meta.setText(T.ellipsize(entry.subtitle or entry.local_id, 38))
-        self.dot.setText("●" if entry.customized else "")
-        self.well.show_path(entry.current_icon, "○")
+        self.name.setText(T.ellipsize(entry.name, Q.LIST_NAME_CHARS))
+        self.meta.setText(T.ellipsize(entry.subtitle or entry.local_id, Q.LIST_META_CHARS))
+        self.dot.setText("•" if entry.customized else "")
+        # A ring inside a rounded square reads as a broken image. The
+        # initial reads as a placeholder, the way a contacts list does.
+        self.well.show_path(entry.current_icon,
+                            (entry.name or "?").strip()[:1].upper())
 
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
         self.setObjectName("rowOn" if selected else "row")
         self.name.setObjectName("rowNameOn" if selected else "rowName")
         self.meta.setObjectName("rowMetaOn" if selected else "rowMeta")
-        for widget in (self, self.name, self.meta):
-            widget.style().unpolish(widget)
-            widget.style().polish(widget)
+        restyle(self, self.name, self.meta)
 
     def mousePressEvent(self, event):
         if self.entry is not None:
@@ -253,10 +296,10 @@ class EntryRow(QFrame):
 
 
 class ArtworkTile(QFrame):
+    """One candidate icon. Image first, almost no chrome."""
 
     WIDTH = Q.TILE + 20
     HEIGHT = Q.TILE + 38
-    """One candidate icon. Image first, almost no chrome."""
 
     picked = Signal(object)
 
@@ -269,8 +312,8 @@ class ArtworkTile(QFrame):
         self.setFixedSize(self.WIDTH, self.HEIGHT)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(T.S2, T.S2, T.S2, T.S2)
-        layout.setSpacing(T.S1)
+        layout.setContentsMargins(T.S2, T.S2, T.S2, T.S1)
+        layout.setSpacing(T.S2)
 
         self.well = IconWell(Q.TILE, self)
         self.well.show_placeholder("")
@@ -290,8 +333,7 @@ class ArtworkTile(QFrame):
     def set_chosen(self, chosen: bool) -> None:
         self._chosen = chosen
         self.setObjectName("tileOn" if chosen else "tile")
-        self.style().unpolish(self)
-        self.style().polish(self)
+        restyle(self)
 
     def mousePressEvent(self, event):
         self.picked.emit(self.art)
