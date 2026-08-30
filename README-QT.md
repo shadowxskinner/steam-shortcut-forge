@@ -30,10 +30,37 @@ Side by side with the current build:
 Flags:
 
 ```
---no-blur        translucent, never ask the compositor for blur
---opaque         no transparency at all
---alpha 0.7      surface opacity, 0.4 to 1.0
+--glass frosted   default: reading surfaces nearly solid, gaps open
+--glass clear     thinner surfaces, for comparison
+--glass solid     no transparency at all
+--alpha 0.85      nudge every layer together, keeping their relationship
+--no-blur         translucent, never ask the compositor for blur
+--opaque          same as --glass solid
 ```
+
+In the window: **Ctrl+1/2/3** switch presets, **Ctrl+[** and **Ctrl+]** nudge
+them. Restyling is a stylesheet swap, so judging the material by eye costs
+nothing and needs no restart.
+
+## Glass
+
+Alpha is applied per surface, never to the window. A window-wide opacity is
+what Tk offered and it is the wrong model: it fades text along with the
+background, and makes every surface equally see-through whether it is holding
+content or not.
+
+| layer | frosted |
+| --- | --- |
+| navigation | 0.94 |
+| entry column | 0.93 |
+| workspace cards | 0.92 |
+| rows, wells, fields | 0.88 |
+| artwork tiles | 0.84 |
+| borders | 0.55 |
+
+The root stays fully transparent, so the compositor's blur of the wallpaper is
+what fills the gaps between panels — that is where the colour is meant to come
+from. Text, icons and the accent never take any alpha at all.
 
 ## Blur
 

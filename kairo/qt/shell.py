@@ -43,8 +43,10 @@ class Context:
 
 
 class KairoWindow(QMainWindow):
-    def __init__(self, translucent: bool = True, want_blur: bool = True):
+    def __init__(self, translucent: bool = True, want_blur: bool = True,
+                 glass=None):
         super().__init__()
+        self.glass = Q.resolve(glass)
         self.setWindowTitle(APP_NAME)
         self.resize(1420, 900)
         self.setMinimumSize(1120, 700)
@@ -232,6 +234,40 @@ class KairoWindow(QMainWindow):
             self.blur.apply(self)
         print(f"blur: {self.blur.status}")
         self._refresh_status()
+
+    # -- live tuning -------------------------------------------------------
+
+    def keyPressEvent(self, event):
+        """Ctrl+1/2/3 switch glass presets, Ctrl+[ and Ctrl+] nudge them.
+
+        Restyling is a stylesheet swap, not a repaint loop - there is nothing
+        periodic here, and judging the material by eye is much easier than
+        restarting between values.
+        """
+        from PySide6.QtCore import Qt as _Qt
+
+        if not event.modifiers() & _Qt.ControlModifier:
+            super().keyPressEvent(event)
+            return
+
+        names = list(Q.PRESETS)
+        text = event.text()
+        if text in ("1", "2", "3"):
+            self.glass = Q.PRESETS[names[int(text) - 1]]
+        elif text == "[":
+            self.glass = self.glass.shifted(-0.04)
+        elif text == "]":
+            self.glass = self.glass.shifted(0.04)
+        else:
+            super().keyPressEvent(event)
+            return
+
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance().setStyleSheet(Q.stylesheet(self.glass))
+        self.status.setText(
+            f"glass: nav {self.glass.nav:.2f} · panel {self.glass.panel:.2f} "
+            f"· tile {self.glass.tile:.2f}   ·   {self.blur.status}")
 
     def closeEvent(self, event):
         self.tokens.cancel_all()

@@ -181,13 +181,17 @@ class LibraryPane(QWidget):
         panel_layout.addWidget(self.grid_scroll, 1)
         layout.addWidget(panel, 1)
 
+        # Three tiers: secondary actions, a gap, the destructive one, then the
+        # primary alone on the right.
         bar = QHBoxLayout()
         bar.setSpacing(T.GAP_CONTROL)
         self.browse_btn = QPushButton("Browse local file…")
         self.browse_btn.setObjectName("secondary")
-        self.restore_btn = QPushButton("Restore original")
+        # Left blank on purpose: _update_actions fills them from the writer,
+        # so there is exactly one place these verbs can come from.
+        self.restore_btn = QPushButton("")
         self.restore_btn.setObjectName("secondary")
-        self.remove_btn = QPushButton("Remove shortcut")
+        self.remove_btn = QPushButton("")
         self.remove_btn.setObjectName("danger")
         self.apply_btn = QPushButton("Apply")
         self.apply_btn.setObjectName("primary")
@@ -203,7 +207,28 @@ class LibraryPane(QWidget):
         bar.addStretch(1)
         bar.addWidget(self.apply_btn)
         layout.addLayout(bar)
+        self._update_actions()
         return space
+
+    def _update_actions(self) -> None:
+        """Take the verbs from the writer, never from this file.
+
+        A generated Steam entry has no earlier artwork to go back to, so its
+        ordinary undo is Reset artwork and deleting the shortcut is a separate,
+        destructive action. An override has the opposite shape: removing it is
+        already non-destructive, so there is nothing for a second button to do.
+        Hard-coding either label here is how the Tk build ended up describing a
+        deletion as a restore.
+        """
+        try:
+            writer = self.provider.writer()
+        except Exception:
+            return
+        self.restore_btn.setText(writer.restore_label)
+        supports_remove = bool(getattr(writer, "supports_remove", False))
+        self.remove_btn.setVisible(supports_remove)
+        if supports_remove:
+            self.remove_btn.setText(writer.remove_label)
 
     # -- entries -----------------------------------------------------------
 
@@ -277,6 +302,7 @@ class LibraryPane(QWidget):
         self.subtitle.setText(entry.subtitle)
         self.current_well.show_path(entry.current_icon, "—")
         self._clear_proposal()
+        self._update_actions()
         self._refresh_sources()
         if load:
             self._seed_query()
@@ -303,13 +329,62 @@ class LibraryPane(QWidget):
         return self.ctx.sources.get(self._sources.get(self.source_pills.value(), ""))
 
     def _refresh_sources(self) -> None:
+        """Offer only sources that can help the selected entry.
+
+        A source is hidden once it has been asked and had nothing. Never
+        because it has not been asked yet, and never because a lookup failed:
+        being briefly unreachable is not evidence of having nothing.
+        """
         entry = self.selected.entry if self.selected else None
-        candidates = self.ctx.sources.browsable_for(self.provider.id, self.ctx.config)
-        if entry is not None:
-            candidates = [s for s in candidates
-                          if self._probe_cache.get((entry.key, s.id)) is not False]
-        self._sources = {s.label: s.id for s in candidates}
+        available = self.ctx.sources.browsable_for(self.provider.id,
+                                                   self.ctx.config)
+        if entry is None:
+            self._sources = {s.label: s.id for s in available}
+            self.source_pills.set_values(list(self._sources))
+            return
+
+        usable = [s for s in available
+                  if self._probe_cache.get((entry.key, s.id)) is not False]
+        before = self.source_pills.value()
+        self._sources = {s.label: s.id for s in usable}
         self.source_pills.set_values(list(self._sources))
+
+        unasked = [s for s in available
+                   if (entry.key, s.id) not in self._probe_cache
+                   and s.id != self._sources.get(self.source_pills.value())]
+        if unasked:
+            self._probe_sources(entry, unasked)
+
+        if before and before != self.source_pills.value() and self.selected:
+            self._seed_query()
+            self._load_artwork()
+
+    def _probe_sources(self, entry, sources) -> None:
+        """Ask each source in the background whether it has anything at all."""
+        query = self.provider.artwork_query(entry)
+        key = entry.key
+
+        def ask():
+            answers = []
+            for source in sources:
+                try:
+                    answers.append((source.id, bool(source.probe(query))))
+                except Exception:
+                    # Unreachable is not empty. Leave it visible.
+                    answers.append((source.id, True))
+            return answers
+
+        def arrived(answers):
+            changed = False
+            for source_id, has_results in answers:
+                if self._probe_cache.get((key, source_id)) != has_results:
+                    self._probe_cache[(key, source_id)] = has_results
+                    changed = not has_results or changed
+            if changed and self.selected is not None \
+                    and self.selected.entry.key == key:
+                self._refresh_sources()
+
+        work.submit(ask, on_done=arrived, on_failed=lambda _m: None)
 
     def _seed_query(self) -> None:
         source = self.source()
@@ -385,6 +460,8 @@ class LibraryPane(QWidget):
             self._stream_previews(source, results, token, key)
 
         def failed(message):
+            # Deliberately does not touch the probe cache: a source that failed
+            # once has not told us it has nothing.
             if not token.cancelled:
                 self._clear_grid()
                 self._grid_note(f"Could not load artwork: {message}")

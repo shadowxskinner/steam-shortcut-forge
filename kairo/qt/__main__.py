@@ -10,10 +10,14 @@ import sys
 
 HELP = """Kairo — automatic launcher artwork for Linux (Qt shell milestone)
 
-  python -m kairo.qt              translucent, blur if the compositor offers it
-  python -m kairo.qt --no-blur    translucent, never ask for blur
-  python -m kairo.qt --opaque     no transparency at all
-  python -m kairo.qt --alpha 0.7  surface opacity, 0.4 to 1.0
+  python -m kairo.qt                  frosted, blur if the compositor offers it
+  python -m kairo.qt --glass clear    thinner surfaces, for comparison
+  python -m kairo.qt --glass solid    no transparency at all
+  python -m kairo.qt --alpha 0.85     nudge every surface toward one value
+  python -m kairo.qt --no-blur        translucent, never ask for blur
+  python -m kairo.qt --opaque         same as --glass solid
+
+  In the window: Ctrl+1/2/3 switch presets, Ctrl+[ and Ctrl+] nudge them.
 
   python -m kairo                 the CustomTkinter shell, unchanged
 """
@@ -45,18 +49,30 @@ def main(argv: list[str] | None = None) -> int:
     from kairo.qt import theme as Q
     from kairo.qt.shell import KairoWindow
 
-    alpha = Q.DEFAULT_ALPHA
+    glass = Q.PRESETS[Q.DEFAULT_PRESET]
+    if "--glass" in argv:
+        try:
+            name = argv[argv.index("--glass") + 1]
+        except IndexError:
+            print(f"--glass needs one of: {', '.join(Q.PRESETS)}", file=sys.stderr)
+            return 1
+        if name not in Q.PRESETS:
+            print(f"unknown glass '{name}'. Try: {', '.join(Q.PRESETS)}",
+                  file=sys.stderr)
+            return 1
+        glass = Q.PRESETS[name]
     if "--alpha" in argv:
         try:
-            alpha = float(argv[argv.index("--alpha") + 1])
+            value = float(argv[argv.index("--alpha") + 1])
         except (IndexError, ValueError):
-            print("--alpha needs a number between 0.4 and 1.0", file=sys.stderr)
+            print("--alpha needs a number between 0.3 and 1.0", file=sys.stderr)
             return 1
-        alpha = max(Q.MIN_ALPHA, min(Q.MAX_ALPHA, alpha))
+        value = max(Q.MIN_ALPHA, min(Q.MAX_ALPHA, value))
+        glass = glass.shifted(value - glass.panel)
 
     opaque = "--opaque" in argv
     if opaque:
-        alpha = 1.0
+        glass = Q.PRESETS["solid"]
 
     # Set before the QApplication exists: this is what the portal reads, and
     # matching it to the installed .desktop is what stops it complaining.
@@ -66,10 +82,11 @@ def main(argv: list[str] | None = None) -> int:
     application.setApplicationDisplayName("Kairo")
     application.setOrganizationName("Kairo")
     application.setFont(QFont("Inter", 10))
-    application.setStyleSheet(Q.stylesheet(alpha))
+    application.setStyleSheet(Q.stylesheet(glass))
 
     window = KairoWindow(translucent=not opaque,
-                         want_blur="--no-blur" not in argv)
+                         want_blur="--no-blur" not in argv,
+                         glass=glass)
     window.show()
     return application.exec()
 

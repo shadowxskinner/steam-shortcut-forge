@@ -2,23 +2,60 @@
 
 ``kairo.ui.theme`` holds the palette, the spacing scale and the type scale, and
 none of that is toolkit-specific. Importing it here rather than restating it
-means the two frontends cannot drift apart while both exist - change a colour
-once and both shells move.
+means the two frontends cannot drift while both exist.
 
-Alpha is the one thing Qt adds. Surfaces carry an alpha component so the
-compositor can show the desktop through them; text, icons and borders stay
-fully opaque, which is the whole reason for moving.
+Alpha is what Qt adds, and it is applied per surface rather than to the window.
+A single window-wide opacity is what Tk offered and it is the wrong model: it
+fades text along with everything else, and it makes every surface equally
+see-through whether it is holding content or not. Here the reading surfaces are
+nearly solid, the small tiles are a little lighter for depth, and only the
+background is genuinely open - which is what makes it read as frosted glass
+rather than tinted glass.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
+
 from kairo.ui import theme as T
 
-#: How see-through the surfaces are when transparency is on. Chosen so text
-#: contrast stays comfortable over a mid-tone wallpaper rather than for maximum
-#: effect.
-DEFAULT_ALPHA = 0.82
-MIN_ALPHA, MAX_ALPHA = 0.40, 1.0
+
+@dataclass(frozen=True)
+class Glass:
+    """How see-through each layer is.
+
+    ``window`` is not a surface: the root stays fully transparent so the
+    compositor's blur of the wallpaper is what fills the gaps. The rest are
+    real alphas on real panels.
+    """
+
+    nav: float = 0.94        # navigation column
+    list: float = 0.93       # entry column
+    panel: float = 0.92      # workspace cards
+    card: float = 0.88       # rows, wells, fields
+    tile: float = 0.84       # artwork tiles, lightest for depth
+    line: float = 0.55       # borders and separators
+
+    def shifted(self, delta: float) -> "Glass":
+        clamp = lambda value: max(0.30, min(1.0, value + delta))
+        return replace(self, nav=clamp(self.nav), list=clamp(self.list),
+                       panel=clamp(self.panel), card=clamp(self.card),
+                       tile=clamp(self.tile), line=clamp(self.line))
+
+
+#: Frosted is the default: content behind a panel should be shape and colour,
+#: never legible text.
+PRESETS = {
+    "frosted": Glass(),
+    "clear": Glass(nav=0.78, list=0.76, panel=0.74, card=0.70, tile=0.66,
+                   line=0.45),
+    "solid": Glass(nav=1.0, list=1.0, panel=1.0, card=1.0, tile=1.0, line=1.0),
+}
+DEFAULT_PRESET = "frosted"
+
+# Kept so older callers and the entry point keep working.
+DEFAULT_ALPHA = PRESETS[DEFAULT_PRESET].panel
+MIN_ALPHA, MAX_ALPHA = 0.30, 1.0
 
 
 def rgba(colour: str, alpha: float = 1.0) -> str:
@@ -29,30 +66,43 @@ def rgba(colour: str, alpha: float = 1.0) -> str:
     return f"rgba({red}, {green}, {blue}, {alpha:.3f})"
 
 
-def stylesheet(alpha: float = DEFAULT_ALPHA) -> str:
+def resolve(glass=None) -> Glass:
+    """Accept a Glass, a preset name, or a plain number for one-off tuning."""
+    if glass is None:
+        return PRESETS[DEFAULT_PRESET]
+    if isinstance(glass, Glass):
+        return glass
+    if isinstance(glass, str):
+        return PRESETS.get(glass, PRESETS[DEFAULT_PRESET])
+    if isinstance(glass, (int, float)):
+        base = PRESETS[DEFAULT_PRESET]
+        return base.shifted(float(glass) - base.panel)
+    return PRESETS[DEFAULT_PRESET]
+
+
+def stylesheet(glass=None) -> str:
     """The whole application's appearance, as one sheet.
 
-    Panels take ``alpha``; the columns sit slightly denser so the reading
-    surfaces are the most legible thing on screen; text takes none at all.
+    Text, icons and borders never take the surface alpha. Only backgrounds do,
+    which is the entire point of moving off Tk.
     """
-    nav = min(1.0, alpha + 0.06)
-    card = min(1.0, alpha + 0.08)
+    g = resolve(glass)
 
     return f"""
     /* ---------- surfaces ---------- */
     QWidget#root      {{ background: transparent; }}
-    QWidget#nav       {{ background: {rgba(T.C_NAV, nav)};
-                         border-right: 1px solid {rgba(T.C_BORDER, alpha)}; }}
-    QWidget#list      {{ background: {rgba(T.C_LIST, nav)};
-                         border-right: 1px solid {rgba(T.C_BORDER, alpha)}; }}
+    QWidget#nav       {{ background: {rgba(T.C_NAV, g.nav)};
+                         border-right: 1px solid {rgba(T.C_BORDER, g.line)}; }}
+    QWidget#list      {{ background: {rgba(T.C_LIST, g.list)};
+                         border-right: 1px solid {rgba(T.C_BORDER, g.line)}; }}
     QWidget#workspace {{ background: transparent; }}
-    QFrame#card       {{ background: {rgba(T.C_PANEL, alpha)};
-                         border: 1px solid {rgba(T.C_BORDER, alpha)};
+    QFrame#card       {{ background: {rgba(T.C_PANEL, g.panel)};
+                         border: 1px solid {rgba(T.C_BORDER, g.line)};
                          border-radius: {T.R_LG}px; }}
-    QFrame#well       {{ background: {rgba(T.C_CARD, card)};
+    QFrame#well       {{ background: {rgba(T.C_CARD, g.card)};
                          border-radius: {T.R_MD}px; }}
 
-    /* ---------- type ---------- */
+    /* ---------- type: never translucent ---------- */
     QLabel            {{ background: transparent; color: {T.C_TEXT2}; }}
     QLabel#logo       {{ color: {T.C_TEXT}; font-size: 19px; font-weight: 700; }}
     QLabel#logoSub    {{ color: {T.C_TEXT3}; font-size: 11px; }}
@@ -66,37 +116,38 @@ def stylesheet(alpha: float = DEFAULT_ALPHA) -> str:
     QLabel#rowMetaOn  {{ color: {T.C_ACCENT_TEXT}; font-size: 11px; }}
     QLabel#dot        {{ color: {T.C_SUCCESS}; font-size: 11px; }}
     QLabel#empty      {{ color: {T.C_TEXT3}; font-size: 12px; }}
+    QLabel#banner     {{ color: {T.C_TEXT3}; font-size: 11px; }}
 
     /* ---------- navigation ---------- */
     QPushButton#nav        {{ background: transparent; border: none;
                               border-radius: {T.R_MD}px; padding: 7px 12px;
                               color: {T.C_TEXT2}; font-size: 13px;
                               text-align: left; }}
-    QPushButton#nav:hover  {{ background: {rgba(T.C_CARD, card)}; }}
-    QPushButton#nav:checked{{ background: {rgba(T.C_SELECTED_NAV, card)};
+    QPushButton#nav:hover  {{ background: {rgba(T.C_CARD, g.card)}; }}
+    QPushButton#nav:checked{{ background: {rgba(T.C_SELECTED_NAV, g.card)};
                               color: {T.C_TEXT}; font-weight: 700; }}
 
     /* ---------- entry rows ---------- */
-    QFrame#row         {{ background: {rgba(T.C_CARD, card)};
+    QFrame#row         {{ background: {rgba(T.C_CARD, g.card)};
                           border: 1px solid transparent;
                           border-radius: {T.R_MD}px; }}
-    QFrame#row:hover   {{ background: {rgba(T.C_CARD_HOVER, card)}; }}
-    QFrame#rowOn       {{ background: {rgba(T.C_SELECTED, card)};
-                          border: 1px solid {rgba(T.C_ACCENT, 1.0)};
+    QFrame#row:hover   {{ background: {rgba(T.C_CARD_HOVER, g.card)}; }}
+    QFrame#rowOn       {{ background: {rgba(T.C_SELECTED, g.card)};
+                          border: 1px solid {T.C_ACCENT};
                           border-radius: {T.R_MD}px; }}
 
     /* ---------- artwork tiles ---------- */
-    QFrame#tile        {{ background: {rgba(T.C_CARD, card)};
+    QFrame#tile        {{ background: {rgba(T.C_CARD, g.tile)};
                           border: 2px solid transparent;
                           border-radius: {T.R_MD}px; }}
-    QFrame#tile:hover  {{ border: 2px solid {rgba(T.C_BORDER_STRONG, 1.0)}; }}
-    QFrame#tileOn      {{ background: {rgba(T.C_ACCENT_SOFT, card)};
+    QFrame#tile:hover  {{ border: 2px solid {T.C_BORDER_STRONG}; }}
+    QFrame#tileOn      {{ background: {rgba(T.C_ACCENT_SOFT, g.card)};
                           border: 2px solid {T.C_ACCENT_BRIGHT};
                           border-radius: {T.R_MD}px; }}
 
     /* ---------- controls ---------- */
-    QLineEdit          {{ background: {rgba(T.C_CARD, card)};
-                          border: 1px solid {rgba(T.C_BORDER, alpha)};
+    QLineEdit          {{ background: {rgba(T.C_CARD, g.card)};
+                          border: 1px solid {rgba(T.C_BORDER, g.line)};
                           border-radius: {T.R_MD}px; padding: 7px 12px;
                           color: {T.C_TEXT}; font-size: 12px;
                           selection-background-color: {T.C_ACCENT}; }}
@@ -104,39 +155,39 @@ def stylesheet(alpha: float = DEFAULT_ALPHA) -> str:
                                border-radius: {T.R_PILL}px; padding: 6px 14px;
                                color: {T.C_TEXT3}; font-size: 11px;
                                font-weight: 700; }}
-    QPushButton#pill:hover  {{ background: {rgba(T.C_CARD_HOVER, card)}; }}
+    QPushButton#pill:hover  {{ background: {rgba(T.C_CARD_HOVER, g.card)}; }}
     QPushButton#pill:checked{{ background: {T.C_ACCENT_BRIGHT};
                                color: {T.C_TEXT}; }}
-    QWidget#pillGroup       {{ background: {rgba(T.C_CARD, card)};
+    QWidget#pillGroup       {{ background: {rgba(T.C_CARD, g.card)};
                                border-radius: {T.R_PILL}px; }}
 
-    QPushButton#secondary       {{ background: {rgba(T.C_CARD, card)};
-                                   border: 1px solid {rgba(T.C_BORDER, alpha)};
+    QPushButton#secondary       {{ background: {rgba(T.C_CARD, g.card)};
+                                   border: 1px solid {rgba(T.C_BORDER, g.line)};
                                    border-radius: {T.R_MD}px; padding: 9px 16px;
                                    color: {T.C_TEXT}; font-size: 12px;
                                    font-weight: 700; }}
-    QPushButton#secondary:hover {{ background: {rgba(T.C_CARD_HOVER, card)}; }}
+    QPushButton#secondary:hover {{ background: {rgba(T.C_CARD_HOVER, g.card)}; }}
     QPushButton#primary         {{ background: {T.C_ACCENT_BRIGHT};
                                    border: none; border-radius: {T.R_MD}px;
                                    padding: 9px 22px; color: {T.C_TEXT};
                                    font-size: 12px; font-weight: 700; }}
     QPushButton#primary:hover   {{ background: {T.C_ACCENT_HOVER}; }}
-    QPushButton#danger          {{ background: {rgba(T.C_DANGER_BG, card)};
+    QPushButton#danger          {{ background: {rgba(T.C_DANGER_BG, g.card)};
                                    border: 1px solid {rgba(T.C_DANGER, 0.35)};
                                    border-radius: {T.R_MD}px; padding: 9px 16px;
                                    color: {T.C_DANGER}; font-size: 12px;
                                    font-weight: 700; }}
-    /* Disabled has to read as unavailable, not merely as dimmer text - the
-       mistake the Tk build made with its primary action. */
-    QPushButton:disabled        {{ background: {rgba(T.C_CARD, card)};
-                                   border: 1px solid {rgba(T.C_BORDER, alpha)};
+    /* Disabled reads as unavailable, not merely as dimmer text - the mistake
+       the Tk build made with its primary action. */
+    QPushButton:disabled        {{ background: {rgba(T.C_CARD, g.card)};
+                                   border: 1px solid {rgba(T.C_BORDER, g.line)};
                                    color: {T.C_TEXT3}; }}
 
     /* ---------- scrolling ---------- */
     QScrollArea            {{ background: transparent; border: none; }}
     QScrollArea > QWidget > QWidget {{ background: transparent; }}
     QScrollBar:vertical    {{ background: transparent; width: 9px; margin: 0; }}
-    QScrollBar::handle:vertical {{ background: {rgba(T.C_CARD_HOVER, card)};
+    QScrollBar::handle:vertical {{ background: {rgba(T.C_CARD_HOVER, g.card)};
                                    border-radius: 4px; min-height: 30px; }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
