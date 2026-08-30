@@ -918,3 +918,16 @@ def test_a_system_wide_install_counts_too():
     source = (QT_DIR / "__main__.py").read_text()
     assert "XDG_DATA_DIRS" in source
     assert "XDG_DATA_HOME" in source
+
+
+def test_the_mark_is_not_drawn_without_the_glyphs_to_draw_it():
+    """A machine can carry the whole Noto family and still lack CJK.
+
+    Rendering 回路 there produces two tofu boxes, which reads as a bug rather
+    than a logotype.
+    """
+    source = (QT_DIR / "shell.py").read_text()
+    assert "def _can_render" in source
+    assert "inFont" in source
+    nav = source.split("def _build_nav")[1].split("\n    def ")[0]
+    assert "if _can_render(MARK)" in nav, "the mark must be conditional"

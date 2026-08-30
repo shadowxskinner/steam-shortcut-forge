@@ -37,6 +37,24 @@ from kairo.ui import theme as T
 #: A close waits this long for artwork work to finish, then goes anyway.
 CLOSE_DRAIN_SECONDS = 5.0
 
+#: The second half of the logotype: 回路, "circuit".
+MARK = "回路"
+
+
+def _can_render(text: str) -> bool:
+    """True when every character has a glyph in the current font stack."""
+    from PySide6.QtGui import QFontMetrics
+    from PySide6.QtWidgets import QApplication
+
+    application = QApplication.instance()
+    if application is None:
+        return False
+    metrics = QFontMetrics(application.font())
+    try:
+        return all(metrics.inFont(character) for character in text)
+    except Exception:
+        return False
+
 
 class Context:
     """What every pane needs, and nothing more."""
@@ -149,11 +167,17 @@ class KairoWindow(QMainWindow):
         header_layout.setSpacing(T.S2)
         logo = QLabel("KAIRO")
         logo.setObjectName("logo")
-        sub = QLabel("回路")
-        sub.setObjectName("logoSub")
         header_layout.addWidget(logo, 0, Qt.AlignVCenter)
-        header_layout.addSpacing(T.S1)
-        header_layout.addWidget(sub, 0, Qt.AlignVCenter)
+        # 回路 needs a CJK font, and plenty of Linux installs have none - a
+        # machine can carry the whole Noto family and still lack the CJK
+        # pack. Rendering it anyway draws two tofu boxes, which looks like a
+        # bug rather than a logotype, so the mark is shown only when the
+        # glyphs actually exist and the wordmark stands alone otherwise.
+        if _can_render(MARK):
+            sub = QLabel(MARK)
+            sub.setObjectName("logoSub")
+            header_layout.addSpacing(T.S1)
+            header_layout.addWidget(sub, 0, Qt.AlignVCenter)
         header_layout.addStretch(1)
         layout.addWidget(header)
 
