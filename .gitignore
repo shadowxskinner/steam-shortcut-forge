@@ -13,3 +13,11 @@ src/
 
 # build output
 *.whl
+
+# The blur bridge is built, never committed. wayland-scanner regenerates the
+# protocol glue and build.sh compiles the library, both from sources that are
+# tracked — so the repository stays portable and a delivered folder can still
+# carry the compiled result for the machine it was built on.
+kairo/qt/native/libkairoblur.so
+kairo/qt/native/ext-background-effect-v1-client-protocol.h
+kairo/qt/native/ext-background-effect-v1-protocol.c

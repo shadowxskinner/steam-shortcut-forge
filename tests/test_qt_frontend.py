@@ -1,11 +1,17 @@
 """What can be checked about the Qt frontend without a display.
 
-PySide6 needs libEGL and a compositor, neither of which exists in CI, so these
-are structural: that the Qt shell does not drag in Tk, that the blur shim is
+Widgets need libEGL and a compositor, neither of which exists in CI, so most of
+this is structural: that the Qt shell does not drag in Tk, that blur is
 genuinely optional, and that every module is at least syntactically sound.
+
+QtCore is the exception. It runs headless, so the worker lifecycle — the thing
+that actually crashed the live shell — is exercised for real rather than
+grepped for.
 """
 
 import ast
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -56,10 +62,11 @@ def test_the_shared_tokens_survive_without_a_toolkit():
     assert theme.PAD_WINDOW > 0
 
 
-def test_blur_is_optional(fake_home):
-    """No shim, no compositor, no crash - just a status worth reading."""
+def test_blur_is_optional(fake_home, monkeypatch, tmp_path):
+    """No compiled bridge, no compositor, no crash."""
     from kairo.qt import blur
 
+    monkeypatch.setattr(blur, "SEARCH_PATHS", (tmp_path / "missing.so",))
     probe = blur.Blur()
     assert probe.active is False
     assert isinstance(probe.status, str) and probe.status
@@ -412,30 +419,212 @@ def test_no_blur_strength_control_is_offered():
         assert "blur_radius" not in source
 
 
-def test_native_blur_uses_a_real_region_not_null():
-    """ext-background-effect says NULL removes blur; shell 6 did exactly that."""
-    from pathlib import Path
+def test_blur_never_forces_qt_onto_xwayland():
+    source = (QT_DIR / "__main__.py").read_text()
+    assert "QT_QPA_PLATFORM" not in source
+    assert "xcb" not in source
 
-    source = (Path(__file__).resolve().parent.parent / "kairo" / "qt"
-              / "native" / "blur.c").read_text()
+
+def test_native_blur_uses_a_real_exact_region_not_null():
+    """The protocol says NULL removes blur; shell 6 did exactly that."""
+    source = (QT_DIR / "native" / "blur.c").read_text()
     assert "wl_compositor_create_region" in source
-    assert "wl_region_add" in source
+    assert "wl_region_add(region, 0, 0, width, height)" in source
     assert "set_blur_region(effect, region)" in source
     assert "set_blur_region(effect, NULL)" not in source
+    assert "INT32_MAX" not in source
+
+
+def test_native_blur_uses_a_private_wayland_queue():
+    """A default-queue roundtrip can dispatch Qt callbacks re-entrantly."""
+    source = (QT_DIR / "native" / "blur.c").read_text()
+    assert "wl_display_create_queue" in source
+    assert "wl_proxy_set_queue" in source
+    assert source.count("wl_display_roundtrip_queue") >= 2
+    assert "wl_display_roundtrip(display)" not in source
+
+
+def test_blur_bridge_keeps_the_gil_and_tracks_resizes():
+    bridge = (QT_DIR / "blur.py").read_text()
+    shell = (QT_DIR / "shell.py").read_text()
+    assert "ctypes.PyDLL" in bridge
+    assert "ctypes.CDLL" not in bridge
+    assert "kairo_blur_resize" in bridge
+    assert "def resizeEvent" in shell
+    assert "_blur_resize_timer" in shell
+    assert "self.blur.update(self)" in shell
+
+
+def test_the_resize_bridge_is_debounced():
+    """Wayland gets one region per gesture, not one per resize event."""
+    shell = (QT_DIR / "shell.py").read_text()
+    setup = shell.split("_blur_resize_timer = QTimer")[1].split("want_blur")[0]
+    assert "setSingleShot(True)" in setup
+    assert "setInterval(" in setup
+
+
+def test_every_native_return_code_has_a_message():
+    """The C and the Python status table are one contract in two files."""
+    import re
+
+    from kairo.qt import blur
+
+    source = (QT_DIR / "native" / "blur.c").read_text()
+    codes = {int(code) for code in re.findall(r"return\s+(-\d+);", source)}
+    assert codes, "no failure codes found in the bridge"
+    missing = sorted(codes - set(blur.RESULTS))
+    assert not missing, f"native codes with no explanation: {missing}"
+
+
+def test_a_bridge_from_an_older_tree_degrades_instead_of_crashing(
+        monkeypatch, tmp_path):
+    """A stale .so loads, then has no kairo_blur_resize.
+
+    That raises AttributeError rather than OSError, so catching only OSError
+    turned a leftover library on disk into a hard startup failure.
+    """
+    import types
+
+    from kairo.qt import blur
+
+    stale = tmp_path / blur.LIBRARY_NAME
+    stale.write_bytes(b"")
+
+    class OlderBridge:
+        def __init__(self, path):
+            pass
+
+        def __getattr__(self, name):
+            if name in ("kairo_blur_available", "kairo_blur_enable"):
+                return types.SimpleNamespace()
+            raise AttributeError(name)
+
+    monkeypatch.setattr(blur, "SEARCH_PATHS", (stale,))
+    monkeypatch.setattr(blur.ctypes, "PyDLL", OlderBridge)
+
+    probe = blur.Blur()
+    assert probe._library is None
+    assert probe.active is False
+    assert "would not load" in probe.status
+    assert probe.supported() is False
 
 
 def test_blur_is_released_before_qt_destroys_the_surface():
-    """An orphaned effect object made closing the live shell unsafe."""
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parent.parent / "kairo" / "qt"
-    native = (root / "native" / "blur.c").read_text()
-    bridge = (root / "blur.py").read_text()
-    close = (root / "shell.py").read_text().split("def closeEvent")[1]
+    native = (QT_DIR / "native" / "blur.c").read_text()
+    bridge = (QT_DIR / "blur.py").read_text()
+    close = (QT_DIR / "shell.py").read_text().split("def closeEvent")[1]
+    remove = bridge.split("def remove")[1]
     assert "kairo_blur_disable" in native
     assert "ext_background_effect_surface_v1_destroy" in native
     assert "kairo_blur_disable.argtypes" in bridge
+    assert "_surface(" not in remove, "teardown must use the cached handle"
     assert close.index("self.blur.remove(self)") < close.index("super().closeEvent")
+
+
+def test_qt_jobs_are_destroyed_on_the_gui_thread():
+    """Auto-delete caused the live Shiboken/Python reference race."""
+    source = (QT_DIR / "work.py").read_text()
+    assert "setAutoDelete(False)" in source
+    assert "Qt.QueuedConnection" in source
+    assert "QThreadPool.globalInstance()" not in source
+    assert "finally:" in source and "signals.finished.emit()" in source
+
+
+# -- the worker lifecycle, for real -----------------------------------------
+#
+# The shell-7 segfault was a QRunnable with autoDelete letting Qt destroy a
+# Python-owned QObject on a pool thread. Grepping for setAutoDelete(False)
+# proves the line exists; these prove the behaviour it was meant to buy.
+
+@pytest.fixture
+def qt_core():
+    """A QCoreApplication. No display, no widgets, no libEGL."""
+    from PySide6.QtCore import QCoreApplication
+
+    yield QCoreApplication.instance() or QCoreApplication([])
+
+
+def settle(app, timeout=10.0):
+    """Pump the loop until every job has been released on this thread."""
+    from kairo.qt import work
+
+    deadline = time.monotonic() + timeout
+    while not work.is_idle() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    app.processEvents()
+    return work.is_idle()
+
+
+def test_a_finished_job_is_released_on_the_calling_thread(qt_core):
+    from kairo.qt import work
+
+    seen = {}
+
+    def record(value):
+        seen["value"] = value
+        seen["thread"] = threading.get_ident()
+
+    job = work.submit(lambda: 21 * 2, on_done=record)
+    # Qt must never delete this: it owns a QObject created on this thread.
+    assert job.autoDelete() is False
+    assert job in work._LIVE_JOBS
+
+    assert settle(qt_core), "the job never drained"
+    assert seen["value"] == 42
+    assert seen["thread"] == threading.get_ident(), "result crossed threads"
+    assert job not in work._LIVE_JOBS, "the job outlived its release"
+
+
+def test_a_failing_job_is_released_too(qt_core):
+    """The release runs from ``finally``; an exception must not leak a job."""
+    from kairo.qt import work
+
+    failures = []
+
+    def boom():
+        raise RuntimeError("nope")
+
+    job = work.submit(boom, on_failed=failures.append)
+    assert settle(qt_core), "a failed job never drained"
+    assert failures == ["nope"]
+    assert job not in work._LIVE_JOBS
+
+
+def test_many_jobs_all_drain(qt_core):
+    """is_idle is what closeEvent waits on, so it has to mean what it says."""
+    from kairo.qt import work
+
+    results = []
+    jobs = [work.submit(lambda n=n: n * n, on_done=results.append)
+            for n in range(24)]
+    assert settle(qt_core), "a batch of jobs never drained"
+    assert sorted(results) == sorted(n * n for n in range(24))
+    assert not any(job in work._LIVE_JOBS for job in jobs)
+    assert work.is_idle()
+
+
+def test_is_idle_is_false_while_a_job_is_outstanding(qt_core):
+    """A close that does not wait is the bug; this is the signal it waits on."""
+    from kairo.qt import work
+
+    release = threading.Event()
+    job = work.submit(release.wait)
+    try:
+        assert work.is_idle() is False
+    finally:
+        release.set()
+    assert settle(qt_core)
+    assert job not in work._LIVE_JOBS
+
+
+def test_close_drains_artwork_jobs_before_qt_teardown():
+    source = (QT_DIR / "shell.py").read_text()
+    close = source.split("def closeEvent")[1].split("\n    def ")[0]
+    assert "work.is_idle()" in close
+    assert "event.ignore()" in close
+    assert "self.hide()" in close
+    assert "def _finish_close" in source
 
 
 def test_a_clicked_signal_is_never_wired_straight_to_a_bare_signal():

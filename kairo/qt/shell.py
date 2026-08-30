@@ -24,6 +24,7 @@ from kairo.artwork.registry import default_registry as artwork_registry
 from kairo.ledger import Ledger
 from kairo.providers.registry import default_registry as provider_registry
 from kairo.qt import theme as Q
+from kairo.qt import work
 from kairo.qt.blur import Blur
 from kairo.qt.changes import ChangesPane
 from kairo.qt.library import LibraryPane
@@ -73,6 +74,15 @@ class KairoWindow(QMainWindow):
                            self.ledger, self.tokens)
 
         self.blur = Blur()
+        self._closing = False
+        self._draining = False
+        self._close_timer = QTimer(self)
+        self._close_timer.setInterval(50)
+        self._close_timer.timeout.connect(self._finish_close)
+        self._blur_resize_timer = QTimer(self)
+        self._blur_resize_timer.setSingleShot(True)
+        self._blur_resize_timer.setInterval(80)
+        self._blur_resize_timer.timeout.connect(self._update_blur_region)
         self.want_blur = want_blur
         self.items = nav.build_items(self.providers)
         self.buttons: dict[str, NavButton] = {}
@@ -231,6 +241,8 @@ class KairoWindow(QMainWindow):
                                 "customization(s) and added them to Changes.")
 
     def _request_blur(self) -> None:
+        if self._closing:
+            return
         if not self.translucent:
             self.blur.status = "blur skipped — running opaque"
         elif not self.want_blur:
@@ -242,6 +254,16 @@ class KairoWindow(QMainWindow):
         if settings is not None and hasattr(settings, "set_blur_status"):
             settings.set_blur_status(f"blur: {self.blur.status}")
         self._refresh_status()
+
+    def resizeEvent(self, event):
+        """Keep the compositor region in step without flooding Wayland."""
+        super().resizeEvent(event)
+        if self.blur.active and not self._closing:
+            self._blur_resize_timer.start()
+
+    def _update_blur_region(self) -> None:
+        if self.blur.active and not self._closing:
+            self.blur.update(self)
 
     # -- live tuning -------------------------------------------------------
 
@@ -293,10 +315,23 @@ class KairoWindow(QMainWindow):
         self.status.setText(f"{self.glass.describe()}   ·   {self.blur.status}")
 
     def closeEvent(self, event):
+        self._closing = True
         self.tokens.cancel_all()
-        # The native effect must go before Qt destroys its wl_surface.
+        if not work.is_idle():
+            self._draining = True
+            self.hide()
+            self._close_timer.start()
+            event.ignore()
+            return
+        # Release the protocol object while Qt's wl_surface is still valid.
         self.blur.remove(self)
         super().closeEvent(event)
+
+    def _finish_close(self) -> None:
+        if self._draining and work.is_idle():
+            self._draining = False
+            self._close_timer.stop()
+            self.close()
 
 
 def stylesheet(alpha: float) -> str:

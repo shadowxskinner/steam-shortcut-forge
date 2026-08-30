@@ -84,9 +84,9 @@ in code — try both and tell me which is closer.
 
 **Kairo controls opacity. KWin controls blur.**
 
-`ext-background-effect-v1` asks for a *region* to be blurred and carries no
+Kairo only advertises a *region* for KWin to blur; that request carries no
 radius or strength, so there is deliberately no blur control in Kairo — a
-slider here would be claiming a setting the protocol does not have.
+slider here would be claiming a setting the compositor owns.
 
 Blur smears what is behind a surface. It does not dim it. A region with little
 opacity keeps its contrast however hard the compositor works, which is why the
@@ -111,27 +111,28 @@ from. Text, icons and the accent never take any alpha at all.
 
 ## Blur
 
-Optional, and never required. Without it the window is translucent and
-unblurred, which is the normal appearance anywhere except a KDE Wayland session
-offering `ext-background-effect-v1`.
+Optional, and never required. On KDE Wayland, Kairo asks KWin to blur the exact
+logical area of its native Wayland surface through
+`ext-background-effect-v1`. The protocol carries a region only — KWin still
+owns blur radius, noise and strength.
+
+Build the small optional bridge once:
 
 ```bash
 ./kairo/qt/native/build.sh
 .venv/bin/python -m kairo.qt
 ```
 
-`build.sh` runs `wayland-scanner` over the XML from `wayland-protocols`,
-compiles one shared library **inside the package directory**, and installs
-nothing. Build-time it needs `gcc`, `pkg-config`, `wayland` and
-`wayland-protocols`; at runtime only the resulting `.so`, and not even that if
-you do not want blur.
+If the bridge, protocol or compositor support is absent, the shell remains
+translucent and reports blur as unavailable. `--no-blur` skips the request
+without changing the design.
 
-The status is shown in the status bar and under Settings → Appearance, and
-printed once at startup. Every failure path names itself: no shim, no protocol,
-not Wayland, wrong handle.
-
-The whole interaction is one registry roundtrip and one `set_blur_region` at
-startup. No thread, no timer, no capture, nothing on resize or repaint.
+The bridge keeps its Wayland objects on a private event queue, supplies the
+window's real width and height instead of an unbounded rectangle, and updates
+that region after resize through a short debounce. It retains Python's GIL for
+every native call and releases the effect with the cached surface pointer
+before Qt tears that surface down. It never changes KWin configuration or
+forces Qt onto XWayland.
 
 ## The portal warning
 
@@ -164,13 +165,34 @@ Everything else under `kairo/` is byte-identical: providers, artwork sources,
 the ledger, migration, adoption, matching, the launcher writers, paths and
 their tests.
 
-## What could not be verified here
+## Two bugs, and which one actually crashed
 
-I have no display, no Wayland and no `libEGL`, so no Qt widget has ever been
-constructed. What is checked: every PySide6 name and method call against the
-shipped type stubs (64 imports, 66 methods, none missing), pyflakes across the
-package, that no Qt module imports Tk, and that blur degrades to a message
-rather than an exception. The first genuine test is yours.
+Shell 6 asked for blur with `set_blur_region(effect, NULL)`. The protocol says
+a NULL region *removes* the effect, so that request was wrong — but it was not
+what crashed the shell.
+
+The crash was the worker pool. A `QRunnable` with auto-delete let Qt destroy a
+Python-owned `QObject` on a pool thread, racing Shiboken's reference handling
+on the GUI thread. It could crash with `--no-blur`, which is what ruled
+transparency out. Jobs are now retained, released on the GUI thread, and
+closing drains any active lookup before Qt tears anything down.
+
+A KWin scripted effect was tried during diagnosis and abandoned:
+`WindowForceBlurRole` does not create a blur region for an ordinary window, and
+back-to-back screenshots differed by zero pixels. It is gone from the tree.
+
+## What was verified, and how
+
+The worker lifecycle is covered by tests that run a real `QCoreApplication`
+and pool headlessly: a job drains, a failing job still drains, a batch drains,
+and `is_idle()` reads false while work is outstanding. The native bridge
+compiles clean under `-Wall -Wextra -Werror`, and its failure codes are
+cross-checked against the Python status table so the two files cannot drift.
+
+Repeated open/lookup/close cycles were run live before the corrected bridge
+landed, with blur disabled. **Cycles against this build with real blur enabled,
+and the blur-on/blur-off pixel comparison, are still yours to run** — see the
+commands at the end of the delivery notes.
 
 ## Worth judging
 
