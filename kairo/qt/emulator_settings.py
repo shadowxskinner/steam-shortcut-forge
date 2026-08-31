@@ -147,8 +147,9 @@ class SystemPicker(QDialog):
         layout.setSpacing(Q.GAP)
 
         note = QLabel("Kairo knows the file types and the usual emulator for "
-                      "each of these. Pick one and all you have to point at "
-                      "is the folder your games are in.")
+                      "each system. It also checks the emulator's own game "
+                      "list and common ROM folders, so installed setups often "
+                      "arrive ready to add.")
         note.setObjectName("meta")
         note.setWordWrap(True)
         layout.addWidget(note)

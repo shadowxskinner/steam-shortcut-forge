@@ -53,6 +53,10 @@ class System:
     #: uses. Reading it means the folder never has to be pointed at by hand.
     config: str = ""
     config_keys: tuple[str, ...] = ()
+    #: Sandboxed packages keep the same file below a different data root.
+    config_fallbacks: tuple[str, ...] = ()
+    #: Restrict generic key parsing when an INI uses the same name elsewhere.
+    config_section: str = ""
 
     def display(self) -> str:
         return f"{self.name} — {self.emulator}" if self.emulator else self.name
@@ -70,9 +74,13 @@ CATALOGUE: tuple[System, ...] = (
     System("wiiu", "Wii U", (".wud", ".wux", ".wua", ".rpx", ".elf"),
            ("cemu", "Cemu"), ("info.cemu.Cemu",), ("-g",),
            ("wiiu", "wii_u"), "Cemu"),
-    System("ps2", "PlayStation 2", (".iso", ".chd", ".cso", ".bin", ".gz"),
+    System("ps2", "PlayStation 2",
+           (".iso", ".bin", ".img", ".mdf", ".gz", ".cso", ".zso", ".chd", ".elf"),
            ("pcsx2-qt", "pcsx2"), ("net.pcsx2.PCSX2",), ("-batch",),
-           ("ps2",), "PCSX2"),
+           ("ps2",), "PCSX2",
+           "~/.config/PCSX2/inis/PCSX2.ini", ("Paths", "RecursivePaths"),
+           ("~/.var/app/net.pcsx2.PCSX2/config/PCSX2/inis/PCSX2.ini",),
+           "GameList"),
     System("ps1", "PlayStation", (".cue", ".chd", ".pbp", ".bin", ".img"),
            ("duckstation-qt", "duckstation"), ("org.duckstation.DuckStation",),
            ("-batch",), ("ps1", "psx"), "DuckStation"),
@@ -185,6 +193,19 @@ def find_executable(system: System) -> tuple[str, tuple[str, ...]]:
     return "", ()
 
 
+def _config_path(value: str) -> Path:
+    """Expand an emulator config path with XDG's native override.
+
+    Catalogue entries use ``~/.config`` because it is readable and portable,
+    but PCSX2 follows ``XDG_CONFIG_HOME`` when it is set. Treat that prefix as
+    the conventional default, not as a hard-coded location.
+    """
+    prefix = "~/.config/"
+    if value.startswith(prefix):
+        return paths.config_home() / value[len(prefix):]
+    return Path(value).expanduser()
+
+
 def from_emulator_config(system: System) -> list[str]:
     """ROM directories the emulator has already been told about.
 
@@ -192,25 +213,36 @@ def from_emulator_config(system: System) -> list[str]:
     every one of these tools ends with "make this match what you set in the
     emulator". If the emulator already knows, Kairo can just read it.
     """
-    if not system.config:
-        return []
-    config = Path(system.config).expanduser()
-    try:
-        text = config.read_text(errors="ignore")
-    except OSError:
+    locations = tuple(value for value in (system.config, *system.config_fallbacks)
+                      if value)
+    if not locations:
         return []
     found: list[str] = []
-    for line in text.splitlines():
-        key, _, value = line.partition("=")
-        key, value = key.strip(), value.strip()
-        if not value:
+    for location in locations:
+        try:
+            text = _config_path(location).read_text(errors="ignore")
+        except OSError:
             continue
-        # Dolphin numbers them: ISOPath0, ISOPath1, ...
-        if not any(key.startswith(prefix) for prefix in system.config_keys):
-            continue
-        candidate = Path(value).expanduser()
-        if candidate.is_dir() and str(candidate) not in found:
-            found.append(str(candidate))
+        section = ""
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                section = stripped[1:-1].strip()
+                continue
+            if (system.config_section
+                    and section.casefold() != system.config_section.casefold()):
+                continue
+            key, separator, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if not separator or not value:
+                continue
+            # Dolphin numbers them: ISOPath0, ISOPath1, ... PCSX2 stores
+            # repeated Paths/RecursivePaths values in its GameList section.
+            if not any(key.startswith(prefix) for prefix in system.config_keys):
+                continue
+            candidate = Path(value).expanduser()
+            if candidate.is_dir() and str(candidate) not in found:
+                found.append(str(candidate))
     return found
 
 

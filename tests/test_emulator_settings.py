@@ -141,6 +141,13 @@ def test_adding_an_emulator_offers_the_catalogue_first():
     assert "picker.manual" in add, "describing it by hand must stay reachable"
 
 
+def test_the_picker_explains_that_folder_discovery_is_automatic():
+    source = (QT_DIR / "emulator_settings.py").read_text()
+    assert "emulator's own game" in source
+    assert "common ROM folders" in source
+    assert "all you have to point at" not in source
+
+
 def test_a_picked_system_arrives_already_filled_in():
     """One click plus a folder, not four fields."""
     from kairo import systems

@@ -41,6 +41,16 @@ def test_dolphin_covers_both_of_its_systems():
     assert ".gcm" in gc.extensions
 
 
+def test_pcsx2_catalogue_matches_its_current_scanner_and_cli():
+    """Keep Kairo's preset aligned with the formats PCSX2 itself scans."""
+    ps2 = systems.by_id("ps2")
+    assert ps2.emulator == "PCSX2"
+    assert ps2.arguments == ("-batch",)
+    assert "net.pcsx2.PCSX2" in ps2.flatpaks
+    assert {".iso", ".bin", ".img", ".mdf", ".gz", ".cso", ".zso",
+            ".chd", ".elf"} <= set(ps2.extensions)
+
+
 def test_a_native_binary_is_preferred_over_a_flatpak(monkeypatch):
     """Fewer moving parts, and no flatpak run to prepend."""
     system = systems.by_id("gamecube")
@@ -136,6 +146,50 @@ def test_the_emulators_own_config_is_read_for_rom_paths(monkeypatch, tmp_path):
     assert systems.from_emulator_config(system) == [str(roms)]
     monkeypatch.setattr(systems, "ROM_ROOTS", ())
     assert systems.find_roms(system) == str(roms)
+
+
+def test_pcsx2_game_list_paths_are_discovered(monkeypatch, tmp_path):
+    """PCSX2 writes repeated Paths values rather than Dolphin's numbered keys."""
+    direct = tmp_path / "direct"
+    recursive = tmp_path / "recursive"
+    unrelated = tmp_path / "not-a-game-list"
+    direct.mkdir()
+    recursive.mkdir()
+    unrelated.mkdir()
+    (recursive / "A Game.zso").write_bytes(b"")
+    ini = tmp_path / "PCSX2.ini"
+    ini.write_text(
+        f"[Folders]\nPaths = {unrelated}\n"
+        f"[GameList]\nPaths = {direct}\nRecursivePaths = {recursive}\n")
+
+    system = replace(systems.by_id("ps2"), config=str(ini),
+                     config_fallbacks=())
+    assert systems.from_emulator_config(system) == [str(direct), str(recursive)]
+    monkeypatch.setattr(systems, "ROM_ROOTS", ())
+    assert systems.find_roms(system) == str(recursive)
+
+
+def test_pcsx2_flatpak_config_is_a_real_fallback(tmp_path):
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    fallback = tmp_path / "flatpak" / "PCSX2.ini"
+    fallback.parent.mkdir()
+    fallback.write_text(f"[GameList]\nRecursivePaths = {roms}\n")
+    system = replace(systems.by_id("ps2"), config=str(tmp_path / "missing.ini"),
+                     config_fallbacks=(str(fallback),))
+    assert systems.from_emulator_config(system) == [str(roms)]
+
+
+def test_pcsx2_native_config_respects_xdg_config_home(monkeypatch, tmp_path):
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    xdg = tmp_path / "xdg"
+    ini = xdg / "PCSX2" / "inis" / "PCSX2.ini"
+    ini.parent.mkdir(parents=True)
+    ini.write_text(f"[GameList]\nPaths = {roms}\n")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg))
+    system = replace(systems.by_id("ps2"), config_fallbacks=())
+    assert systems.from_emulator_config(system) == [str(roms)]
 
 
 def test_a_configured_path_that_no_longer_exists_is_ignored(tmp_path):
