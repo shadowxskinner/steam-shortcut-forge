@@ -231,3 +231,29 @@ def test_an_emulator_keeps_the_icon_it_was_detected_with():
     original = emu.Emulator(name="PCSX2", executable="/usr/bin/pcsx2-qt",
                             icon="PCSX2").normalised()
     assert emu.Emulator.from_dict(original.as_dict()).icon == "PCSX2"
+
+
+def test_an_unreadable_directory_does_not_crash_detection(monkeypatch, tmp_path):
+    """is_dir() raises rather than returning False on an unstattable path.
+
+    One unreadable entry in XDG_DATA_DIRS crashed the emulator picker on the
+    way open, with a PermissionError rather than a message.
+    """
+    class Hostile:
+        def is_dir(self):
+            raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(systems.paths, "system_application_dirs",
+                        lambda: [Hostile()])
+    assert systems.from_desktop_entry(systems.by_id("ps2")) == ("", (), "")
+
+    monkeypatch.setattr(systems, "ROM_ROOTS", ("/nope",))
+    assert systems.find_roms(systems.by_id("ps2")) == ""
+
+
+def test_an_unreadable_flatpak_export_is_not_installed(monkeypatch):
+    def explode(self):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "exists", explode)
+    assert systems._flatpak_installed("net.pcsx2.PCSX2") is False

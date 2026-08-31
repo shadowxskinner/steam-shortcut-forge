@@ -846,6 +846,10 @@ class LibraryPane(QWidget):
             return
         if self.selected is None or self.selected.entry.key != key:
             return
+        # Drops are collected and the grid re-seated once. Dropping inside
+        # the loop re-seated every surviving tile per drop, so a group where
+        # nothing was usable cost one reflow per tile.
+        doomed = []
         for index, data in batch:
             tile = self._tile_at.get(index)
             if tile is None:
@@ -854,12 +858,20 @@ class LibraryPane(QWidget):
             # Either way there is nothing to show, and an empty tile is worse
             # than none.
             if data is None:
-                self._drop_tile(tile)
+                doomed.append(tile)
                 continue
             tile.set_image(data)
+        for tile in doomed:
+            self._drop_tile(tile, reflow=False)
+        if doomed:
+            self._reflow_tiles()
 
-    def _drop_tile(self, tile) -> None:
-        """Remove a tile and close the hole it leaves behind."""
+    def _drop_tile(self, tile, *, reflow: bool = True) -> None:
+        """Remove a tile and close the hole it leaves behind.
+
+        ``reflow`` is deferred when several are dropped together, so the grid
+        is re-seated once rather than once per tile.
+        """
         if tile not in self.tiles:
             return
         if tile is self.chosen_tile:
@@ -871,7 +883,8 @@ class LibraryPane(QWidget):
         self.grid.removeWidget(tile)
         tile.setParent(None)
         tile.deleteLater()
-        self._reflow_tiles()
+        if reflow:
+            self._reflow_tiles()
 
     def _reflow_tiles(self) -> None:
         """Re-seat the survivors so the grid has no gaps."""

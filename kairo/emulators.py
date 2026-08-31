@@ -149,6 +149,18 @@ class Emulator:
                        arguments=arguments,
                        folders=tuple(f.normalised() for f in self.folders))
 
+    @staticmethod
+    def _reachable(path: Path, *, directory: bool) -> bool:
+        """Exists and can be looked at. Unreadable counts as not there.
+
+        Path.exists() and Path.is_dir() raise on something the user cannot
+        stat, which would turn saving an emulator into a traceback.
+        """
+        try:
+            return path.is_dir() if directory else path.exists()
+        except OSError:
+            return False
+
     def problems(self) -> list[str]:
         """Everything wrong with this configuration, in user-facing words."""
         issues: list[str] = []
@@ -156,14 +168,16 @@ class Emulator:
             issues.append("This emulator needs a name.")
         if not self.executable.strip():
             issues.append(f"{self.name or 'This emulator'} has no executable.")
-        elif not Path(self.executable).expanduser().exists():
+        elif not self._reachable(Path(self.executable).expanduser(),
+                                 directory=False):
             issues.append(f"{self.executable} does not exist.")
         if not self.folders:
             issues.append(f"{self.name or 'This emulator'} has no ROM folders.")
         for folder in self.folders:
             if not folder.path:
                 issues.append("A ROM folder has no path.")
-            elif not Path(folder.path).expanduser().is_dir():
+            elif not self._reachable(Path(folder.path).expanduser(),
+                                     directory=True):
                 issues.append(f"{folder.path} is not a folder.")
             elif not folder.extensions:
                 issues.append(f"{folder.path} has no file extensions set.")

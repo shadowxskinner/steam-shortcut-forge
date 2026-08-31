@@ -129,8 +129,11 @@ def by_id(system_id: str) -> System | None:
 def _flatpak_installed(app_id: str) -> bool:
     for root in ("/var/lib/flatpak/exports/bin",
                  os.path.expanduser("~/.local/share/flatpak/exports/bin")):
-        if (Path(root) / app_id).exists():
-            return True
+        try:
+            if (Path(root) / app_id).exists():
+                return True
+        except OSError:
+            continue        # unreadable is not installed
     return False
 
 
@@ -150,9 +153,12 @@ def from_desktop_entry(system: System) -> tuple[str, tuple[str, ...], str]:
     wanted = {f"{app_id}.desktop".lower() for app_id in system.flatpaks}
     wanted |= {f"{command}.desktop".lower() for command in system.commands}
     for directory in paths.system_application_dirs():
-        if not directory.is_dir():
-            continue
+        # is_dir() raises rather than returning False on a directory the user
+        # cannot stat, and one unreadable entry in XDG_DATA_DIRS would
+        # otherwise crash the emulator picker on the way open.
         try:
+            if not directory.is_dir():
+                continue
             candidates = sorted(directory.glob("*.desktop"))
         except OSError:
             continue
@@ -272,7 +278,10 @@ def find_roms(system: System) -> str:
 
     for root in ROM_ROOTS:
         base = Path(root).expanduser()
-        if not base.is_dir():
+        try:
+            if not base.is_dir():
+                continue
+        except OSError:
             continue
         for name in system.folders:
             candidate = base / name

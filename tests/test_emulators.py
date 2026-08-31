@@ -164,3 +164,26 @@ def test_a_narrow_extension_does_not_catch_its_neighbours(tmp_path):
                           folders=(emu.RomFolder(str(roms_dir),
                                                  (".nkit.iso",)),)).normalised()
     assert [rom.title for rom in emu.scan(narrow)] == ["One"]
+
+
+def test_a_path_that_cannot_be_stat_ed_is_reported_not_raised(monkeypatch):
+    """Saving an emulator must not become a traceback.
+
+    Path.exists() and Path.is_dir() raise on something the user cannot stat,
+    and problems() is what the Save button calls.
+    """
+    from pathlib import Path as RealPath
+
+    def explode(self):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(RealPath, "exists", explode)
+    monkeypatch.setattr(RealPath, "is_dir", explode)
+
+    broken = emu.Emulator(name="X", executable="/somewhere/locked",
+                          folders=(emu.RomFolder("/also/locked", (".iso",)),)
+                          ).normalised()
+    issues = broken.problems()
+    assert any("does not exist" in i for i in issues)
+    assert any("is not a folder" in i for i in issues)
+    assert broken.usable() is False
