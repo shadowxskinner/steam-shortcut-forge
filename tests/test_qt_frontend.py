@@ -88,7 +88,7 @@ def test_blur_result_codes_all_explain_themselves():
         assert message, f"result {code} has no explanation"
 
 
-def test_the_qt_theme_is_built_from_the_shared_tokens():
+def test_the_qt_theme_keeps_the_shared_semantic_accent():
     from kairo.qt import theme as Q
     from kairo.ui import theme as T
 
@@ -105,11 +105,9 @@ def test_a_numeric_setting_nudges_rather_than_flattens():
     "solid" is a preset for when none is wanted at all.
     """
     from kairo.qt import theme as Q
-    from kairo.ui import theme as T
-
     nudged = Q.stylesheet(0.70)
-    assert Q.rgba(T.C_PANEL, 0.70) in nudged
-    assert Q.rgba(T.C_PANEL, 1.0) not in nudged
+    assert Q.rgba(Q.C_PANEL, 0.70) in nudged
+    assert Q.rgba(Q.C_PANEL, 1.0) not in nudged
 
     glass = Q.resolve(0.70)
     assert glass.nav > glass.panel > glass.tile
@@ -117,8 +115,8 @@ def test_a_numeric_setting_nudges_rather_than_flattens():
 
 # -- glass is per surface, not per window -----------------------------------
 
-def test_reading_surfaces_are_nearly_solid():
-    """Content behind a panel should be shape and colour, never legible text.
+def test_reading_surfaces_balance_legibility_with_visible_blur():
+    """Material should stay readable without turning into an opaque slab.
 
     A single window-wide opacity - the only thing Tk offered - cannot express
     this: it fades text along with the background and makes every surface
@@ -128,7 +126,23 @@ def test_reading_surfaces_are_nearly_solid():
 
     frosted = Q.PRESETS["frosted"]
     for name in ("nav", "list", "panel"):
-        assert getattr(frosted, name) >= 0.88, f"{name} is too see-through"
+        assert 0.78 <= getattr(frosted, name) <= 0.88, name
+
+
+def test_qt_material_is_neutral_not_the_tk_navy_palette():
+    from kairo.qt import theme as Q
+    from kairo.ui import theme as T
+
+    def spread(colour):
+        value = colour.lstrip("#")
+        channels = [int(value[index:index + 2], 16) for index in (0, 2, 4)]
+        return max(channels) - min(channels)
+
+    assert all(spread(colour) <= 8 for colour in Q.SURFACE_COLOURS)
+    sheet = Q.stylesheet("frosted")
+    for navy in (T.C_BG, T.C_NAV, T.C_LIST, T.C_PANEL, T.C_CARD,
+                 T.C_SELECTED, T.C_SELECTED_NAV):
+        assert navy not in sheet
 
 
 def test_depth_runs_from_columns_down_to_tiles():
@@ -155,7 +169,7 @@ def test_text_never_takes_the_surface_alpha():
     for label in ("QLabel#title", "QLabel#rowName", "QLabel#meta"):
         line = next(l for l in sheet.splitlines() if label in l)
         assert "rgba(" not in line, f"{label} is translucent"
-    assert T.C_TEXT in sheet
+    assert Q.C_TEXT in sheet
 
 
 def test_glass_can_be_nudged_without_inverting_the_layers():
@@ -181,10 +195,9 @@ def test_resolve_accepts_a_name_a_number_or_a_glass():
 
 def test_solid_really_is_solid():
     from kairo.qt import theme as Q
-    from kairo.ui import theme as T
 
     sheet = Q.stylesheet("solid")
-    for surface in (T.C_NAV, T.C_LIST, T.C_PANEL, T.C_CARD):
+    for surface in (Q.C_NAV, Q.C_LIST, Q.C_PANEL, Q.C_CARD):
         assert Q.rgba(surface, 1.0) in sheet
 
 
@@ -336,13 +349,13 @@ def test_a_denser_preset_exists_to_compare_against():
     assert dense.panel < 1.0, "dense is still glass, not a wall"
 
 
-def test_live_default_keeps_reading_content_quiet():
-    """The shell-6 desktop capture left terminal text competing with Kairo."""
+def test_live_default_leaves_room_for_the_compositor_blur():
     from kairo.qt import theme as Q
 
     frosted = Q.PRESETS[Q.DEFAULT_PRESET]
-    assert frosted.workspace >= 0.75
-    assert frosted.panel >= 0.94
+    assert 0.45 <= frosted.workspace <= 0.55
+    assert 0.78 <= frosted.panel <= 0.84
+    assert frosted.card < frosted.panel
 
 
 # -- the backdrop behind the cards ------------------------------------------
@@ -353,12 +366,10 @@ def test_the_workspace_has_a_backdrop_at_all():
     behind a surface; it does not dim it, and a region with no surface has
     nothing to dim with."""
     from kairo.qt import theme as Q
-    from kairo.ui import theme as T
-
     sheet = Q.stylesheet("frosted")
     line = next(l for l in sheet.splitlines() if "QWidget#workspace" in l)
     assert "transparent" not in line
-    assert Q.rgba(T.C_BG, Q.PRESETS["frosted"].workspace) in line
+    assert Q.rgba(Q.C_BG, Q.PRESETS["frosted"].workspace) in line
 
 
 def test_the_window_itself_still_has_no_rectangle():
@@ -726,7 +737,7 @@ def test_the_fixed_appearance_is_still_applied():
     assert "def apply_glass" in shell
     assert "setStyleSheet(Q.stylesheet(self.glass))" in shell
     frosted = Q.PRESETS[Q.DEFAULT_PRESET]
-    assert (frosted.workspace, frosted.nav, frosted.panel) == (0.78, 0.97, 0.95)
+    assert (frosted.workspace, frosted.nav, frosted.panel) == (0.50, 0.86, 0.82)
 
 
 def test_a_dead_receiver_never_strands_a_job(qt_core, monkeypatch):
