@@ -112,11 +112,16 @@ def test_a_folder_row_reports_what_it_actually_matches():
     assert "textChanged.connect" in source, "it must update as you type"
 
 
-def test_the_folder_columns_are_labelled():
-    """Three unlabelled boxes is how a path ends up in the wrong one."""
+def test_every_folder_field_says_what_it_is():
+    """Unlabelled boxes are how a path ends up in the wrong one.
+
+    The path now has its own line, so it is labelled by its placeholder while
+    the narrower fields beside it carry captions.
+    """
     source = (QT_DIR / "emulator_settings.py").read_text()
-    for column in ("Folder", "File types", "System", "Matches"):
-        assert f'QLabel("{column}")' in source or f'("{column}"' in source, column
+    assert '"Folder your games are in"' in source
+    for caption in ("File types", "System"):
+        assert f'("{caption}"' in source, caption
 
 
 def test_arguments_come_after_the_folders_and_say_they_are_optional():

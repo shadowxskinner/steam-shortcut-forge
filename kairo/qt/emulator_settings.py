@@ -30,55 +30,63 @@ def _field(placeholder: str, value: str = "") -> QLineEdit:
     return box
 
 
-class FolderRow(QWidget):
-    """One ROM folder: where it is, what counts, and what to call it."""
+class FolderRow(QFrame):
+    """One ROM folder: where it is, what counts, and what to call it.
+
+    Two lines rather than one. A path is far longer than anything beside it,
+    and competing for width in a single row left it showing its own tail —
+    which is how you end up unsure whether the right folder is even in there.
+    """
 
     def __init__(self, folder: emu.RomFolder | None = None, parent=None):
         super().__init__(parent)
+        self.setObjectName("well")
         folder = folder or emu.RomFolder("")
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(T.S2)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(T.S3, T.S3, T.S3, T.S3)
+        outer.setSpacing(T.S2)
 
-        self.path = _field("ROM folder", folder.path)
-        self.extensions = _field(".iso .rvz", " ".join(folder.extensions))
-        self.extensions.setFixedWidth(Q.W_LABEL * 3)
-        self.system = _field("System (optional)", folder.system)
-        self.system.setFixedWidth(Q.W_LABEL * 2)
-        # The full path rarely fits, so the box says what it holds on hover
-        # and keeps the informative end of the path in view.
-        self.path.setToolTip(folder.path)
-        self.path.textChanged.connect(lambda text: self.path.setToolTip(text))
-
-        # Labelled, not an icon: the secondary style carries 16px of side
-        # padding, so a square button has no room for its own text and Qt
-        # elides "…" down to a single dot. It also reads better matching the
-        # Choose… beside the executable field.
+        self.path = _field("Folder your games are in", folder.path)
         browse = QPushButton("Choose…")
         browse.setObjectName("secondary")
         browse.setFixedHeight(Q.H_BUTTON)
         browse.clicked.connect(lambda _c: self._browse())
-
         self.remove = QPushButton("Remove")
         self.remove.setObjectName("danger")
         self.remove.setFixedHeight(Q.H_BUTTON)
 
+        top = QHBoxLayout()
+        top.setSpacing(T.S2)
+        top.addWidget(self.path, 1)
+        top.addWidget(browse)
+        top.addWidget(self.remove)
+        outer.addLayout(top)
+
+        self.extensions = _field(".iso .rvz", " ".join(folder.extensions))
+        self.system = _field("System, optional", folder.system)
         # How many files this row actually matches, updated as you type. A
         # folder in the wrong box or an extension typed .rvs instead of .rvz
-        # both look completely fine until something says "no files".
+        # both look fine until something says "no files".
         self.matched = QLabel("")
         self.matched.setObjectName("meta")
-        self.matched.setFixedWidth(Q.W_LABEL)
-        self.path.textChanged.connect(lambda _t: self.recount())
-        self.extensions.textChanged.connect(lambda _t: self.recount())
 
-        row.addWidget(self.path, 1)
-        row.addWidget(browse)
-        row.addSpacing(T.S2)
-        row.addWidget(self.extensions)
-        row.addWidget(self.system)
-        row.addWidget(self.matched)
-        row.addWidget(self.remove)
+        bottom = QHBoxLayout()
+        bottom.setSpacing(T.S2)
+        for caption, widget, stretch in (("File types", self.extensions, 2),
+                                         ("System", self.system, 1)):
+            label = QLabel(caption)
+            label.setObjectName("micro")
+            bottom.addWidget(label)
+            bottom.addWidget(widget, stretch)
+        bottom.addWidget(self.matched)
+        outer.addLayout(bottom)
+
+        self.path.textChanged.connect(lambda text: self._path_changed(text))
+        self.extensions.textChanged.connect(lambda _t: self.recount())
+        self._path_changed(folder.path)
+
+    def _path_changed(self, text: str) -> None:
+        self.path.setToolTip(text)
         self.recount()
 
     def _browse(self) -> None:
@@ -267,19 +275,6 @@ class EmulatorDialog(QDialog):
         columns.setWordWrap(True)
         layout.addWidget(columns)
 
-        # Column headers. Three unlabelled boxes in a row is how a folder
-        # path ends up typed into the arguments field instead.
-        header = QHBoxLayout()
-        header.setSpacing(T.S2)
-        for caption, width in (("Folder", 0), ("File types", Q.W_LABEL * 3),
-                               ("System", Q.W_LABEL * 2), ("Matches", Q.W_LABEL)):
-            box = QLabel(caption)
-            box.setObjectName("micro")
-            if width:
-                box.setFixedWidth(width)
-            header.addWidget(box, 1 if not width else 0)
-        header.addSpacing(Q.W_LABEL)
-        layout.addLayout(header)
 
         holder = QWidget()
         self.folders = QVBoxLayout(holder)
