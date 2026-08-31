@@ -1286,3 +1286,37 @@ def test_a_group_carries_a_key_per_row_not_one_for_the_group():
     assert "batch.append((index, image, key, generation))" in rows
     assert 'streamer.item.emit(0, list(batch), "")' in rows, \
         "the group-level key must not be used to match rows"
+
+
+def test_every_nav_row_takes_the_selected_text_style():
+    """A row with a logo returned before it restyled its own label.
+
+    Steam and Dolphin never went bold when selected while every drawn-glyph
+    row did, which read as the selection not registering.
+    """
+    source = (QT_DIR / "widgets.py").read_text()
+    paint = source.split("def _paint_icon")[1].split("\n    def ")[0]
+    assert paint.index("navNameOn") < paint.index("self._logo"), \
+        "the label must be styled before any early return for a logo"
+
+
+def test_only_a_real_product_brings_colour_to_the_sidebar():
+    """An accent-tinted pictogram beside two brand logos reads as a third."""
+    source = (QT_DIR / "widgets.py").read_text()
+    paint = source.split("def _paint_icon")[1].split("\n    def ")[0]
+    assert "C_ACCENT_TEXT" not in paint
+    assert "Q.GLYPH_ON if on else Q.GLYPH" in paint
+
+
+def test_the_drawn_glyphs_carry_no_hue():
+    """The shared text palette is still violet: C_TEXT3 is #6B6499.
+
+    A pictogram painted in it read as a third brand colour beside the two
+    real product logos, which is what made the sidebar look busy.
+    """
+    from kairo.qt import theme as Q
+
+    for name in ("GLYPH", "GLYPH_ON"):
+        value = getattr(Q, name).lstrip("#")
+        channels = [int(value[i:i + 2], 16) for i in (0, 2, 4)]
+        assert max(channels) - min(channels) <= 10, f"{name} is tinted"

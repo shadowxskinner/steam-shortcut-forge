@@ -141,15 +141,22 @@ class NavButton(QPushButton):
         self.toggled.connect(self._paint_icon)
 
     def _paint_icon(self, on: bool) -> None:
-        # A real logo if the theme has one — Steam's and Dolphin's are what
-        # a person recognises — and the drawn glyph when it does not.
+        # The label first: returning early for a row that has a logo meant
+        # Steam and Dolphin never took the selected text style at all, while
+        # every glyph row did.
+        self.name.setObjectName("navNameOn" if on else "navName")
+        restyle(self.name)
+
+        # A real logo if the theme has one — Steam's and Dolphin's are what a
+        # person recognises — and the drawn glyph when it does not. The glyph
+        # stays neutral so the only colour in the sidebar belongs to a real
+        # product; an accent-tinted pictogram read as a third brand competing
+        # with the two actual ones.
         if self._logo is not None and not self._logo.isNull():
             self.glyph.setPixmap(self._logo)
             return
-        colour = T.C_ACCENT_TEXT if on else T.C_TEXT3
+        colour = Q.GLYPH_ON if on else Q.GLYPH
         self.glyph.setPixmap(nav_pixmap(self._icon, colour, Q.NAV_ICON))
-        self.name.setObjectName("navNameOn" if on else "navName")
-        restyle(self.name)
 
     def set_count(self, value) -> None:
         self.count.setText("" if value is None else str(value))

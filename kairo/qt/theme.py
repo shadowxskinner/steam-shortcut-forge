@@ -154,6 +154,13 @@ R_PILL = 999
 FS_LOGO = 14
 MARK_SIZE = 56               # the application mark in the sidebar header
 NAV_ICON = 22                # provider logos in the sidebar
+
+#: Drawn pictograms are neutral on purpose. The shared text palette is still
+#: violet-tinted — C_TEXT3 is #6B6499, a channel spread of 53 — so a glyph
+#: painted in it read as a third brand colour beside Steam's and Dolphin's
+#: real ones. Kairo's own marks carry no hue; only an installed product does.
+GLYPH = "#8A8A93"
+GLYPH_ON = "#D6D6DC"
 FS_DOT = 15                  # the 'customized' mark on an entry row
 FS_TITLE = 28
 FS_PANE = 15
