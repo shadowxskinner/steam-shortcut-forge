@@ -15,9 +15,13 @@ catalogue is a shortcut, never a limit.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from kairo import paths
+from kairo.desktop import entry as de
 
 #: Where ROM collections conventionally live. EmuDeck's layout first, since it
 #: is the most standardised, then the obvious hand-rolled ones.
@@ -45,6 +49,10 @@ class System:
     #: Directory names a collection of these games is usually filed under.
     folders: tuple[str, ...] = ()
     emulator: str = ""
+    #: Where this emulator records its own ROM directories, and the keys it
+    #: uses. Reading it means the folder never has to be pointed at by hand.
+    config: str = ""
+    config_keys: tuple[str, ...] = ()
 
     def display(self) -> str:
         return f"{self.name} — {self.emulator}" if self.emulator else self.name
@@ -53,10 +61,12 @@ class System:
 CATALOGUE: tuple[System, ...] = (
     System("gamecube", "GameCube", (".iso", ".gcm", ".rvz", ".ciso", ".gcz", ".tgc"),
            ("dolphin-emu",), ("org.DolphinEmu.dolphin-emu",), ("-b", "-e"),
-           ("gc", "gamecube", "ngc"), "Dolphin"),
+           ("gc", "gamecube", "ngc"), "Dolphin",
+           "~/.config/dolphin-emu/Dolphin.ini", ("ISOPath",)),
     System("wii", "Wii", (".iso", ".wbfs", ".rvz", ".ciso", ".wad", ".nkit.iso"),
            ("dolphin-emu",), ("org.DolphinEmu.dolphin-emu",), ("-b", "-e"),
-           ("wii",), "Dolphin"),
+           ("wii",), "Dolphin",
+           "~/.config/dolphin-emu/Dolphin.ini", ("ISOPath",)),
     System("wiiu", "Wii U", (".wud", ".wux", ".wua", ".rpx", ".elf"),
            ("cemu", "Cemu"), ("info.cemu.Cemu",), ("-g",),
            ("wiiu", "wii_u"), "Cemu"),
@@ -116,16 +126,58 @@ def _flatpak_installed(app_id: str) -> bool:
     return False
 
 
+#: Field codes a launcher substitutes. Meaningless to us and must not survive
+#: into a command line.
+_FIELD_CODE = re.compile(r"%[fFuUdDnNickvm]")
+
+
+def from_desktop_entry(system: System) -> tuple[str, tuple[str, ...]]:
+    """Find the emulator through its installed launcher entry.
+
+    This is the general answer to "how was it installed". A native package, an
+    AUR build, a Flatpak, a Snap and an AppImage all drop a .desktop file, and
+    its Exec line is the command that actually works on this machine — no
+    guessing at binary names or export paths.
+    """
+    wanted = {f"{app_id}.desktop".lower() for app_id in system.flatpaks}
+    wanted |= {f"{command}.desktop".lower() for command in system.commands}
+    for directory in paths.system_application_dirs():
+        if not directory.is_dir():
+            continue
+        try:
+            candidates = sorted(directory.glob("*.desktop"))
+        except OSError:
+            continue
+        for path in candidates:
+            if path.name.lower() not in wanted:
+                continue
+            parser = de.parse(path)
+            if parser is None:
+                continue
+            exec_line = parser["Desktop Entry"].get("Exec", "").strip()
+            if not exec_line:
+                continue
+            parts = _FIELD_CODE.sub("", exec_line).split()
+            if not parts:
+                continue
+            return parts[0], (*parts[1:], *system.arguments)
+    return "", ()
+
+
 def find_executable(system: System) -> tuple[str, tuple[str, ...]]:
     """``(executable, leading arguments)`` for this system, or ``("", ())``.
 
-    A native binary wins over a Flatpak: fewer moving parts, and the Flatpak
-    form needs `flatpak run <id>` in front of everything else.
+    A native binary on PATH first, then the installed launcher entry — which
+    covers Flatpak, Snap, AppImage and anything else that registers itself —
+    then the Flatpak export directories as a last resort.
     """
     for command in system.commands:
         found = shutil.which(command)
         if found:
             return found, system.arguments
+    executable, arguments = from_desktop_entry(system)
+    if executable:
+        return executable, arguments
     for app_id in system.flatpaks:
         if _flatpak_installed(app_id):
             flatpak = shutil.which("flatpak") or "/usr/bin/flatpak"
@@ -133,8 +185,50 @@ def find_executable(system: System) -> tuple[str, tuple[str, ...]]:
     return "", ()
 
 
+def from_emulator_config(system: System) -> list[str]:
+    """ROM directories the emulator has already been told about.
+
+    Dolphin records its ISO paths in Dolphin.ini, and every setup guide for
+    every one of these tools ends with "make this match what you set in the
+    emulator". If the emulator already knows, Kairo can just read it.
+    """
+    if not system.config:
+        return []
+    config = Path(system.config).expanduser()
+    try:
+        text = config.read_text(errors="ignore")
+    except OSError:
+        return []
+    found: list[str] = []
+    for line in text.splitlines():
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if not value:
+            continue
+        # Dolphin numbers them: ISOPath0, ISOPath1, ...
+        if not any(key.startswith(prefix) for prefix in system.config_keys):
+            continue
+        candidate = Path(value).expanduser()
+        if candidate.is_dir() and str(candidate) not in found:
+            found.append(str(candidate))
+    return found
+
+
 def find_roms(system: System) -> str:
-    """A conventional ROM folder for this system, if one exists and has files."""
+    """Where this system's games are, without being told.
+
+    The emulator's own configuration first — it is authoritative and it is
+    what the user already set up — then the conventional layouts.
+    """
+    for directory in from_emulator_config(system):
+        base = Path(directory)
+        try:
+            for path in base.rglob("*"):
+                if path.suffix.lower() in system.extensions and path.is_file():
+                    return str(base)
+        except OSError:
+            continue
+
     for root in ROM_ROOTS:
         base = Path(root).expanduser()
         if not base.is_dir():

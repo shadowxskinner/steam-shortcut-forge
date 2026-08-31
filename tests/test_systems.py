@@ -4,6 +4,7 @@ Every comparable tool ships one — ES-DE's es_systems.xml, Steam ROM Manager's
 community presets. These pin the shape of ours and the detection around it.
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 from kairo import systems
@@ -93,3 +94,50 @@ def test_detection_puts_what_is_installed_first(monkeypatch):
     assert found[0].installed is True
     assert all(not d.installed for d in found[1:])
     assert len(found) == len(systems.CATALOGUE), "nothing may disappear"
+
+
+def test_an_installed_launcher_entry_is_enough_to_find_it(monkeypatch, tmp_path):
+    """The general answer to "how was it installed".
+
+    A native package, an AUR build, a Flatpak, a Snap and an AppImage all drop
+    a .desktop file. Its Exec line is the command that works on this machine,
+    with no guessing at binary names or export paths.
+    """
+    apps = tmp_path / "applications"
+    apps.mkdir()
+    (apps / "org.DolphinEmu.dolphin-emu.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Dolphin\n"
+        "Exec=/var/lib/flatpak/exports/bin/org.DolphinEmu.dolphin-emu %U\n")
+    monkeypatch.setattr(systems.shutil, "which", lambda name: None)
+    monkeypatch.setattr(systems.paths, "system_application_dirs", lambda: [apps])
+
+    executable, arguments = systems.find_executable(systems.by_id("gamecube"))
+    assert executable.endswith("org.DolphinEmu.dolphin-emu")
+    assert "%U" not in " ".join(arguments), "field codes must not survive"
+    assert arguments[-2:] == ("-b", "-e")
+
+
+def test_the_emulators_own_config_is_read_for_rom_paths(monkeypatch, tmp_path):
+    """Every setup guide ends with "make this match the emulator".
+
+    If the emulator already knows where the games are, Kairo can read it
+    rather than asking again.
+    """
+    roms = tmp_path / "games"
+    roms.mkdir()
+    (roms / "Some Game.rvz").write_bytes(b"")
+    ini = tmp_path / "Dolphin.ini"
+    ini.write_text("[General]\nISOPath0 = " + str(roms) + "\nISOPaths = 1\n")
+
+    # System is frozen on purpose, so a variant is made rather than mutated.
+    system = replace(systems.by_id("gamecube"), config=str(ini))
+    assert systems.from_emulator_config(system) == [str(roms)]
+    monkeypatch.setattr(systems, "ROM_ROOTS", ())
+    assert systems.find_roms(system) == str(roms)
+
+
+def test_a_configured_path_that_no_longer_exists_is_ignored(tmp_path):
+    ini = tmp_path / "Dolphin.ini"
+    ini.write_text("[General]\nISOPath0 = /gone/for/good\n")
+    system = replace(systems.by_id("gamecube"), config=str(ini))
+    assert systems.from_emulator_config(system) == []
