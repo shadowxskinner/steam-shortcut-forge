@@ -31,6 +31,7 @@ SEARCH_DEBOUNCE_MS = 250
 ACTIVITY_ARTWORK = "artwork"
 ACTIVITY_APPLY = "apply"
 ACTIVITY_SCAN = "scan"
+ACTIVITY_ROWS = "rows"
 
 #: How many rows exist at once. A row is five widgets, so a 2000-game library
 #: built the lot and spent 1.8 seconds and 225MB doing it — every time the
@@ -70,6 +71,8 @@ class LibraryPane(QWidget):
         self.chosen_tile = None
         self._sources: dict[str, str] = {}
         self._streamer = None
+        self._row_streamer = None
+        self._icon_generation = 0
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -444,12 +447,17 @@ class LibraryPane(QWidget):
             if token.cancelled:
                 return
             self.entries = entries
+            # A rescan may replace bytes at the same icon path. Search and
+            # filter changes keep the generation, so stable rows retain their
+            # already painted image; a real scan deliberately refreshes it.
+            self._icon_generation += 1
             self.refilter(auto_select=True)
 
         def scan_failed(message):
             if token.cancelled:
                 return
             self.entries = []
+            self._icon_generation += 1
             self.refilter(auto_select=True)
             self.status.emit(f"{provider.label}: {message}")
 
@@ -498,19 +506,50 @@ class LibraryPane(QWidget):
         return max(1, height // max(1, Q.H_ROW + Q.GAP_ROW) + 4)
 
     def _bind_rows(self, entries) -> None:
-        """Materialise exactly as many rows as are being shown."""
+        """Materialise rows now; decode their icons on one pool worker."""
+        token = self.tokens.start(f"{ACTIVITY_ROWS}:{self.provider.id}")
         while len(self.rows) < len(entries):
             row = EntryRow(self.grid_holder)
             row.clicked.connect(self.select)
             self.rows.append(row)
             self.rows_layout.insertWidget(len(self.rows) - 1, row)
+        pending = []
         for index, entry in enumerate(entries):
             row = self.rows[index]
-            row.bind(entry)
+            needs_icon = row.bind(entry, defer_icon=True,
+                                  icon_generation=self._icon_generation)
+            if needs_icon:
+                pending.append((index, entry.current_icon, entry.key,
+                                self._icon_generation))
             row.set_selected(False)
             row.setVisible(True)
         for row in self.rows[len(entries):]:
             row.setVisible(False)
+        if pending:
+            self._stream_row_icons(pending, token)
+
+    def _stream_row_icons(self, pending, token) -> None:
+        """Prepare a page of row icons without blocking its first paint."""
+        streamer = work.Streamer()
+        streamer.item.connect(self._fill_row_icon)
+        self._row_streamer = streamer
+
+        def pump():
+            for index, path, key, generation in pending:
+                if token.cancelled:
+                    return
+                image = images.prepare(Q.WELL_ROW - 12, path=path)
+                if token.cancelled:
+                    return
+                streamer.item.emit(index, (image, generation), key)
+
+        work.submit(pump)
+
+    def _fill_row_icon(self, index: int, payload: object, key: str) -> None:
+        if not (0 <= index < len(self.rows)):
+            return
+        image, generation = payload
+        self.rows[index].show_prepared_icon(image, key, generation)
 
     def _grow_if_near_bottom(self, value: int) -> None:
         """Add the next page as the end of the built rows comes into view."""
@@ -726,15 +765,24 @@ class LibraryPane(QWidget):
                     return
                 try:
                     data = source.preview(art)
+                    data = images.prepare(Q.TILE - 12, data=data,
+                                          min_edge=MIN_USABLE_EDGE)
                 except Exception:
                     data = None         # say so, rather than leaving a blank
                 if token.cancelled:
                     return
-                streamer.item.emit(index, data, key)
+                # The entry key alone is not enough: changing source or query
+                # keeps the same selected entry. Carry the request token so a
+                # preview already queued by the old tab cannot paint into the
+                # new tab's tiles.
+                streamer.item.emit(index, (data, token), key)
 
         work.submit(pump)
 
-    def _fill_tile(self, index: int, data: object, key: str) -> None:
+    def _fill_tile(self, index: int, payload: object, key: str) -> None:
+        data, token = payload
+        if token.cancelled:
+            return
         if self.selected is None or self.selected.entry.key != key:
             return
         tile = self._tile_at.get(index)
@@ -742,7 +790,7 @@ class LibraryPane(QWidget):
             return
         # data is None when the preview could not be fetched at all. Either
         # way there is nothing to show, and an empty tile is worse than none.
-        if data is None or not images.is_usable_preview(data, MIN_USABLE_EDGE):
+        if data is None:
             self._drop_tile(tile)
             return
         tile.set_image(data)

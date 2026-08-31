@@ -105,11 +105,22 @@ def test_a_folder_row_reports_what_it_actually_matches():
     source = (QT_DIR / "emulator_settings.py").read_text()
     assert "def recount" in source
     recount = source.split("def recount")[1].split("\n    def ")[0]
+    finished = source.split("def _recounted")[1].split("\n    def ")[0]
     assert "no folder" in recount
     # Pluralised in an f-string, so "files" never appears literally.
-    assert "file{" in recount
+    assert "file{" in finished
     assert "rglob" in recount, "the count must come from the filesystem"
     assert "textChanged.connect" in source, "it must update as you type"
+
+
+def test_a_rom_count_never_walks_the_disk_on_the_gui_thread():
+    """A large ROM folder must not freeze after every typed character."""
+    source = (QT_DIR / "emulator_settings.py").read_text()
+    recount = source.split("def recount")[1].split("\n    def ")[0]
+    schedule = source.split("def _schedule_recount")[1].split("\n    def ")[0]
+    assert "_recount_timer.start()" in schedule
+    assert "work.submit(count_files" in recount
+    assert "_recount_serial" in recount, "a stale count must not overwrite a new one"
 
 
 def test_every_folder_field_says_what_it_is():

@@ -8,6 +8,8 @@ destructive behaviour is not wired until the shell has been validated.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
@@ -18,16 +20,44 @@ from kairo.qt.widgets import IconWell
 from kairo.qt import theme as Q
 from kairo.ui import theme as T
 
+# A change row carries two image wells and up to two buttons, so it is notably
+# heavier than a library row. Forty is still several viewports at 900px while
+# keeping the first visit comfortably inside one frame-sized interaction.
+CHANGES_PAGE = 40
+
 
 def previous_icon(record: ChangeRecord):
     """The original icon, resolved - often a bare theme name, not a path."""
     return resolve_icon(record.original_icon) if record.original_icon else None
 
 
+def _file_version(value: str):
+    if not value:
+        return None
+    try:
+        stat = Path(value).stat()
+    except OSError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
+def record_signature(record: ChangeRecord):
+    """Everything that can change how a history row is painted.
+
+    File versions are included because a launcher can be restored or replaced
+    outside Kairo while its ledger record stays unchanged.
+    """
+    return (record.key, record.name, record.action, record.original_icon,
+            record.applied_icon, record.source_id, record.source_label,
+            record.applied_at, record.adopted, _file_version(record.target),
+            _file_version(record.applied_icon))
+
+
 class ChangeRow(QFrame):
     def __init__(self, record: ChangeRecord, parent=None):
         super().__init__(parent)
-        self.record = record
+        self.record = None
+        self._signature = None
         self.setObjectName("row")
         self.setFixedHeight(Q.H_ROW)
 
@@ -35,42 +65,54 @@ class ChangeRow(QFrame):
         layout.setContentsMargins(T.S3, T.S2, T.S4, T.S2)
         layout.setSpacing(T.S3)
 
-        before = IconWell(Q.WELL_ROW, self)
-        before.show_path(previous_icon(record), "—")
+        self.before = IconWell(Q.WELL_ROW, self)
         arrow = QLabel("→")
         arrow.setObjectName("meta")
-        after = IconWell(Q.WELL_ROW, self)
-        after.show_path(record.applied_icon_path, "—")
-        layout.addWidget(before)
+        self.after = IconWell(Q.WELL_ROW, self)
+        layout.addWidget(self.before)
         layout.addWidget(arrow)
-        layout.addWidget(after)
+        layout.addWidget(self.after)
 
         text = QVBoxLayout()
         text.setSpacing(3)
-        name = QLabel(T.ellipsize(record.name, 34))
-        name.setObjectName("rowName")
+        self.name = QLabel("")
+        self.name.setObjectName("rowName")
+        self.meta = QLabel("")
+        self.meta.setObjectName("rowMeta")
+        text.addWidget(self.name)
+        text.addWidget(self.meta)
+        layout.addLayout(text, 1)
+
+        self.undo = QPushButton("")
+        self.undo.setObjectName("secondary")
+        self.undo.setEnabled(False)
+        self.undo.setToolTip("Not wired yet — this milestone is read-only")
+        layout.addWidget(self.undo)
+        self.remove = QPushButton("Remove")
+        self.remove.setObjectName("danger")
+        self.remove.setEnabled(False)
+        self.remove.setToolTip("Not wired yet — this milestone is read-only")
+        layout.addWidget(self.remove)
+        self.bind(record)
+
+    def bind(self, record: ChangeRecord) -> None:
+        signature = record_signature(record)
+        if signature == self._signature:
+            return
+        self._signature = signature
+        self.record = record
+        self.before.show_path(previous_icon(record), "—")
+        self.after.show_path(record.applied_icon_path, "—")
+        self.name.setText(T.ellipsize(record.name, 34))
         source = ("Existing customization" if record.adopted
                   else record.source_label or record.source_id or "a local file")
         allowed, reason = Ledger.restorable(record)
         detail = (f"{source}  ·  {T.format_date(record.applied_at)}"
                   if allowed else reason)
-        meta = QLabel(T.ellipsize(detail, 62))
-        meta.setObjectName("rowMeta")
-        text.addWidget(name)
-        text.addWidget(meta)
-        layout.addLayout(text, 1)
-
-        undo = QPushButton("Reset" if deletes_launcher(record.action) else "Restore")
-        undo.setObjectName("secondary")
-        undo.setEnabled(False)
-        undo.setToolTip("Not wired yet — this milestone is read-only")
-        layout.addWidget(undo)
-        if deletes_launcher(record.action):
-            remove = QPushButton("Remove")
-            remove.setObjectName("danger")
-            remove.setEnabled(False)
-            remove.setToolTip("Not wired yet — this milestone is read-only")
-            layout.addWidget(remove)
+        self.meta.setText(T.ellipsize(detail, 62))
+        created = deletes_launcher(record.action)
+        self.undo.setText("Reset" if created else "Restore")
+        self.remove.setVisible(created)
 
 
 class ChangesPane(QWidget):
@@ -124,11 +166,18 @@ class ChangesPane(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.verticalScrollBar().valueChanged.connect(
+            self._grow_if_near_bottom)
         self.holder = QWidget()
         self.rows = QVBoxLayout(self.holder)
         self.rows.setContentsMargins(0, 0, T.S2, 0)
         self.rows.setSpacing(Q.GAP_ROW)
         self.rows.addStretch(1)
+        self._row_widgets: dict[str, ChangeRow] = {}
+        self._empty = None
+        self._signature = None
+        self._records = []
+        self._shown = 0
         self.scroll.setWidget(self.holder)
         card_layout.addWidget(self.scroll)
         layout.addWidget(card, 1)
@@ -136,23 +185,62 @@ class ChangesPane(QWidget):
         self.refresh()
 
     def refresh(self) -> None:
-        while self.rows.count() > 1:
-            item = self.rows.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
         records = self.ctx.ledger.records()
+        signature = tuple(record_signature(record) for record in records)
+        if signature == self._signature:
+            return
+        self._signature = signature
+        self._records = records
         self.count.setText(f"{len(records)} application(s) customised by Kairo")
+
+        wanted = {record.key for record in records}
+        for key in list(self._row_widgets):
+            if key in wanted:
+                continue
+            widget = self._row_widgets.pop(key)
+            self.rows.removeWidget(widget)
+            widget.setParent(None)
+            widget.deleteLater()
+
         if not records:
-            empty = QLabel("Kairo has not changed anything yet.\n\n"
-                           "Artwork you apply appears here, and you can put "
-                           "any of it back.")
-            empty.setObjectName("empty")
+            self._shown = 0
+            if self._empty is None:
+                self._empty = QLabel("Kairo has not changed anything yet.\n\n"
+                                     "Artwork you apply appears here, and you "
+                                     "can put any of it back.")
+                self._empty.setObjectName("empty")
+                self._empty.setAlignment(Qt.AlignCenter)
+                self.rows.insertWidget(0, self._empty, 1, Qt.AlignCenter)
             # An empty state pinned to the top-left of a large surface reads
             # as a failure to load. Centred, it reads as a state.
-            empty.setAlignment(Qt.AlignCenter)
-            self.rows.insertWidget(0, empty, 1, Qt.AlignCenter)
             return
+
+        if self._empty is not None:
+            self.rows.removeWidget(self._empty)
+            self._empty.setParent(None)
+            self._empty.deleteLater()
+            self._empty = None
+        self._shown = min(len(records), max(CHANGES_PAGE, self._shown))
+        self._bind_records(records[:self._shown])
+
+    def _bind_records(self, records) -> None:
+        for row in self._row_widgets.values():
+            row.setVisible(False)
         for index, record in enumerate(records):
-            self.rows.insertWidget(index, ChangeRow(record, self.holder))
+            row = self._row_widgets.get(record.key)
+            if row is None:
+                row = ChangeRow(record, self.holder)
+                self._row_widgets[record.key] = row
+            else:
+                row.bind(record)
+            self.rows.insertWidget(index, row)
+            row.setVisible(True)
+
+    def _grow_if_near_bottom(self, value: int) -> None:
+        bar = self.scroll.verticalScrollBar()
+        if bar.maximum() - value > Q.H_ROW * 3:
+            return
+        if self._shown >= len(self._records):
+            return
+        self._shown = min(len(self._records), self._shown + CHANGES_PAGE)
+        self._bind_records(self._records[:self._shown])

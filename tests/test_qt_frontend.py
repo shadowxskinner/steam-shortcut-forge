@@ -858,6 +858,42 @@ def test_valid_svg_is_not_rejected_by_its_nominal_canvas_size():
     assert not images.is_usable_preview(b"not an image", MIN_USABLE_EDGE)
 
 
+def test_preview_preparation_is_safe_off_the_gui_thread():
+    """Decode and scaling belong on a worker; only QPixmap painting is GUI work."""
+    from kairo.qt import images
+    from kairo.qt.library import MIN_USABLE_EDGE
+
+    result = []
+    worker = threading.Thread(
+        target=lambda: result.append(
+            images.prepare(116, data=_ico([32, 128, 256]),
+                           min_edge=MIN_USABLE_EDGE)))
+    worker.start()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert result and not result[0].isNull()
+    assert max(result[0].width(), result[0].height()) == 116
+
+
+def test_artwork_is_decoded_before_it_reaches_the_gui_thread():
+    source = (QT_DIR / "library.py").read_text()
+    pump = source.split("def _stream_previews")[1].split("\n    def ")[0]
+    fill = source.split("def _fill_tile")[1].split("\n    def ")[0]
+    assert "images.prepare(" in pump
+    assert "min_edge=MIN_USABLE_EDGE" in pump
+    assert "is_usable_preview" not in fill
+    assert "images.load" not in fill
+
+
+def test_a_queued_preview_cannot_cross_sources_for_the_same_application():
+    """The entry key stays equal when only the artwork tab or query changes."""
+    source = (QT_DIR / "library.py").read_text()
+    pump = source.split("def _stream_previews")[1].split("\n    def ")[0]
+    fill = source.split("def _fill_tile")[1].split("\n    def ")[0]
+    assert "(data, token)" in pump
+    assert "token.cancelled" in fill
+
+
 def test_a_dropped_tile_does_not_leave_a_hole():
     """Removing a widget from a QGridLayout leaves its cell empty."""
     source = (QT_DIR / "library.py").read_text()
@@ -972,6 +1008,27 @@ def test_rows_are_built_in_pages_not_all_at_once():
     assert "self._bind_rows(entries[:self._shown])" in refilter
 
 
+def test_row_icons_do_not_delay_the_first_list_paint():
+    source = (QT_DIR / "library.py").read_text()
+    bind = source.split("def _bind_rows")[1].split("\n    def ")[0]
+    stream = source.split("def _stream_row_icons")[1].split("\n    def ")[0]
+    assert "defer_icon=True" in bind
+    assert "images.prepare(" in stream
+    assert "work.submit(pump)" in stream
+
+
+def test_large_change_histories_are_reused_and_paged():
+    from kairo.qt.changes import CHANGES_PAGE
+
+    source = (QT_DIR / "changes.py").read_text()
+    refresh = source.split("def refresh")[1].split("\n    def ")[0]
+    grow = source.split("def _grow_if_near_bottom")[1].split("\n    def ")[0]
+    assert 0 < CHANGES_PAGE < 200
+    assert "signature == self._signature" in refresh
+    assert "self._row_widgets.get(record.key)" in source
+    assert "self._shown + CHANGES_PAGE" in grow
+
+
 def test_reaching_the_bottom_brings_the_next_page():
     """Paging must not put entries out of reach."""
     source = (QT_DIR / "library.py").read_text()
@@ -1011,3 +1068,56 @@ def test_the_icon_is_found_from_a_checkout_too():
     source = (QT_DIR / "branding.py").read_text()
     assert "QIcon.fromTheme(APP_ID)" in source
     assert "_repository_icons" in source
+
+
+def test_a_row_keeps_asking_until_its_icon_actually_arrives():
+    """Growing the page cancels the pump feeding the previous page.
+
+    Rows are bound once and their identity recorded, so asking only "did the
+    identity change" left every row whose icon was still decoding stuck on a
+    placeholder letter for good. Scrolling a 214-entry list stranded 106 of
+    them. The question has to be "is one still needed", not "is one new".
+    """
+    source = (QT_DIR / "widgets.py").read_text()
+    bind = source.split("def bind(")[1].split("\n    def ")[0]
+    assert "not self._icon_ready" in bind, "a row must re-ask while unpainted"
+
+    delivered = source.split("def show_prepared_icon")[1].split("\n    def ")[0]
+    assert "self._icon_ready = True" in delivered, "delivery must clear the need"
+
+
+def test_a_prepared_icon_is_matched_on_key_and_generation():
+    """An entry key alone is reused across rescans and page rebuilds."""
+    source = (QT_DIR / "widgets.py").read_text()
+    delivered = source.split("def show_prepared_icon")[1].split("\n    def ")[0]
+    assert "self.entry.key != key" in delivered
+    assert "_icon_identity[2] != generation" in delivered
+
+
+def test_a_preview_carries_the_token_that_asked_for_it():
+    """Switching artwork source or query keeps the same entry key.
+
+    Guarding on the key alone let a preview queued by the previous source
+    paint into the new source's tiles.
+    """
+    source = (QT_DIR / "library.py").read_text()
+    fill = source.split("def _fill_tile")[1].split("\n    def ")[0]
+    assert "data, token = payload" in fill
+    assert "token.cancelled" in fill
+    stream = source.split("def _stream_previews")[1].split("\n    def ")[0]
+    assert "(data, token)" in stream
+
+
+def test_pixmaps_are_never_built_off_the_gui_thread():
+    """QImage is thread-safe to build; QPixmap is not."""
+    import re
+
+    worker_side = (QT_DIR / "images.py").read_text()
+    prepare = worker_side.split("def prepare(")[1].split("\ndef ")[0]
+    assert "QPixmap" not in prepare, "prepare() runs on a worker"
+
+    library = (QT_DIR / "library.py").read_text()
+    for body in (library.split("def pump()")[1].split("\n        work.submit")[0]
+                 for _ in range(1)):
+        assert "QPixmap" not in body
+    assert not re.search(r"work\.submit\([^)]*images\.load", library)

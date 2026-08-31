@@ -13,13 +13,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QFrame,
                                QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPushButton, QScrollArea, QVBoxLayout, QWidget)
 
 from kairo import emulators as emu
 from kairo import systems
+from kairo.qt import work
 from kairo.qt import theme as Q
 from kairo.ui import theme as T
 
@@ -69,6 +70,11 @@ class FolderRow(QFrame):
         # both look fine until something says "no files".
         self.matched = QLabel("")
         self.matched.setObjectName("meta")
+        self._recount_serial = 0
+        self._recount_timer = QTimer(self)
+        self._recount_timer.setSingleShot(True)
+        self._recount_timer.setInterval(200)
+        self._recount_timer.timeout.connect(self.recount)
 
         bottom = QHBoxLayout()
         bottom.setSpacing(T.S2)
@@ -82,12 +88,18 @@ class FolderRow(QFrame):
         outer.addLayout(bottom)
 
         self.path.textChanged.connect(lambda text: self._path_changed(text))
-        self.extensions.textChanged.connect(lambda _t: self.recount())
+        self.extensions.textChanged.connect(lambda _t: self._schedule_recount())
         self._path_changed(folder.path)
 
     def _path_changed(self, text: str) -> None:
         self.path.setToolTip(text)
-        self.recount()
+        self._schedule_recount()
+
+    def _schedule_recount(self) -> None:
+        # Invalidate an in-flight count immediately, but wait until the user
+        # pauses before walking a potentially huge disk tree again.
+        self._recount_serial += 1
+        self._recount_timer.start()
 
     def _browse(self) -> None:
         start = self.path.text().strip() or str(Path.home())
@@ -96,6 +108,9 @@ class FolderRow(QFrame):
             self.path.setText(chosen)
 
     def recount(self) -> None:
+        self._recount_timer.stop()
+        self._recount_serial += 1
+        serial = self._recount_serial
         folder = self.value()
         if not folder.path:
             self.matched.setText("")
@@ -107,10 +122,23 @@ class FolderRow(QFrame):
         if not folder.extensions:
             self.matched.setText("no types")
             return
-        try:
-            count = sum(1 for p in root.rglob("*")
-                        if folder.matches(p.name) and p.is_file())
-        except OSError:
+        self.matched.setText("Counting…")
+
+        def count_files():
+            try:
+                count = sum(1 for p in root.rglob("*")
+                            if folder.matches(p.name) and p.is_file())
+            except OSError:
+                count = None
+            return serial, count
+
+        work.submit(count_files, on_done=self._recounted)
+
+    def _recounted(self, result) -> None:
+        serial, count = result
+        if serial != self._recount_serial:
+            return
+        if count is None:
             self.matched.setText("unreadable")
             return
         self.matched.setText(f"{count} file{'' if count == 1 else 's'}")

@@ -9,7 +9,7 @@ drawn rather than shipped.
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel,
                                QPushButton, QVBoxLayout, QWidget)
 
@@ -169,6 +169,14 @@ class IconWell(QFrame):
         self.label.setText("")
         self.label.setPixmap(pixmap)
 
+    def show_image(self, image: QImage | None, placeholder: str = "?") -> None:
+        """Paint an image that was already decoded away from the GUI thread."""
+        if image is None or image.isNull():
+            self.show_placeholder(placeholder)
+            return
+        self.label.setText("")
+        self.label.setPixmap(QPixmap.fromImage(image))
+
 
 # ---------------------------------------------------------------------------
 # Pills
@@ -257,6 +265,7 @@ class EntryRow(QFrame):
         super().__init__(parent)
         self.entry = None
         self._selected = False
+        self._icon_ready = False
         self.setObjectName("row")
         self.setFixedHeight(Q.H_ROW)
         self.setCursor(Qt.PointingHandCursor)
@@ -283,15 +292,50 @@ class EntryRow(QFrame):
         self.dot.setObjectName("dot")
         layout.addWidget(self.dot, 0, Qt.AlignVCenter)
 
-    def bind(self, entry) -> None:
+    def bind(self, entry, *, defer_icon: bool = False,
+             icon_generation: int = 0) -> bool:
+        """Bind text immediately and optionally leave icon work to a worker.
+
+        The return value tells the pane that this row needs an icon prepared.
+        Stable rows keep their current pixmap across searches and filtering,
+        avoiding both a flash and unnecessary decoding.
+        """
+        identity = (entry.key, str(entry.current_icon or ""), icon_generation)
+        icon_changed = identity != getattr(self, "_icon_identity", None)
+        if icon_changed:
+            # A new identity has nothing painted for it yet.
+            self._icon_ready = False
+        self._icon_identity = identity
         self.entry = entry
         self.name.setText(T.ellipsize(entry.name, Q.LIST_NAME_CHARS))
         self.meta.setText(T.ellipsize(entry.subtitle or entry.local_id, Q.LIST_META_CHARS))
         self.dot.setText("•" if entry.customized else "")
         # A ring inside a rounded square reads as a broken image. The
         # initial reads as a placeholder, the way a contacts list does.
-        self.well.show_path(entry.current_icon,
-                            (entry.name or "?").strip()[:1].upper())
+        placeholder = (entry.name or "?").strip()[:1].upper()
+        if not defer_icon:
+            if icon_changed:
+                self.well.show_path(entry.current_icon, placeholder)
+                self._icon_ready = True
+            return False
+        if icon_changed:
+            self.well.show_placeholder(placeholder)
+        # Ask again for anything still unpainted, not merely for what just
+        # changed. Growing the page starts a new rows token and cancels the
+        # pump feeding the previous page, so rows whose icon never arrived
+        # would otherwise keep their placeholder letter forever.
+        return bool(entry.current_icon) and not self._icon_ready
+
+    def show_prepared_icon(self, image: QImage | None, key: str,
+                           generation: int) -> None:
+        if self.entry is None or self.entry.key != key:
+            return
+        if self._icon_identity[2] != generation:
+            return
+        placeholder = (self.entry.name or "?").strip()[:1].upper()
+        self.well.show_image(image, placeholder)
+        # Delivered: this row no longer needs to be queued by a later page.
+        self._icon_ready = True
 
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
@@ -341,8 +385,8 @@ class ArtworkTile(QFrame):
         self.caption.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.caption)
 
-    def set_image(self, data: bytes) -> None:
-        self.well.show_data(data)
+    def set_image(self, image: QImage) -> None:
+        self.well.show_image(image)
 
     def set_chosen(self, chosen: bool) -> None:
         self._chosen = chosen

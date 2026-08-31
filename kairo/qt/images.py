@@ -1,19 +1,21 @@
-"""Turning icon files and bytes into pixmaps, once each.
+"""Turning icon files and bytes into images, once each.
 
 Qt renders SVG through its own plugin, so the Qt frontend has no need of
-cairosvg. Results are cached by source and size for the same reason the Tk
-build cached them: browsing a library re-selects the same icons constantly and
+cairosvg. Worker-safe QImages do the expensive decoding and scaling; the GUI
+thread only turns the finished result into a QPixmap. Both are cached by source
+and size because browsing a library re-selects the same icons constantly and
 nothing is gained by decoding them again.
 """
 
 from __future__ import annotations
 
 import hashlib
+import threading
 from collections import OrderedDict
 from pathlib import Path
 
 from PySide6.QtCore import QBuffer, QByteArray, Qt
-from PySide6.QtGui import QImageReader, QPixmap
+from PySide6.QtGui import QImage, QImageReader, QPixmap
 
 try:
     from PySide6.QtSvg import QSvgRenderer
@@ -22,10 +24,14 @@ except ImportError:                                     # pragma: no cover
 
 CACHE_LIMIT = 256
 _CACHE: "OrderedDict[tuple, QPixmap]" = OrderedDict()
+_IMAGE_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
+_IMAGE_CACHE_LOCK = threading.RLock()
 
 
 def clear_cache() -> None:
     _CACHE.clear()
+    with _IMAGE_CACHE_LOCK:
+        _IMAGE_CACHE.clear()
 
 
 def _looks_svg(data: bytes) -> bool:
@@ -33,7 +39,7 @@ def _looks_svg(data: bytes) -> bool:
     return head.startswith((b"<svg", b"<?xml"))
 
 
-def _render_svg(data: bytes, size: int):
+def _render_svg_image(data: bytes, size: int):
     if QSvgRenderer is None:
         return None
     from PySide6.QtGui import QPainter
@@ -41,12 +47,12 @@ def _render_svg(data: bytes, size: int):
     renderer = QSvgRenderer(data)
     if not renderer.isValid():
         return None
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.transparent)
-    painter = QPainter(pixmap)
+    image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    painter = QPainter(image)
     renderer.render(painter)
     painter.end()
-    return pixmap
+    return image
 
 
 def _largest_frame(data: bytes):
@@ -106,18 +112,18 @@ def is_usable_preview(data: bytes, min_edge: int) -> bool:
     return native_edge(data) >= min_edge
 
 
-def _from_data(data: bytes):
+def _image_from_data(data: bytes):
+    """Decode without creating a GUI-only QPixmap.
+
+    QImage is safe to build on a worker thread; QPixmap is tied to the GUI
+    platform. Keeping that boundary here lets artwork and application icons
+    do their expensive parsing and scaling without stopping interaction.
+    """
     frame = _largest_frame(data)
     if frame is not None and not frame.isNull():
-        return QPixmap.fromImage(frame)
-    loaded = QPixmap()                  # a format QImageReader would not walk
+        return frame
+    loaded = QImage()
     return loaded if loaded.loadFromData(data) else None
-
-
-def _scale(pixmap, size: int):
-    if pixmap is None or pixmap.isNull():
-        return None
-    return pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
 
 def _key(size: int, path, data):
@@ -132,6 +138,57 @@ def _key(size: int, path, data):
     return None
 
 
+def prepare(size: int, *, path=None, data: bytes | None = None,
+            min_edge: int = 0):
+    """Decode and fit an image as a worker-safe :class:`QImage`.
+
+    Raster previews can enforce a native-pixel floor before they are scaled;
+    SVG remains resolution-independent. Results use a separate, locked cache
+    because preview and row workers can run concurrently.
+    """
+    key = _key(size, path, data)
+    prepared_key = (*key, min_edge) if key is not None else None
+    if prepared_key is not None:
+        with _IMAGE_CACHE_LOCK:
+            cached = _IMAGE_CACHE.get(prepared_key)
+            if cached is not None:
+                _IMAGE_CACHE.move_to_end(prepared_key)
+                return cached
+
+    try:
+        if data is None and path is not None:
+            source = Path(path)
+            if not source.is_file():
+                return None
+            data = source.read_bytes()
+        if data is None:
+            return None
+
+        if _looks_svg(data):
+            image = _render_svg_image(data, size)
+        else:
+            image = _image_from_data(data)
+            if image is not None and min_edge:
+                if min(image.width(), image.height()) < min_edge:
+                    return None
+            if image is not None and not image.isNull():
+                image = image.scaled(size, size, Qt.KeepAspectRatio,
+                                     Qt.SmoothTransformation)
+    except Exception:
+        return None
+
+    if image is None or image.isNull():
+        return None
+
+    if prepared_key is not None:
+        with _IMAGE_CACHE_LOCK:
+            _IMAGE_CACHE[prepared_key] = image
+            _IMAGE_CACHE.move_to_end(prepared_key)
+            while len(_IMAGE_CACHE) > CACHE_LIMIT:
+                _IMAGE_CACHE.popitem(last=False)
+    return image
+
+
 def load(size: int, *, path=None, data: bytes | None = None):
     """A pixmap fitted to ``size``, or None if it cannot be decoded."""
     key = _key(size, path, data)
@@ -139,23 +196,8 @@ def load(size: int, *, path=None, data: bytes | None = None):
         _CACHE.move_to_end(key)
         return _CACHE[key]
 
-    pixmap = None
-    try:
-        if data is None and path is not None:
-            path = Path(path)
-            if not path.is_file():
-                return None
-            if path.suffix.lower() == ".svg":
-                pixmap = _render_svg(path.read_bytes(), size)
-            else:
-                pixmap = _scale(_from_data(path.read_bytes()), size)
-        elif data is not None:
-            if _looks_svg(data):
-                pixmap = _render_svg(data, size)
-            else:
-                pixmap = _scale(_from_data(data), size)
-    except Exception:
-        return None
+    image = prepare(size, path=path, data=data)
+    pixmap = QPixmap.fromImage(image) if image is not None else None
 
     if pixmap is None or pixmap.isNull():
         return None
