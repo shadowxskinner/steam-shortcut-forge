@@ -88,6 +88,24 @@ def native_edge(data: bytes) -> int:
     return min(frame.width(), frame.height())
 
 
+def is_usable_preview(data: bytes, min_edge: int) -> bool:
+    """Whether an artwork preview can be rendered cleanly at ``min_edge``.
+
+    Raster artwork must contain enough real pixels to avoid enlarging a tiny
+    thumbnail into a blurry tile. SVG is resolution independent, however, so
+    its nominal canvas size is not a useful quality limit: a valid 48px SVG
+    remains sharp when Qt renders it at the tile size.
+    """
+    if _looks_svg(data):
+        if QSvgRenderer is None:
+            return False
+        try:
+            return QSvgRenderer(data).isValid()
+        except Exception:
+            return False
+    return native_edge(data) >= min_edge
+
+
 def _from_data(data: bytes):
     frame = _largest_frame(data)
     if frame is not None and not frame.isNull():

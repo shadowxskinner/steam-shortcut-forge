@@ -195,9 +195,19 @@ class Pills(QWidget):
         self.set_values(list(values or []))
 
     def set_values(self, values) -> None:
+        # Source/filter refreshes commonly repeat the same choices. Preserve
+        # the existing controls in that case so they neither flash nor briefly
+        # lose their checked state while deleteLater waits for the event loop.
+        values = list(dict.fromkeys(values))
         current = self.value()
+        if values == list(self._buttons):
+            self.setVisible(bool(values))
+            return
+
         for button in self._buttons.values():
             self._group.removeButton(button)
+            self._layout.removeWidget(button)
+            button.setParent(None)
             button.deleteLater()
         self._buttons.clear()
 

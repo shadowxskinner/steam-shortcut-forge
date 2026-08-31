@@ -39,10 +39,9 @@ ACTIVITY_SCAN = "scan"
 #: is on screen rather than to the size of the library.
 ROW_PAGE = 120
 
-#: Nothing below this ever fills a tile without being enlarged, so it is not
-#: offered. The source filters on the dimensions the API reports; this is the
-#: same floor applied to the frame that actually decoded, which is the only
-#: measurement that cannot be wrong.
+#: Raster artwork below this never fills a tile without being enlarged, so it
+#: is not offered. Scalable SVG artwork is judged by whether Qt can render it,
+#: not by its nominal canvas size.
 MIN_USABLE_EDGE = 128
 
 
@@ -70,7 +69,6 @@ class LibraryPane(QWidget):
         self._tile_at: dict[int, ArtworkTile] = {}
         self.chosen_tile = None
         self._sources: dict[str, str] = {}
-        self._probe_cache: dict[tuple, bool] = {}
         self._streamer = None
 
         layout = QHBoxLayout(self)
@@ -430,8 +428,11 @@ class LibraryPane(QWidget):
         while one is already running discards the older result rather than
         letting two land in either order.
         """
-        token = self.tokens.start(ACTIVITY_SCAN)
         provider = self.provider
+        # Every provider pane shares the application's ActivityTokens. A
+        # provider-specific name lets the shell rescan all panes together;
+        # the old global "scan" token cancelled every scan except the last.
+        token = self.tokens.start(f"{ACTIVITY_SCAN}:{provider.id}")
 
         def run():
             return provider.scan() if provider.available() else []
@@ -443,14 +444,12 @@ class LibraryPane(QWidget):
             if token.cancelled:
                 return
             self.entries = entries
-            self._probe_cache.clear()
             self.refilter(auto_select=True)
 
         def scan_failed(message):
             if token.cancelled:
                 return
             self.entries = []
-            self._probe_cache.clear()
             self.refilter(auto_select=True)
             self.status.emit(f"{provider.label}: {message}")
 
@@ -585,62 +584,16 @@ class LibraryPane(QWidget):
         return self.ctx.sources.get(self._sources.get(self.source_pills.value(), ""))
 
     def _refresh_sources(self) -> None:
-        """Offer only sources that can help the selected entry.
+        """Keep every configured, browsable source available.
 
-        A source is hidden once it has been asked and had nothing. Never
-        because it has not been asked yet, and never because a lookup failed:
-        being briefly unreachable is not evidence of having nothing.
+        An empty result describes one query, not the whole source. Hiding that
+        source made its tab disappear before the user could correct a title or
+        try a broader search.
         """
-        entry = self.selected.entry if self.selected else None
         available = self.ctx.sources.browsable_for(self.provider.id,
                                                    self.ctx.config)
-        if entry is None:
-            self._sources = {s.label: s.id for s in available}
-            self.source_pills.set_values(list(self._sources))
-            return
-
-        usable = [s for s in available
-                  if self._probe_cache.get((entry.key, s.id)) is not False]
-        before = self.source_pills.value()
-        self._sources = {s.label: s.id for s in usable}
+        self._sources = {s.label: s.id for s in available}
         self.source_pills.set_values(list(self._sources))
-
-        unasked = [s for s in available
-                   if (entry.key, s.id) not in self._probe_cache
-                   and s.id != self._sources.get(self.source_pills.value())]
-        if unasked:
-            self._probe_sources(entry, unasked)
-
-        if before and before != self.source_pills.value() and self.selected:
-            self._seed_query()
-            self._load_artwork()
-
-    def _probe_sources(self, entry, sources) -> None:
-        """Ask each source in the background whether it has anything at all."""
-        query = self.provider.artwork_query(entry)
-        key = entry.key
-
-        def ask():
-            answers = []
-            for source in sources:
-                try:
-                    answers.append((source.id, bool(source.probe(query))))
-                except Exception:
-                    # Unreachable is not empty. Leave it visible.
-                    answers.append((source.id, True))
-            return answers
-
-        def arrived(answers):
-            changed = False
-            for source_id, has_results in answers:
-                if self._probe_cache.get((key, source_id)) != has_results:
-                    self._probe_cache[(key, source_id)] = has_results
-                    changed = not has_results or changed
-            if changed and self.selected is not None \
-                    and self.selected.entry.key == key:
-                self._refresh_sources()
-
-        work.submit(ask, on_done=arrived, on_failed=lambda _m: None)
 
     def _seed_query(self) -> None:
         source = self.source()
@@ -688,6 +641,9 @@ class LibraryPane(QWidget):
 
     def _load_artwork(self) -> None:
         self._clear_grid()
+        # Starting the token before the early exits also cancels an older
+        # in-flight search when the selection or source becomes unavailable.
+        token = self.tokens.start(ACTIVITY_ARTWORK)
         if self.selected is None:
             return
         entry = self.selected.entry
@@ -705,7 +661,6 @@ class LibraryPane(QWidget):
             query = query.with_text(text)
 
         self._grid_note(f"Looking for artwork in {source.label}…")
-        token = self.tokens.start(ACTIVITY_ARTWORK)
         key = entry.key
 
         def search():
@@ -718,19 +673,18 @@ class LibraryPane(QWidget):
                 return
             self._clear_grid()
             if not results:
-                self._probe_cache[(key, source.id)] = False
-                self._grid_note(f"{source.label} has nothing for {entry.name}.")
-                self._refresh_sources()
+                self._grid_note(
+                    f"{source.label} has nothing for {entry.name}.\n"
+                    "Try a different search.")
                 return
-            self._probe_cache[(key, source.id)] = True
             self.subtitle.setText(
                 f"{entry.subtitle}  ·  {len(results)} from {source.label}")
             self._build_tiles(results)
             self._stream_previews(source, results, token, key)
 
         def failed(message):
-            # Deliberately does not touch the probe cache: a source that failed
-            # once has not told us it has nothing.
+            # A temporary failure leaves the source available so the user can
+            # retry without losing the tab they were using.
             if not token.cancelled:
                 self._clear_grid()
                 self._grid_note(f"Could not load artwork: {message}")
@@ -788,7 +742,7 @@ class LibraryPane(QWidget):
             return
         # data is None when the preview could not be fetched at all. Either
         # way there is nothing to show, and an empty tile is worse than none.
-        if data is None or images.native_edge(data) < MIN_USABLE_EDGE:
+        if data is None or not images.is_usable_preview(data, MIN_USABLE_EDGE):
             self._drop_tile(tile)
             return
         tile.set_image(data)

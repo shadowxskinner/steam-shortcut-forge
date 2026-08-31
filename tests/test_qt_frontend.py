@@ -223,23 +223,14 @@ def test_the_backend_still_disagrees_about_the_two_verbs(fake_home):
     assert override.supports_remove is False
 
 
-def test_a_failed_lookup_does_not_hide_a_source():
-    """Being briefly unreachable is not evidence of having nothing."""
+def test_artwork_sources_stay_available_after_empty_or_failed_searches():
+    """One poor query must not make its source tab disappear."""
     source = (QT_DIR / "library.py").read_text()
-    failed = source.split("def failed(message):")[1].split("def ")[0]
-    assert "_probe_cache" not in failed, "a failure must not mark a source empty"
-
-
-def test_a_probe_error_leaves_the_source_visible():
-    source = (QT_DIR / "library.py").read_text()
-    ask = source.split("def ask():")[1].split("def arrived")[0]
-    assert "except Exception:" in ask
-    assert "True" in ask, "an unreachable source must stay visible"
-
-
-def test_an_empty_result_does_hide_the_source():
-    source = (QT_DIR / "library.py").read_text()
-    assert "self._probe_cache[(key, source.id)] = False" in source
+    assert "_probe_cache" not in source
+    assert "_probe_sources" not in source
+    empty = source.split("if not results:")[1].split("return", 1)[0]
+    assert "Try a different search" in empty
+    assert "_refresh_sources" not in empty
 
 
 def test_choosing_artwork_only_proposes_it():
@@ -842,6 +833,20 @@ def test_the_floor_is_applied_to_the_frame_that_decoded():
     assert images.native_edge(b"not an image") == 0
 
 
+def test_valid_svg_is_not_rejected_by_its_nominal_canvas_size():
+    """Theme icons are scalable even when their SVG says 48 by 48."""
+    from kairo.qt import images
+    from kairo.qt.library import MIN_USABLE_EDGE
+
+    svg = (b'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" '
+           b'viewBox="0 0 48 48"><rect width="48" height="48"/></svg>')
+    assert images.native_edge(svg) < MIN_USABLE_EDGE
+    assert images.is_usable_preview(svg, MIN_USABLE_EDGE)
+    assert not images.is_usable_preview(_ico([16, 32, 64]), MIN_USABLE_EDGE)
+    assert images.is_usable_preview(_ico([16, 32, 256]), MIN_USABLE_EDGE)
+    assert not images.is_usable_preview(b"not an image", MIN_USABLE_EDGE)
+
+
 def test_a_dropped_tile_does_not_leave_a_hole():
     """Removing a widget from a QGridLayout leaves its cell empty."""
     source = (QT_DIR / "library.py").read_text()
@@ -926,9 +931,19 @@ def test_scanning_a_library_does_not_block_the_window():
     source = (QT_DIR / "library.py").read_text()
     rescan = source.split("def rescan")[1].split("\n    def ")[0]
     assert "work.submit(" in rescan
-    assert "self.tokens.start(ACTIVITY_SCAN)" in rescan
+    assert 'self.tokens.start(f"{ACTIVITY_SCAN}:{provider.id}")' in rescan
+    assert "self.tokens.start(ACTIVITY_SCAN)" not in rescan
     assert "provider.scan()" in rescan
     assert "token.cancelled" in rescan, "a stale scan must not overwrite a new one"
+
+
+def test_unchanged_pills_are_not_destroyed_and_recreated():
+    """Refreshing stable tabs must not make them flash or lose selection."""
+    source = (QT_DIR / "widgets.py").read_text()
+    body = source.split("def set_values(self, values)")[1].split("\n    def ")[0]
+    assert "values == list(self._buttons)" in body
+    assert "self._layout.removeWidget(button)" in body
+    assert "button.setParent(None)" in body
 
 
 def test_rows_are_built_in_pages_not_all_at_once():

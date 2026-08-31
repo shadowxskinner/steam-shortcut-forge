@@ -56,6 +56,7 @@ def test_a_flatpak_is_invoked_through_flatpak_run(monkeypatch):
     system = systems.by_id("gamecube")
     monkeypatch.setattr(systems.shutil, "which",
                         lambda name: "/usr/bin/flatpak" if name == "flatpak" else None)
+    monkeypatch.setattr(systems, "from_desktop_entry", lambda _system: ("", ()))
     monkeypatch.setattr(systems, "_flatpak_installed", lambda app_id: True)
     executable, arguments = systems.find_executable(system)
     assert executable.endswith("flatpak")
@@ -87,6 +88,7 @@ def test_an_empty_folder_is_not_offered(monkeypatch, tmp_path):
 def test_detection_puts_what_is_installed_first(monkeypatch):
     monkeypatch.setattr(systems.shutil, "which",
                         lambda name: "/usr/bin/pcsx2-qt" if name == "pcsx2-qt" else None)
+    monkeypatch.setattr(systems, "from_desktop_entry", lambda _system: ("", ()))
     monkeypatch.setattr(systems, "_flatpak_installed", lambda app_id: False)
     monkeypatch.setattr(systems, "find_roms", lambda system: "")
     found = systems.detect()
