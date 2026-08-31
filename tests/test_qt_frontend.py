@@ -858,6 +858,42 @@ def test_valid_svg_is_not_rejected_by_its_nominal_canvas_size():
     assert not images.is_usable_preview(b"not an image", MIN_USABLE_EDGE)
 
 
+def test_preview_preparation_is_safe_off_the_gui_thread():
+    """Decode and scaling belong on a worker; only QPixmap painting is GUI work."""
+    from kairo.qt import images
+    from kairo.qt.library import MIN_USABLE_EDGE
+
+    result = []
+    worker = threading.Thread(
+        target=lambda: result.append(
+            images.prepare(116, data=_ico([32, 128, 256]),
+                           min_edge=MIN_USABLE_EDGE)))
+    worker.start()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert result and not result[0].isNull()
+    assert max(result[0].width(), result[0].height()) == 116
+
+
+def test_artwork_is_decoded_before_it_reaches_the_gui_thread():
+    source = (QT_DIR / "library.py").read_text()
+    pump = source.split("def _stream_previews")[1].split("\n    def ")[0]
+    fill = source.split("def _fill_tile")[1].split("\n    def ")[0]
+    assert "images.prepare(" in pump
+    assert "min_edge=MIN_USABLE_EDGE" in pump
+    assert "is_usable_preview" not in fill
+    assert "images.load" not in fill
+
+
+def test_a_queued_preview_cannot_cross_sources_for_the_same_application():
+    """The entry key stays equal when only the artwork tab or query changes."""
+    source = (QT_DIR / "library.py").read_text()
+    pump = source.split("def _stream_previews")[1].split("\n    def ")[0]
+    fill = source.split("def _fill_tile")[1].split("\n    def ")[0]
+    assert "(data, token)" in pump
+    assert "token.cancelled" in fill
+
+
 def test_a_dropped_tile_does_not_leave_a_hole():
     """Removing a widget from a QGridLayout leaves its cell empty."""
     source = (QT_DIR / "library.py").read_text()
@@ -970,6 +1006,27 @@ def test_rows_are_built_in_pages_not_all_at_once():
     refilter = source.split("def refilter")[1].split("\n    def ")[0]
     assert "self._shown = min(" in refilter
     assert "self._bind_rows(entries[:self._shown])" in refilter
+
+
+def test_row_icons_do_not_delay_the_first_list_paint():
+    source = (QT_DIR / "library.py").read_text()
+    bind = source.split("def _bind_rows")[1].split("\n    def ")[0]
+    stream = source.split("def _stream_row_icons")[1].split("\n    def ")[0]
+    assert "defer_icon=True" in bind
+    assert "images.prepare(" in stream
+    assert "work.submit(pump)" in stream
+
+
+def test_large_change_histories_are_reused_and_paged():
+    from kairo.qt.changes import CHANGES_PAGE
+
+    source = (QT_DIR / "changes.py").read_text()
+    refresh = source.split("def refresh")[1].split("\n    def ")[0]
+    grow = source.split("def _grow_if_near_bottom")[1].split("\n    def ")[0]
+    assert 0 < CHANGES_PAGE < 200
+    assert "signature == self._signature" in refresh
+    assert "self._row_widgets.get(record.key)" in source
+    assert "self._shown + CHANGES_PAGE" in grow
 
 
 def test_reaching_the_bottom_brings_the_next_page():
