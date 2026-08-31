@@ -42,9 +42,13 @@ class FolderRow(QWidget):
 
         self.path = _field("ROM folder", folder.path)
         self.extensions = _field(".iso .rvz", " ".join(folder.extensions))
-        self.extensions.setFixedWidth(Q.W_QUERY)
+        self.extensions.setFixedWidth(Q.W_LABEL * 3)
         self.system = _field("System (optional)", folder.system)
         self.system.setFixedWidth(Q.W_LABEL * 2)
+        # The full path rarely fits, so the box says what it holds on hover
+        # and keeps the informative end of the path in view.
+        self.path.setToolTip(folder.path)
+        self.path.textChanged.connect(lambda text: self.path.setToolTip(text))
 
         # Labelled, not an icon: the secondary style carries 16px of side
         # padding, so a square button has no room for its own text and Qt
@@ -217,7 +221,7 @@ class EmulatorDialog(QDialog):
     def __init__(self, emulator: emu.Emulator | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Emulator")
-        self.setMinimumWidth(760)
+        self.setMinimumWidth(900)
         # Without this the dialog takes the system palette, so it is dark on
         # a dark desktop theme and light on a light one while the window
         # behind it stays Kairo's own colour either way.
@@ -267,7 +271,7 @@ class EmulatorDialog(QDialog):
         # path ends up typed into the arguments field instead.
         header = QHBoxLayout()
         header.setSpacing(T.S2)
-        for caption, width in (("Folder", 0), ("File types", Q.W_QUERY),
+        for caption, width in (("Folder", 0), ("File types", Q.W_LABEL * 3),
                                ("System", Q.W_LABEL * 2), ("Matches", Q.W_LABEL)):
             box = QLabel(caption)
             box.setObjectName("micro")
