@@ -157,11 +157,22 @@ def test_a_translucent_surface_is_never_painted_twice():
     assert not offenders, offenders
 
 
-def test_the_mark_is_set_larger_than_the_wordmark():
-    """回路 is half the logotype, not a footnote to it."""
+
+
+def test_the_logotype_is_the_mark_and_the_wordmark():
+    """回路 was the second half of it and is now the mark itself.
+
+    Three elements in a sidebar built around one per row made the header the
+    busiest thing on screen, and typesetting CJK also meant depending on a
+    font the machine might not have.
+    """
+    from pathlib import Path
+
     from kairo.qt import theme as Q
 
-    assert Q.FS_LOGO_MARK > Q.FS_LOGO
-    sheet = Q.stylesheet("frosted")
-    block = sheet.split("QLabel#logoSub")[1].split("}")[0]
-    assert f"font-size: {Q.FS_LOGO_MARK}px" in block
+    shell = (Path(__file__).resolve().parent.parent / "kairo" / "qt"
+             / "shell.py").read_text()
+    assert "回路" not in shell.split('"""')[-1] or "logoSub" not in shell
+    assert "logoSub" not in Q.stylesheet("frosted")
+    assert "branding.mark(Q.MARK_SIZE)" in shell
+    assert Q.MARK_SIZE > 0

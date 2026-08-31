@@ -1,5 +1,6 @@
 # Maintainer: Shadow Skinner <shadowxskinner@gmail.com>
 pkgname=kairo
+_appid=io.github.shadowxskinner.Kairo
 pkgver=2.3.2
 pkgrel=1
 pkgdesc="Automatic launcher artwork for Linux"
@@ -51,8 +52,10 @@ package() {
     install -Dm644 io.github.shadowxskinner.Kairo.desktop \
         "$pkgdir/usr/share/applications/io.github.shadowxskinner.Kairo.desktop"
 
-    install -Dm644 icons/io.github.shadowxskinner.Kairo.svg \
-        "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.shadowxskinner.Kairo.svg"
+    for _size in 512 256 128 64 48 32 24 16; do
+        install -Dm644 "icons/hicolor/${_size}x${_size}/apps/$_appid.png" \
+            "$pkgdir/usr/share/icons/hicolor/${_size}x${_size}/apps/$_appid.png"
+    done
 
     install -Dm644 LICENSE \
         "$pkgdir/usr/share/licenses/$pkgname/LICENSE"

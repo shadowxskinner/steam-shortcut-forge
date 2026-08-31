@@ -920,18 +920,6 @@ def test_a_system_wide_install_counts_too():
     assert "XDG_DATA_HOME" in source
 
 
-def test_the_mark_is_not_drawn_without_the_glyphs_to_draw_it():
-    """A machine can carry the whole Noto family and still lack CJK.
-
-    Rendering 回路 there produces two tofu boxes, which reads as a bug rather
-    than a logotype.
-    """
-    source = (QT_DIR / "shell.py").read_text()
-    assert "def _can_render" in source
-    assert "inFont" in source
-    nav = source.split("def _build_nav")[1].split("\n    def ")[0]
-    assert "if _can_render(MARK)" in nav, "the mark must be conditional"
-
 
 def test_scanning_a_library_does_not_block_the_window():
     """A ROM folder can be thousands of files on a spinning disk."""
@@ -979,3 +967,21 @@ def test_growing_the_page_keeps_the_selection():
     source = (QT_DIR / "library.py").read_text()
     grow = source.split("def _grow_if_near_bottom")[1].split("\n    def ")[0]
     assert "self.selected" in grow, "scrolling must not drop the selection"
+
+
+def test_the_application_has_an_icon_at_all():
+    """It had none: window, task switcher and taskbar all fell back."""
+    from kairo.qt import branding
+
+    source = (QT_DIR / "__main__.py").read_text()
+    assert "setWindowIcon(branding.icon())" in source
+    built = branding.icon()
+    assert not built.isNull()
+    assert max(s.width() for s in built.availableSizes()) >= 256
+
+
+def test_the_icon_is_found_from_a_checkout_too():
+    """Installed it comes from the theme; run from source there is no theme."""
+    source = (QT_DIR / "branding.py").read_text()
+    assert "QIcon.fromTheme(APP_ID)" in source
+    assert "_repository_icons" in source

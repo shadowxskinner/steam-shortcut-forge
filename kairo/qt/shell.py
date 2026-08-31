@@ -24,6 +24,7 @@ from kairo import migration
 from kairo.artwork.registry import default_registry as artwork_registry
 from kairo.ledger import Ledger
 from kairo.providers.registry import default_registry as provider_registry
+from kairo.qt import branding
 from kairo.qt import theme as Q
 from kairo.qt import work
 from kairo.qt.blur import Blur
@@ -36,24 +37,6 @@ from kairo.ui import theme as T
 
 #: A close waits this long for artwork work to finish, then goes anyway.
 CLOSE_DRAIN_SECONDS = 5.0
-
-#: The second half of the logotype: 回路, "circuit".
-MARK = "回路"
-
-
-def _can_render(text: str) -> bool:
-    """True when every character has a glyph in the current font stack."""
-    from PySide6.QtGui import QFontMetrics
-    from PySide6.QtWidgets import QApplication
-
-    application = QApplication.instance()
-    if application is None:
-        return False
-    metrics = QFontMetrics(application.font())
-    try:
-        return all(metrics.inFont(character) for character in text)
-    except Exception:
-        return False
 
 
 class Context:
@@ -165,19 +148,22 @@ class KairoWindow(QMainWindow):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(T.S3, 0, T.S3, 0)
         header_layout.setSpacing(T.S2)
+        # The mark carries the identity and the wordmark carries the name.
+        # 回路 used to sit here as well; three elements in a sidebar built
+        # around one-per-row was the busiest thing on screen, and the mark
+        # says the same thing without needing a font that ships CJK.
+        stamp = branding.mark(Q.MARK_SIZE)
+        if not stamp.isNull():
+            badge = QLabel()
+            badge.setObjectName("badge")
+            badge.setPixmap(stamp)
+            badge.setFixedSize(Q.MARK_SIZE, Q.MARK_SIZE)
+            header_layout.addWidget(badge, 0, Qt.AlignVCenter)
+            header_layout.addSpacing(T.S2)
+
         logo = QLabel("KAIRO")
         logo.setObjectName("logo")
         header_layout.addWidget(logo, 0, Qt.AlignVCenter)
-        # 回路 needs a CJK font, and plenty of Linux installs have none - a
-        # machine can carry the whole Noto family and still lack the CJK
-        # pack. Rendering it anyway draws two tofu boxes, which looks like a
-        # bug rather than a logotype, so the mark is shown only when the
-        # glyphs actually exist and the wordmark stands alone otherwise.
-        if _can_render(MARK):
-            sub = QLabel(MARK)
-            sub.setObjectName("logoSub")
-            header_layout.addSpacing(T.S1)
-            header_layout.addWidget(sub, 0, Qt.AlignVCenter)
         header_layout.addStretch(1)
         layout.addWidget(header)
 

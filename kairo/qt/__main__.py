@@ -63,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     from kairo import APP_ID
+    from kairo.qt import branding
     from kairo.qt import theme as Q
     from kairo.qt.shell import KairoWindow
 
@@ -101,6 +102,9 @@ def main(argv: list[str] | None = None) -> int:
     application = QApplication(sys.argv)
     application.setApplicationName(APP_ID if installed else "Kairo")
     application.setApplicationDisplayName("Kairo")
+    # Without this the window, the task switcher and the taskbar all fall
+    # back to a generic placeholder, installed or not.
+    application.setWindowIcon(branding.icon())
     application.setOrganizationName("Kairo")
     application.setFont(QFont("Inter", 10))
     application.setStyleSheet(Q.stylesheet(glass))
