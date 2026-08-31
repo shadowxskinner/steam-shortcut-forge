@@ -149,6 +149,14 @@ class LibraryPane(QWidget):
         head = QHBoxLayout(header)
         head.setContentsMargins(0, 0, 0, 0)
         head.setSpacing(T.S2)
+        # The icon belongs to the title, not to a labelled column beside a
+        # second one. An App Store page does not caption its own artwork
+        # "CURRENT" — it puts the icon next to the name and says what would
+        # replace it only once something has been chosen.
+        self.current_well = IconWell(Q.WELL_TITLE)
+        head.addWidget(self.current_well, 0, Qt.AlignVCenter)
+        head.addSpacing(Q.GAP)
+
         names = QVBoxLayout()
         names.setContentsMargins(0, 0, 0, 0)
         names.setSpacing(2)
@@ -202,28 +210,24 @@ class LibraryPane(QWidget):
         return space
 
     def _build_compare(self):
-        """Secondary by design: small wells, quiet labels, one line of text."""
+        """What would change, once something has been chosen.
+
+        The current icon moved up beside the title, so this row is no longer
+        a before-and-after pair — it is the proposal and nothing else, and it
+        says nothing at all until there is one.
+        """
         row = QHBoxLayout()
         row.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD, Q.PAD_CARD, Q.GAP)
         row.setSpacing(Q.GAP)
-        self.current_well = IconWell(Q.WELL_COMPARE)
+        caption = QLabel("PROPOSED")
+        caption.setObjectName("micro")
+        box = QVBoxLayout()
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(T.S2)
         self.proposed_well = IconWell(Q.WELL_COMPARE)
-        for caption, well in (("CURRENT", self.current_well),
-                              ("PROPOSED", self.proposed_well)):
-            box = QVBoxLayout()
-            box.setContentsMargins(0, 0, 0, 0)
-            box.setSpacing(T.S2)
-            label = QLabel(caption)
-            label.setObjectName("micro")
-            box.addWidget(label)
-            box.addWidget(well)
-            row.addLayout(box)
-            if caption == "CURRENT":
-                arrow = QLabel("→")
-                arrow.setObjectName("meta")
-                row.addSpacing(T.S1)
-                row.addWidget(arrow, 0, Qt.AlignVCenter)
-                row.addSpacing(T.S1)
+        box.addWidget(caption)
+        box.addWidget(self.proposed_well)
+        row.addLayout(box)
         self.proposal = QLabel("Choose artwork below")
         self.proposal.setObjectName("meta")
         self.proposal.setWordWrap(True)

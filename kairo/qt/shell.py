@@ -175,7 +175,9 @@ class KairoWindow(QMainWindow):
                 heading.setObjectName("micro")
                 heading.setContentsMargins(T.S3, Q.GAP_WIDE, 0, T.S2)
                 layout.addWidget(heading)
-            button = NavButton(item.key, item.label, nav.icon_for(item), column)
+            logo = getattr(item.provider, "nav_icon_name", "") if item.provider else ""
+            button = NavButton(item.key, item.label, nav.icon_for(item), column,
+                               logo_name=logo)
             button.clicked.connect(lambda _checked, key=item.key: self._select(key))
             layout.addWidget(button)
             self.buttons[item.key] = button

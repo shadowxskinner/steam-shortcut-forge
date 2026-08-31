@@ -106,7 +106,14 @@ def main(argv: list[str] | None = None) -> int:
     # back to a generic placeholder, installed or not.
     application.setWindowIcon(branding.icon())
     application.setOrganizationName("Kairo")
-    application.setFont(QFont("Inter", 10))
+    # A stack rather than one family: "Inter" alone silently fell back to
+    # whatever fontconfig chose when Inter was not installed, which on this
+    # machine was not close to the intended face at all.
+    interface = QFont()
+    interface.setFamilies(list(Q.FONT_STACK))
+    interface.setPointSize(10)
+    interface.setHintingPreference(QFont.PreferFullHinting)
+    application.setFont(interface)
     application.setStyleSheet(Q.stylesheet(glass))
 
     window = KairoWindow(translucent=not opaque,

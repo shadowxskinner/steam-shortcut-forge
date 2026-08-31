@@ -19,6 +19,24 @@ from kairo.qt import theme as Q
 from kairo.ui import theme as T
 
 
+def _theme_logo(name: str, size: int):
+    """A provider's own icon from the installed theme, or None.
+
+    Nothing is bundled: this uses whatever the user's Steam, Dolphin or
+    emulator package already installed, so no trademark ships with Kairo and
+    a machine without that package simply keeps the drawn glyph.
+    """
+    if not name:
+        return None
+    from kairo.desktop.lookup import resolve_icon
+    from kairo.qt import images
+
+    path = resolve_icon(name)
+    if path is None:
+        return None
+    return images.load(size, path=path)
+
+
 def restyle(*widgets) -> None:
     """Re-run the stylesheet after an objectName change.
 
@@ -89,10 +107,12 @@ class NavButton(QPushButton):
     right — which is most of what makes a sidebar look deliberate.
     """
 
-    def __init__(self, key: str, label: str, icon: str, parent=None):
+    def __init__(self, key: str, label: str, icon: str, parent=None,
+                 logo_name: str = ""):
         super().__init__(parent)
         self.key = key
         self._icon = icon
+        self._logo = _theme_logo(logo_name, Q.NAV_ICON)
         self.setObjectName("nav")
         self.setFixedHeight(Q.H_NAV_ITEM)
         self.setCheckable(True)
@@ -103,7 +123,7 @@ class NavButton(QPushButton):
         row.setContentsMargins(T.S3, 0, T.S3, 0)
         row.setSpacing(T.S3)
         self.glyph = QLabel(self)
-        self.glyph.setFixedSize(QSize(18, 18))
+        self.glyph.setFixedSize(QSize(Q.NAV_ICON, Q.NAV_ICON))
         self.glyph.setAlignment(Qt.AlignCenter)
         self.name = QLabel(label, self)
         self.name.setObjectName("navName")
@@ -121,8 +141,13 @@ class NavButton(QPushButton):
         self.toggled.connect(self._paint_icon)
 
     def _paint_icon(self, on: bool) -> None:
+        # A real logo if the theme has one — Steam's and Dolphin's are what
+        # a person recognises — and the drawn glyph when it does not.
+        if self._logo is not None and not self._logo.isNull():
+            self.glyph.setPixmap(self._logo)
+            return
         colour = T.C_ACCENT_TEXT if on else T.C_TEXT3
-        self.glyph.setPixmap(nav_pixmap(self._icon, colour, 18))
+        self.glyph.setPixmap(nav_pixmap(self._icon, colour, Q.NAV_ICON))
         self.name.setObjectName("navNameOn" if on else "navName")
         restyle(self.name)
 

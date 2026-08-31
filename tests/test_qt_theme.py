@@ -176,3 +176,24 @@ def test_the_logotype_is_the_mark_and_the_wordmark():
     assert "logoSub" not in Q.stylesheet("frosted")
     assert "branding.mark(Q.MARK_SIZE)" in shell
     assert Q.MARK_SIZE > 0
+
+
+def test_the_interface_font_is_a_stack_not_a_wish():
+    """Asking for one family that is not installed lands anywhere at all.
+
+    "Inter" alone resolved to whatever fontconfig picked — DejaVu Sans on a
+    machine with no Inter — which is nothing like the intended face.
+    """
+    from kairo.qt import theme as Q
+
+    assert len(Q.FONT_STACK) >= 4
+    assert Q.FONT_STACK[0].startswith("SF Pro")
+    assert "Inter" in Q.FONT_STACK
+    assert Q.FONT_STACK[-1] == "DejaVu Sans", "the last entry must exist anywhere"
+
+    from pathlib import Path
+
+    main = (Path(__file__).resolve().parent.parent / "kairo" / "qt"
+            / "__main__.py").read_text()
+    assert "setFamilies(list(Q.FONT_STACK))" in main
+    assert 'QFont("Inter"' not in main

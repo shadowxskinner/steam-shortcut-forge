@@ -197,6 +197,8 @@ class SteamProvider(AppProvider):
     noun = "games"
     group = "Library"
     order = 0
+    #: Resolved through the icon theme; falls back to the drawn glyph.
+    nav_icon_name = "steam"
 
     # SteamGridDB first: it matches on the actual Steam app ID, so it is the
     # only source that can be certain it found the right game. Themes and

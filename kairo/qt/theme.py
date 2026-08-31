@@ -125,13 +125,14 @@ W_NAV = 244
 W_LIST = 372                 # narrower than the workspace: artwork is the work
 
 H_HEADER = 88                # the header band, shared by all three columns
-H_NAV_ITEM = 40
+H_NAV_ITEM = 44
 H_ROW = 64
 H_FIELD = 36                 # search, artwork query
 H_BUTTON = 36                # every button, everywhere
 H_PILLS = 30
 
 WELL_ROW = 44                # icon inside an entry row
+WELL_TITLE = 64              # the current icon, beside the title
 WELL_COMPARE = 64            # current / proposed — deliberately secondary
 TILE = 116                   # artwork tile
 
@@ -151,7 +152,8 @@ R_PILL = 999
 # resort, and never goes above 600. The selected item's name is the loudest
 # thing on screen by a wide margin, and everything else steps down from there.
 FS_LOGO = 14
-MARK_SIZE = 40               # the application mark in the sidebar header
+MARK_SIZE = 56               # the application mark in the sidebar header
+NAV_ICON = 22                # provider logos in the sidebar
 FS_DOT = 15                  # the 'customized' mark on an entry row
 FS_TITLE = 28
 FS_PANE = 15
@@ -162,6 +164,13 @@ FS_META = 11
 FS_MICRO = 10
 FS_BUTTON = 13
 FS_PILL = 12
+
+#: Preferred families, best first. Qt walks these, so a machine without the
+#: first still gets the closest thing it has rather than a default serif-ish
+#: fallback. SF Pro is Apple's own and will only be present if the user
+#: installed it; Inter is the free face designed to sit in the same place.
+FONT_STACK = ("SF Pro Text", "SF Pro Display", "Inter", "Inter Display",
+              "Adwaita Sans", "Noto Sans", "DejaVu Sans")
 
 WT_REGULAR = 400
 WT_MEDIUM = 500

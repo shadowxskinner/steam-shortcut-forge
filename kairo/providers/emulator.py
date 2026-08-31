@@ -81,6 +81,10 @@ class EmulatorProvider(AppProvider):
         self.id = provider_id(emulator.id)
         self.label = emulator.name
         self.order = order
+        # The emulator's own icon, by the name its package installed. Falls
+        # back to the drawn glyph when nothing in the theme matches, so an
+        # emulator Kairo has never heard of still gets a sensible mark.
+        self.nav_icon_name = Path(emulator.executable).name or ""
 
     def available(self) -> bool:
         """Configured badly is still configured: the section stays visible.

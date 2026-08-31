@@ -10,6 +10,7 @@ grepped for.
 """
 
 import ast
+from pathlib import Path
 import threading
 import time
 from pathlib import Path
@@ -1213,3 +1214,42 @@ def test_every_method_a_qt_pane_calls_on_itself_exists():
                     continue
                 missing.append(f"{path.name}:{klass.name}.{name}")
     assert not missing, missing
+
+
+def test_a_provider_uses_its_own_installed_logo():
+    """Steam's and Dolphin's marks are what a person recognises.
+
+    Nothing is bundled: the name is resolved through the installed icon
+    theme, so no trademark ships with Kairo and a machine without that
+    package keeps the drawn glyph.
+    """
+    widgets = (QT_DIR / "widgets.py").read_text()
+    assert "def _theme_logo" in widgets
+    helper = widgets.split("def _theme_logo")[1].split("\ndef ")[0]
+    assert "resolve_icon" in helper
+    assert "return None" in helper, "a missing logo must fall back, not raise"
+
+    paint = widgets.split("def _paint_icon")[1].split("\n    def ")[0]
+    assert "self._logo" in paint
+    assert "nav_pixmap" in paint, "the drawn glyph is still the fallback"
+
+
+def test_providers_name_a_logo_without_kairo_hardcoding_one():
+    from kairo.providers.steam import SteamProvider
+
+    assert SteamProvider().nav_icon_name == "steam"
+    emulator = (Path(__file__).resolve().parent.parent / "kairo" / "providers"
+                / "emulator.py").read_text()
+    assert "nav_icon_name" in emulator
+    assert "Path(emulator.executable).name" in emulator
+
+
+def test_the_current_icon_belongs_to_the_title():
+    """A before-and-after pair captioned CURRENT and PROPOSED was two
+    columns saying what one icon and one line can say."""
+    source = (QT_DIR / "library.py").read_text()
+    header = source.split("header = QWidget()")[1].split("layout.addWidget(header)")[0]
+    assert "self.current_well" in header
+    compare = source.split("def _build_compare")[1].split("\n    def ")[0]
+    assert "CURRENT" not in compare
+    assert "PROPOSED" in compare
