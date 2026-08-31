@@ -95,10 +95,19 @@ class ArtQuery:
     icon_name: str = ""         # exact freedesktop icon name, for themes
     steam_appid: str = ""       # SteamGridDB is keyed on this
 
-    def with_text(self, text: str) -> "ArtQuery":
+    def with_text(self, text: str, *, keep_id: bool = True) -> "ArtQuery":
+        """The same request, asked with a different search term.
+
+        ``keep_id`` drops the resolved identifier. A source keyed on an appid
+        ignores free text entirely and rightly so — the id is the better
+        answer. But that makes a search box over such a source inert, so when
+        somebody types a title that is not the one we started from, they are
+        asking to override the identifier, not to refine it.
+        """
         return ArtQuery(entry=self.entry, text=text,
                         fallback_text=self.fallback_text,
-                        icon_name=self.icon_name, steam_appid=self.steam_appid)
+                        icon_name=self.icon_name,
+                        steam_appid=self.steam_appid if keep_id else "")
 
 
 # ---------------------------------------------------------------------------

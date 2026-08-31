@@ -189,18 +189,32 @@ def prepare(size: int, *, path=None, data: bytes | None = None,
     return image
 
 
-def load(size: int, *, path=None, data: bytes | None = None):
-    """A pixmap fitted to ``size``, or None if it cannot be decoded."""
-    key = _key(size, path, data)
+def load(size: int, *, path=None, data: bytes | None = None,
+         ratio: float = 1.0):
+    """A pixmap fitted to ``size`` logical points, or None.
+
+    ``ratio`` is the device pixel ratio of the screen the pixmap is bound
+    for. Nothing here asked for one before, so every icon in the window was
+    decoded at its logical size and then magnified by the compositor on any
+    display scaled above 1x — the sidebar logos and the row icons were soft
+    for that reason alone, with no blurry source file involved.
+    """
+    scale = max(1.0, float(ratio))
+    pixels = int(round(size * scale))
+
+    key = _key(pixels, path, data)
+    if key is not None:
+        key = (*key, scale)
     if key is not None and key in _CACHE:
         _CACHE.move_to_end(key)
         return _CACHE[key]
 
-    image = prepare(size, path=path, data=data)
+    image = prepare(pixels, path=path, data=data)
     pixmap = QPixmap.fromImage(image) if image is not None else None
 
     if pixmap is None or pixmap.isNull():
         return None
+    pixmap.setDevicePixelRatio(scale)
 
     if key is not None:
         _CACHE[key] = pixmap

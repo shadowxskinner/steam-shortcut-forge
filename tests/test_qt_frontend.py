@@ -533,10 +533,19 @@ def test_qt_jobs_are_destroyed_on_the_gui_thread():
 
 @pytest.fixture
 def qt_core():
-    """A QCoreApplication. No display, no widgets, no libEGL."""
-    from PySide6.QtCore import QCoreApplication
+    """The one application object this process is allowed.
 
-    yield QCoreApplication.instance() or QCoreApplication([])
+    A QGuiApplication rather than a QCoreApplication, because QPixmap aborts
+    the process outright without one and Qt permits exactly one instance —
+    so the worker tests, which need nothing from it, have to share the kind
+    the drawing tests require. No window is ever shown.
+    """
+    import os
+    from PySide6.QtGui import QGuiApplication
+
+    if not os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("DISPLAY"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    yield QGuiApplication.instance() or QGuiApplication([])
 
 
 def settle(app, timeout=10.0):
@@ -1320,3 +1329,224 @@ def test_the_drawn_glyphs_carry_no_hue():
         value = getattr(Q, name).lstrip("#")
         channels = [int(value[i:i + 2], 16) for i in (0, 2, 4)]
         assert max(channels) - min(channels) <= 10, f"{name} is tinted"
+
+
+# ---------------------------------------------------------------------------
+# The search box, and whether it searches
+# ---------------------------------------------------------------------------
+
+class _Source:
+    def __init__(self, ident, needs_query):
+        self.id = ident
+        self.needs_query = needs_query
+
+
+def _steam_query():
+    from kairo.models import AppEntry, ArtQuery
+
+    entry = AppEntry(key="steam:440", provider_id="steam",
+                     name="Call of Duty: Black Ops")
+    return ArtQuery(entry=entry, text="Call of Duty: Black Ops",
+                    icon_name="cod-black-ops", steam_appid="42649")
+
+
+def test_a_typed_title_reaches_a_source_that_never_asked_for_one():
+    """The bug the user found: a search box that searched nothing.
+
+    Free text used to be handed only to sources declaring needs_query.
+    SteamGridDB does not declare it, is keyed on an appid, and supplies
+    nearly every result for a game — so typing in the box and pressing
+    Enter changed the grid not at all.
+    """
+    from kairo.qt.library import query_for
+
+    base = _steam_query()
+    asked = query_for(_Source("steamgriddb", False), base,
+                      "black ops 1", base.text)
+
+    assert asked.text == "black ops 1"
+    assert asked.steam_appid == "", (
+        "a resolved appid outranks free text, so it has to be dropped for "
+        "the typed title to be what actually gets searched")
+
+
+def test_the_seeded_title_does_not_downgrade_an_exact_identifier():
+    """The box arrives pre-filled, and that must not count as a search."""
+    from kairo.qt.library import query_for
+
+    base = _steam_query()
+    for term in (base.text, "  Call of Duty: BLACK OPS  ", ""):
+        asked = query_for(_Source("steamgriddb", False), base, term.strip(),
+                          base.text)
+        assert asked.steam_appid == "42649", (
+            f"{term!r} is the title we seeded, not one anybody typed")
+
+
+def test_a_source_that_wants_a_term_still_gets_its_own_default():
+    from kairo.qt.library import query_for
+
+    base = _steam_query()
+    theme = _Source("theme", True)
+    assert query_for(theme, base, "", base.text).text == "cod-black-ops"
+    assert query_for(theme, base, "dolphin", base.text).text == "dolphin"
+
+    bare = base.with_text("")
+    empty = type(bare)(entry=bare.entry)
+    assert query_for(theme, empty, "", "") is None, "nothing to search on"
+
+
+def test_clearing_the_box_puts_the_default_results_back():
+    source = (QT_DIR / "library.py").read_text()
+    assert "self.query.textChanged.connect(self._query_cleared)" in source, (
+        "the clear button emits no returnPressed, so without this the grid "
+        "keeps showing the results of a search no longer in the field")
+
+
+# ---------------------------------------------------------------------------
+# Icons, and the pixel grid they are drawn on
+# ---------------------------------------------------------------------------
+
+def test_drawn_glyphs_are_rendered_for_the_screen_they_land_on(qt_core):
+    """A 22-pixel bitmap is what a 2x display magnifies."""
+    from kairo.qt.widgets import nav_pixmap
+
+    for kind in ("grid", "history", "sliders", "steam", "chip"):
+        plain = nav_pixmap(kind, "#8A8A93", 22)
+        retina = nav_pixmap(kind, "#8A8A93", 22, 2.0)
+
+        assert plain.width() == 22
+        assert retina.width() == 44, f"{kind} was drawn at logical size"
+        assert retina.devicePixelRatio() == 2.0
+        # Same apparent size, four times the ink.
+        assert retina.deviceIndependentSize() == plain.deviceIndependentSize()
+
+
+def test_a_glyph_draws_the_same_picture_at_every_ratio(qt_core):
+    """More pixels, not a bigger drawing.
+
+    QPainter applies a pixmap's device pixel ratio to every coordinate on
+    its own. Scaling the painter as well drew each glyph at ratio squared,
+    so at 2x all that survived was its top-left corner — and the size and
+    ratio assertions above all still passed, because they never looked at
+    what had been drawn.
+    """
+    from PySide6.QtGui import QColor
+    from kairo.qt.widgets import nav_pixmap
+
+    def bounds(pixmap):
+        ratio = pixmap.devicePixelRatio()
+        image = pixmap.toImage()
+        marked = [(x, y)
+                  for y in range(image.height())
+                  for x in range(image.width())
+                  if QColor(image.pixelColor(x, y)).alpha() > 40]
+        assert marked
+        xs = [x / ratio for x, _ in marked]
+        ys = [y / ratio for _, y in marked]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    for kind in ("grid", "history", "sliders", "steam", "chip"):
+        plain = bounds(nav_pixmap(kind, "#FFFFFF", 22))
+        for ratio in (2.0, 3.0):
+            drawn = bounds(nav_pixmap(kind, "#FFFFFF", 22, ratio))
+            for edge, (a, b) in enumerate(zip(plain, drawn)):
+                assert abs(a - b) < 1.5, (
+                    f"{kind} at {ratio}x covers a different area: "
+                    f"{plain} against {drawn}")
+
+
+def test_glyph_geometry_follows_the_icon_scale_rather_than_a_past_one(qt_core):
+    """Every coordinate a fraction of size, so no glyph sits off its centre."""
+    from PySide6.QtGui import QColor
+    from kairo.qt.widgets import nav_pixmap
+
+    for kind in ("grid", "history", "sliders", "chip"):
+        for size in (16, 22, 40):
+            image = nav_pixmap(kind, "#FFFFFF", size).toImage()
+            marked = [(x, y)
+                      for y in range(image.height())
+                      for x in range(image.width())
+                      if QColor(image.pixelColor(x, y)).alpha() > 40]
+            assert marked, f"{kind} at {size} drew nothing"
+
+            xs = [x for x, _ in marked]
+            ys = [y for _, y in marked]
+            slack = size * 0.16
+            assert abs((min(xs) + max(xs)) / 2 - (size - 1) / 2) < slack, (
+                f"{kind} at {size} is off centre horizontally")
+            assert abs((min(ys) + max(ys)) / 2 - (size - 1) / 2) < slack, (
+                f"{kind} at {size} is off centre vertically")
+            assert max(xs) - min(xs) > size * 0.5, f"{kind} at {size} is small"
+
+
+def test_every_glyph_terminal_is_round():
+    source = (QT_DIR / "widgets.py").read_text()
+    draw = source.split("def nav_pixmap")[1].split("\ndef ")[0]
+    assert "pen.setCapStyle(Qt.RoundCap)" in draw
+    assert "pen.setJoinStyle(Qt.RoundJoin)" in draw
+    assert "drawRect(" not in draw, "square corners; use drawRoundedRect"
+
+
+def test_a_theme_logo_is_decoded_at_the_screens_resolution(qt_core):
+    """The sidebar logos were soft with no blurry source file involved."""
+    import io
+    from PIL import Image
+    from kairo.qt import images
+
+    return_ratio = getattr(images.load, "__doc__", "")
+    assert "ratio" in return_ratio
+
+    buffer = io.BytesIO()
+    Image.new("RGBA", (256, 256), (255, 0, 0, 255)).save(buffer, format="PNG")
+    payload = buffer.getvalue()
+
+    plain = images.load(22, data=payload)
+    retina = images.load(22, data=payload, ratio=2.0)
+    assert plain is not None and retina is not None
+    assert plain.width() == 22
+    assert retina.width() == 44, "decoded at logical size, then magnified"
+    assert retina.devicePixelRatio() == 2.0
+
+
+def test_a_nav_row_repaints_once_it_knows_its_screen():
+    source = (QT_DIR / "widgets.py").read_text()
+    assert "def showEvent" in source, (
+        "__init__ paints at ratio 1 because the button has no screen yet")
+    show = source.split("def showEvent")[1].split("\n    def ")[0]
+    assert "self._paint_icon(self.isChecked())" in show
+
+
+# ---------------------------------------------------------------------------
+# Ending the process, however it ends
+# ---------------------------------------------------------------------------
+
+def test_the_pool_can_be_waited_on_and_not_merely_asked(qt_core):
+    """is_idle reports; something has to be able to make the process wait."""
+    import threading
+    from kairo.qt import work
+
+    gate = threading.Event()
+    work.submit(lambda: gate.wait(5) or "done")
+    assert not work.is_idle()
+
+    assert work.drain(0.05) is False, "a running job cannot have drained"
+    gate.set()
+    assert work.drain(5.0) is True
+    assert work.is_idle(), "drain must leave nothing for a later close to find"
+
+
+def test_leaving_the_event_loop_drains_before_the_interpreter_does():
+    """Closing the window drains. Every other way of ending does not.
+
+    A session logout, a SIGTERM, or Ctrl+C in the terminal Kairo was started
+    from all return from exec() without any window seeing closeEvent, and
+    Python then tore down around a live worker thread. That is an
+    intermittent segfault on exit and nothing else: 4 of 24 runs here.
+    """
+    source = (Path(__file__).resolve().parents[1]
+              / "kairo" / "qt" / "__main__.py").read_text()
+    tail = source.split("window.show()")[1]
+    assert "try:" in tail and "finally:" in tail, (
+        "exec() must be wrapped, or an exception on the way out skips it")
+    assert "work.drain()" in tail
+    assert tail.index("return application.exec()") < tail.index("work.drain()")

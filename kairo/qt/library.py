@@ -57,6 +57,29 @@ ROW_PAGE = 120
 MIN_USABLE_EDGE = 128
 
 
+def query_for(source, base, typed: str, seeded: str):
+    """What to ask one source, given what is in the search box. None to skip.
+
+    A module-level function because this decision was the entire bug and it
+    used to be three lines inside a closure inside a method, where no test
+    could see it. What it got wrong: ``typed`` was consumed only by sources
+    declaring ``needs_query``. SteamGridDB does not declare it — it is keyed
+    on an appid — so it never saw a character the user typed, and since it
+    supplies nearly every result for a game, the search box did nothing.
+
+    Editing the term overrides the identifier; leaving it alone does not.
+    That distinction matters: the box arrives pre-filled with the entry's own
+    name, so treating the seeded text as a search would silently downgrade
+    every Steam game from an exact appid match to a title guess.
+    """
+    if source.needs_query:
+        term = typed or (base.icon_name if source.id == "theme" else base.text)
+        return base.with_text(term) if term else None
+    if typed and typed.casefold() != seeded.strip().casefold():
+        return base.with_text(typed, keep_id=False)
+    return base
+
+
 class LibraryPane(QWidget):
     """One provider's entries, and the artwork workspace for the selected one."""
 
@@ -254,11 +277,17 @@ class LibraryPane(QWidget):
         row.addWidget(heading, 0, Qt.AlignVCenter)
         row.addSpacing(T.S1)
         row.addStretch(1)
+        self._seeded = ""
         self.query = QLineEdit()
         self.query.setPlaceholderText("Search artwork…")
+        self.query.setToolTip(
+            "Type a different title and press Enter to search every source")
         self.query.setFixedWidth(Q.W_QUERY)
         self.query.setClearButtonEnabled(True)
         self.query.returnPressed.connect(self._load_artwork)
+        # The clear button emits no returnPressed, so emptying the
+        # field left the results of a search it no longer showed.
+        self.query.textChanged.connect(self._query_cleared)
         row.addWidget(self.query, 0, Qt.AlignVCenter)
         return row
 
@@ -668,12 +697,27 @@ class LibraryPane(QWidget):
 
 
     def _seed_query(self) -> None:
-        """One search box for every source that wants one."""
-        if self.selected is None or not any(s.needs_query for s in self.sources()):
+        """One search box, over every source rather than some of them.
+
+        It used to be hidden unless a source declared ``needs_query``, and its
+        text used only by those sources. For a Steam game that meant a box
+        that appeared, arrived pre-filled with the game's own name, and then
+        changed nothing when you edited it: SteamGridDB supplies nearly all
+        the results and was never shown a word of it.
+        """
+        if self.selected is None or not self.sources():
             self.query.setVisible(False)
+            self._seeded = ""
             return
+        self._seeded = self.provider.artwork_query(self.selected.entry).text
         self.query.setVisible(True)
-        self.query.setText(self.provider.artwork_query(self.selected.entry).text)
+        blocked = self.query.blockSignals(True)
+        self.query.setText(self._seeded)
+        self.query.blockSignals(blocked)
+
+    def _query_cleared(self, text: str) -> None:
+        if not text.strip() and self._seeded:
+            self._load_artwork()
 
 
     def _clear_grid(self) -> None:
@@ -735,13 +779,9 @@ class LibraryPane(QWidget):
             for source in sources:
                 if token.cancelled:
                     return found, failures, asked
-                query = base
-                if source.needs_query:
-                    term = typed or (base.icon_name if source.id == "theme"
-                                     else base.text)
-                    if not term:
-                        continue
-                    query = base.with_text(term)
+                query = query_for(source, base, typed, self._seeded)
+                if query is None:
+                    continue
                 asked += 1
                 try:
                     found.extend((art, source) for art in source.find(query))

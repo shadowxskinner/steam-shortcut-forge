@@ -120,7 +120,13 @@ def main(argv: list[str] | None = None) -> int:
                          want_blur="--no-blur" not in argv,
                          glass=glass)
     window.show()
-    return application.exec()
+    try:
+        return application.exec()
+    finally:
+        # Closing the window drains the pool; ending the loop any other way
+        # does not, and Python then tears down around a live worker thread.
+        from kairo.qt import work
+        work.drain()
 
 
 if __name__ == "__main__":

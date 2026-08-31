@@ -125,3 +125,27 @@ def submit(function, *args, on_done=None, on_failed=None, on_progress=None,
 def is_idle() -> bool:
     """True only after workers and their queued GUI cleanup have finished."""
     return (_POOL is None or _POOL.activeThreadCount() == 0) and not _LIVE_JOBS
+
+
+def drain(seconds: float = 4.0) -> bool:
+    """Block until no pool thread is still running. True if the pool emptied.
+
+    ``is_idle`` only reports; it cannot make the process wait, and the window's
+    own close already drains by polling because the GUI thread must stay
+    responsive. Neither helps when the event loop ends without any window
+    receiving a close at all — a session logout, a SIGTERM, Ctrl+C from the
+    terminal an app was started in. The interpreter then tears down with a
+    worker still inside Python, which is an intermittent segfault on exit and
+    nothing else. Roughly one run in four here.
+
+    ``waitForDone`` is the only thing that gives the C++ guarantee: it returns
+    when every ``run`` has returned, not when a queued signal has been seen.
+    """
+    if _POOL is None:
+        return True
+    finished = _POOL.waitForDone(int(seconds * 1000))
+    if finished:
+        # Their queued release never arrives; there is no loop left to
+        # deliver it, and the work itself is over.
+        _LIVE_JOBS.clear()
+    return finished
