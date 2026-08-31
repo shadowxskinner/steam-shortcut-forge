@@ -126,7 +126,7 @@ W_LIST = 372                 # narrower than the workspace: artwork is the work
 
 H_HEADER = 88                # the header band, shared by all three columns
 H_NAV_ITEM = 40
-H_ROW = 76
+H_ROW = 64
 H_FIELD = 36                 # search, artwork query
 H_BUTTON = 36                # every button, everywhere
 H_PILLS = 30
@@ -151,7 +151,8 @@ R_PILL = 999
 # resort, and never goes above 600. The selected item's name is the loudest
 # thing on screen by a wide margin, and everything else steps down from there.
 FS_LOGO = 14
-MARK_SIZE = 28               # the application mark in the sidebar header
+MARK_SIZE = 40               # the application mark in the sidebar header
+FS_DOT = 15                  # the 'customized' mark on an entry row
 FS_TITLE = 28
 FS_PANE = 15
 FS_ROW = 13
@@ -263,8 +264,10 @@ def stylesheet(glass=None) -> str:
     QLabel#navCount   {{ color: {C_TEXT3}; font-size: {FS_META}px; }}
     QLabel#wellMark   {{ color: {rgba(C_TEXT3, 0.75)};
                          font-size: {FS_PANE}px; font-weight: {WT_MEDIUM}; }}
-    QLabel#dot        {{ color: {rgba(T.C_SUCCESS, 0.55)};
-                         font-size: {FS_MICRO}px; }}
+    /* Customized. It marks a whole row, so it is sized to be seen at a
+       glance rather than set in the smallest size on the scale. */
+    QLabel#dot        {{ color: {rgba(T.C_SUCCESS, 0.85)};
+                         font-size: {FS_DOT}px; }}
     QLabel#empty      {{ color: {C_TEXT3}; font-size: {FS_BODY}px; }}
     QLabel#status     {{ color: {C_TEXT3}; font-size: {FS_META}px; }}
 

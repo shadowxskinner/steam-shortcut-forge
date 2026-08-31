@@ -239,9 +239,6 @@ class LibraryPane(QWidget):
         heading.setObjectName("micro")
         row.addWidget(heading, 0, Qt.AlignVCenter)
         row.addSpacing(T.S1)
-        self.source_pills = Pills([])
-        self.source_pills.changed.connect(self._source_changed)
-        row.addWidget(self.source_pills, 0, Qt.AlignVCenter)
         row.addStretch(1)
         self.query = QLineEdit()
         self.query.setPlaceholderText("Search artwork…")
@@ -579,7 +576,10 @@ class LibraryPane(QWidget):
 
         entry = row.entry
         self.title.setText(T.ellipsize(entry.name, 46))
-        self.subtitle.setText(entry.subtitle)
+        # entry.subtitle is a Steam appid or a .desktop basename for two
+        # providers out of three. The artwork count replaces it once a
+        # search lands; until then the title stands alone.
+        self.subtitle.setText("")
         self.current_well.show_path(entry.current_icon, "—")
         self._clear_proposal()
         self._update_actions()
@@ -619,36 +619,35 @@ class LibraryPane(QWidget):
 
     # -- sources -----------------------------------------------------------
 
-    def source(self):
-        return self.ctx.sources.get(self._sources.get(self.source_pills.value(), ""))
+    def sources(self):
+        """Every browsable source, best first.
 
-    def _refresh_sources(self) -> None:
-        """Keep every configured, browsable source available.
-
-        An empty result describes one query, not the whole source. Hiding that
-        source made its tab disappear before the user could correct a title or
-        try a broader search.
+        Ordered by the provider's own declared preference rather than by
+        registration, so SteamGridDB leads for games and icon themes lead for
+        applications — the same order automatic matching already trusts.
         """
         available = self.ctx.sources.browsable_for(self.provider.id,
                                                    self.ctx.config)
-        self._sources = {s.label: s.id for s in available}
-        self.source_pills.set_values(list(self._sources))
+        preference = list(getattr(self.provider, "auto_match_sources", ()))
+
+        def rank(source):
+            return (preference.index(source.id) if source.id in preference
+                    else len(preference))
+
+        return sorted(available, key=rank)
+
+    def _refresh_sources(self) -> None:
+        """Kept for the panes that call it; there are no tabs to refresh now."""
+        self._sources = {s.label: s.id for s in self.sources()}
 
     def _seed_query(self) -> None:
-        source = self.source()
-        if source is None or not source.needs_query or self.selected is None:
+        """One search box for every source that wants one."""
+        if self.selected is None or not any(s.needs_query for s in self.sources()):
             self.query.setVisible(False)
             return
         self.query.setVisible(True)
-        query = self.provider.artwork_query(self.selected.entry)
-        self.query.setText(query.icon_name if source.id == "theme" else query.text)
+        self.query.setText(self.provider.artwork_query(self.selected.entry).text)
 
-    def _source_changed(self, _label: str) -> None:
-        if self.selected is not None:
-            self._seed_query()
-            self._load_artwork()
-
-    # -- artwork -----------------------------------------------------------
 
     def _clear_grid(self) -> None:
         while self.grid.count():
@@ -681,29 +680,44 @@ class LibraryPane(QWidget):
     def _load_artwork(self) -> None:
         self._clear_grid()
         # Starting the token before the early exits also cancels an older
-        # in-flight search when the selection or source becomes unavailable.
+        # in-flight search when the selection becomes unavailable.
         token = self.tokens.start(ACTIVITY_ARTWORK)
         if self.selected is None:
             return
         entry = self.selected.entry
-        source = self.source()
-        if source is None:
+        sources = self.sources()
+        if not sources:
             self._grid_note("No online source has artwork for this one.")
             return
 
-        query = self.provider.artwork_query(entry)
-        if source.needs_query:
-            text = self.query.text().strip()
-            if not text:
-                self._grid_note(f"Type a term to search {source.label}.")
-                return
-            query = query.with_text(text)
-
-        self._grid_note(f"Looking for artwork in {source.label}…")
+        base = self.provider.artwork_query(entry)
+        typed = self.query.text().strip()
+        self._grid_note("Looking for artwork…")
         key = entry.key
 
         def search():
-            return source.find(query)
+            """Ask every source, in preference order, on one worker.
+
+            A source that fails or is unreachable contributes nothing and
+            costs the others nothing; the alternative was a tab that had to
+            be found and clicked before its results existed at all.
+            """
+            found = []
+            for source in sources:
+                if token.cancelled:
+                    return found
+                query = base
+                if source.needs_query:
+                    term = typed or (base.icon_name if source.id == "theme"
+                                     else base.text)
+                    if not term:
+                        continue
+                    query = base.with_text(term)
+                try:
+                    found.extend((art, source) for art in source.find(query))
+                except Exception:
+                    continue        # one source down is not an empty library
+            return found
 
         def arrived(results):
             if token.cancelled or self.selected is None:
@@ -712,21 +726,18 @@ class LibraryPane(QWidget):
                 return
             self._clear_grid()
             if not results:
-                self._grid_note(
-                    f"{source.label} has nothing for {entry.name}.\n"
-                    "Try a different search.")
+                self._grid_note(f"Nothing found for {entry.name}.\n"
+                                "Try a different search.")
                 return
-            self.subtitle.setText(
-                f"{entry.subtitle}  ·  {len(results)} from {source.label}")
-            self._build_tiles(results)
-            self._stream_previews(source, results, token, key)
+            self.subtitle.setText(f"{len(results)} artwork options")
+            arts = [art for art, _source in results]
+            self._build_tiles(arts, [source.label for _art, source in results])
+            self._stream_previews(results, token, key)
 
         def failed(message):
-            # A temporary failure leaves the source available so the user can
-            # retry without losing the tab they were using.
-            if not token.cancelled:
-                self._clear_grid()
-                self._grid_note(f"Could not load artwork: {message}")
+            if token.cancelled:
+                return
+            self._grid_note(str(message))
 
         work.submit(search, on_done=arrived, on_failed=failed)
 
@@ -734,7 +745,7 @@ class LibraryPane(QWidget):
         return max(1, self.grid_scroll.viewport().width()
                    // (ArtworkTile.WIDTH + T.S1))
 
-    def _build_tiles(self, results) -> None:
+    def _build_tiles(self, results, origins=None) -> None:
         self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         columns = self._columns()
         # Previews arrive by their index in `results`, and tiles get dropped
@@ -743,13 +754,14 @@ class LibraryPane(QWidget):
         # receive their own image.
         self._tile_at = {}
         for index, art in enumerate(results):
-            tile = ArtworkTile(art, self.grid_holder)
+            origin = origins[index] if origins and index < len(origins) else ""
+            tile = ArtworkTile(art, self.grid_holder, origin=origin)
             tile.picked.connect(self._propose)
             self.grid.addWidget(tile, index // columns, index % columns)
             self.tiles.append(tile)
             self._tile_at[index] = tile
 
-    def _stream_previews(self, source, results, token, key) -> None:
+    def _stream_previews(self, results, token, key) -> None:
         """Fetch each preview on a pool thread, painting them as they land.
 
         The streamer is held on the instance so it outlives this call; a signal
@@ -760,7 +772,7 @@ class LibraryPane(QWidget):
         self._streamer = streamer
 
         def pump():
-            for index, art in enumerate(results):
+            for index, (art, source) in enumerate(results):
                 if token.cancelled:
                     return
                 try:

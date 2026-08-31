@@ -9,7 +9,8 @@ drawn rather than shipped.
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import (QColor, QFontMetrics, QImage, QPainter, QPen,
+                           QPixmap)
 from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel,
                                QPushButton, QVBoxLayout, QWidget)
 
@@ -277,16 +278,13 @@ class EntryRow(QFrame):
         self.well = IconWell(Q.WELL_ROW, self)
         layout.addWidget(self.well, 0, Qt.AlignVCenter)
 
-        text = QVBoxLayout()
-        text.setContentsMargins(0, 0, 0, 0)
-        text.setSpacing(2)
+        # The name, and nothing under it. The second line carried a Steam
+        # appid, a .desktop basename or a system label depending on the
+        # provider — an identifier the reader did not ask for in two cases
+        # out of three, and a row is easier to scan without it.
         self.name = QLabel("", self)
         self.name.setObjectName("rowName")
-        self.meta = QLabel("", self)
-        self.meta.setObjectName("rowMeta")
-        text.addWidget(self.name)
-        text.addWidget(self.meta)
-        layout.addLayout(text, 1)
+        layout.addWidget(self.name, 1)
 
         self.dot = QLabel("", self)
         self.dot.setObjectName("dot")
@@ -308,8 +306,7 @@ class EntryRow(QFrame):
         self._icon_identity = identity
         self.entry = entry
         self.name.setText(T.ellipsize(entry.name, Q.LIST_NAME_CHARS))
-        self.meta.setText(T.ellipsize(entry.subtitle or entry.local_id, Q.LIST_META_CHARS))
-        self.dot.setText("•" if entry.customized else "")
+        self.dot.setText("●" if entry.customized else "")
         # A ring inside a rounded square reads as a broken image. The
         # initial reads as a placeholder, the way a contacts list does.
         placeholder = (entry.name or "?").strip()[:1].upper()
@@ -341,8 +338,7 @@ class EntryRow(QFrame):
         self._selected = selected
         self.setObjectName("rowOn" if selected else "row")
         self.name.setObjectName("rowNameOn" if selected else "rowName")
-        self.meta.setObjectName("rowMetaOn" if selected else "rowMeta")
-        restyle(self, self.name, self.meta)
+        restyle(self, self.name)
 
     def mousePressEvent(self, event):
         if self.entry is not None:
@@ -357,9 +353,10 @@ class ArtworkTile(QFrame):
 
     picked = Signal(object)
 
-    def __init__(self, art, parent=None):
+    def __init__(self, art, parent=None, *, origin: str = ""):
         super().__init__(parent)
         self.art = art
+        self.origin = origin
         self._chosen = False
         self.setObjectName("tile")
         self.setCursor(Qt.PointingHandCursor)
@@ -373,15 +370,20 @@ class ArtworkTile(QFrame):
         self.well.show_placeholder("")
         layout.addWidget(self.well, 0, Qt.AlignHCenter)
 
-        caption = art.label or ("official" if art.official else "")
-        # Say what a tile actually is. A square grid is cover art cropped to
-        # fit, not an icon somebody drew, and that is worth knowing before
-        # you put it on a launcher.
+        # With one grid, where a tile came from is what the tabs used to
+        # say, so that is what the caption carries. Style and size go to the
+        # tooltip: "HighContrast · Icon themes" does not fit a 136px tile and
+        # was being clipped to "ighContrast · Icon the."
+        style = art.label or ("official" if art.official else "")
         noun = {"logo": "logo", "grid": "cover"}.get(art.kind, "")
-        if noun:
-            caption = f"{caption} {noun}".strip()
-        self.caption = QLabel(T.ellipsize(caption or art.dimensions or " ", 16), self)
+        detail = " · ".join(p for p in (style, noun, art.dimensions) if p)
+        self.caption = QLabel(self)
         self.caption.setObjectName("meta")
+        self.caption.setToolTip(" · ".join(p for p in (detail, origin) if p))
+        shown = origin or style or art.dimensions or " "
+        metrics = QFontMetrics(self.caption.font())
+        self.caption.setText(metrics.elidedText(shown, Qt.ElideRight,
+                                                self.WIDTH - T.S4))
         self.caption.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.caption)
 

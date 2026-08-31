@@ -1121,3 +1121,95 @@ def test_pixmaps_are_never_built_off_the_gui_thread():
                  for _ in range(1)):
         assert "QPixmap" not in body
     assert not re.search(r"work\.submit\([^)]*images\.load", library)
+
+
+# -- one grid instead of tabs -----------------------------------------------
+
+def test_every_source_is_searched_together():
+    """Tabs made you find and click a source before its results existed.
+
+    They are queried in the provider's own preference order — the order
+    automatic matching already trusts — and merged into one grid.
+    """
+    source = (QT_DIR / "library.py").read_text()
+    assert "source_pills" not in source, "the tabs are gone"
+    ordering = source.split("def sources(")[1].split("\n    def ")[0]
+    assert "auto_match_sources" in ordering
+    search = source.split("def search():")[1].split("def arrived")[0]
+    assert "for source in sources:" in search
+
+
+def test_one_failing_source_does_not_empty_the_grid():
+    """A source being down is not the same as a game having no artwork."""
+    source = (QT_DIR / "library.py").read_text()
+    search = source.split("def search():")[1].split("def arrived")[0]
+    assert "except Exception:" in search
+    assert "continue" in search
+
+
+def test_a_tile_says_which_source_it_came_from():
+    """With one grid, provenance is what the tabs used to carry.
+
+    It is the caption rather than a suffix on one: "HighContrast · Icon
+    themes" does not fit a 136px tile and was clipped to "ighContrast · Icon
+    the." Style and size moved to the tooltip.
+    """
+    widgets = (QT_DIR / "widgets.py").read_text()
+    assert 'origin: str = ""' in widgets
+    block = widgets.split("class ArtworkTile")[1]
+    assert "shown = origin or style" in block
+    assert "elidedText" in block, "a caption must never be clipped mid-word"
+    assert "setToolTip" in block
+
+
+def test_previews_are_fetched_from_the_source_that_produced_them():
+    """A merged grid holds artwork from several sources at once."""
+    source = (QT_DIR / "library.py").read_text()
+    pump = source.split("def _stream_previews")[1].split("\n    def ")[0]
+    assert "for index, (art, source) in enumerate(results)" in pump
+
+
+def test_a_row_shows_the_name_and_nothing_else():
+    """The second line was a Steam appid or a .desktop basename."""
+    widgets = (QT_DIR / "widgets.py").read_text()
+    assert "self.meta" not in widgets.split("class ArtworkTile")[0].split("class EntryRow")[1]
+    library = (QT_DIR / "library.py").read_text()
+    select = library.split("self.title.setText")[1].split("def ")[0]
+    assert 'self.subtitle.setText("")' in select, "the appid must not reappear"
+
+
+def test_every_method_a_qt_pane_calls_on_itself_exists():
+    """The structural suite never builds a tile, so it never notices.
+
+    Replacing a block of a class can silently take a neighbouring method with
+    it: _columns went missing that way and the whole suite stayed green,
+    because nothing in it calls _build_tiles.
+    """
+    import ast
+
+    missing = []
+    for path in sorted(QT_DIR.glob("*.py")):
+        tree = ast.parse(path.read_text())
+        for klass in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+            defined = {n.name for n in klass.body
+                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+            assigned = {t.attr for n in ast.walk(klass)
+                        for t in ast.walk(n)
+                        if isinstance(t, ast.Attribute)
+                        and isinstance(t.ctx, ast.Store)}
+            for node in ast.walk(klass):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)):
+                    continue
+                target = node.func
+                if not (isinstance(target.value, ast.Name)
+                        and target.value.id == "self"):
+                    continue
+                name = target.attr
+                if name in defined or name in assigned:
+                    continue
+                # inherited from QWidget and friends, or set on an instance
+                if not name.startswith("_"):
+                    continue
+                missing.append(f"{path.name}:{klass.name}.{name}")
+    assert not missing, missing
