@@ -57,26 +57,29 @@ def test_a_native_binary_is_preferred_over_a_flatpak(monkeypatch):
     monkeypatch.setattr(systems.shutil, "which",
                         lambda name: "/usr/bin/dolphin-emu"
                         if name == "dolphin-emu" else None)
-    executable, arguments = systems.find_executable(system)
+    executable, arguments, icon = systems.find_executable(system)
     assert executable == "/usr/bin/dolphin-emu"
     assert "run" not in arguments
+    assert icon == "dolphin-emu", "a native binary names its own icon"
 
 
 def test_a_flatpak_is_invoked_through_flatpak_run(monkeypatch):
     system = systems.by_id("gamecube")
     monkeypatch.setattr(systems.shutil, "which",
                         lambda name: "/usr/bin/flatpak" if name == "flatpak" else None)
-    monkeypatch.setattr(systems, "from_desktop_entry", lambda _system: ("", ()))
+    monkeypatch.setattr(systems, "from_desktop_entry",
+                        lambda _system: ("", (), ""))
     monkeypatch.setattr(systems, "_flatpak_installed", lambda app_id: True)
-    executable, arguments = systems.find_executable(system)
+    executable, arguments, icon = systems.find_executable(system)
     assert executable.endswith("flatpak")
     assert arguments[:2] == ("run", "org.DolphinEmu.dolphin-emu")
+    assert icon == "org.DolphinEmu.dolphin-emu"
 
 
 def test_nothing_installed_is_reported_not_guessed(monkeypatch):
     monkeypatch.setattr(systems.shutil, "which", lambda name: None)
     monkeypatch.setattr(systems, "_flatpak_installed", lambda app_id: False)
-    assert systems.find_executable(systems.by_id("ps2")) == ("", ())
+    assert systems.find_executable(systems.by_id("ps2")) == ("", (), "")
 
 
 def test_a_conventional_rom_folder_is_found(monkeypatch, tmp_path):
@@ -98,7 +101,8 @@ def test_an_empty_folder_is_not_offered(monkeypatch, tmp_path):
 def test_detection_puts_what_is_installed_first(monkeypatch):
     monkeypatch.setattr(systems.shutil, "which",
                         lambda name: "/usr/bin/pcsx2-qt" if name == "pcsx2-qt" else None)
-    monkeypatch.setattr(systems, "from_desktop_entry", lambda _system: ("", ()))
+    monkeypatch.setattr(systems, "from_desktop_entry",
+                        lambda _system: ("", (), ""))
     monkeypatch.setattr(systems, "_flatpak_installed", lambda app_id: False)
     monkeypatch.setattr(systems, "find_roms", lambda system: "")
     found = systems.detect()
@@ -119,14 +123,16 @@ def test_an_installed_launcher_entry_is_enough_to_find_it(monkeypatch, tmp_path)
     apps.mkdir()
     (apps / "org.DolphinEmu.dolphin-emu.desktop").write_text(
         "[Desktop Entry]\nType=Application\nName=Dolphin\n"
-        "Exec=/var/lib/flatpak/exports/bin/org.DolphinEmu.dolphin-emu %U\n")
+        "Exec=/var/lib/flatpak/exports/bin/org.DolphinEmu.dolphin-emu %U\n"
+        "Icon=org.DolphinEmu.dolphin-emu\n")
     monkeypatch.setattr(systems.shutil, "which", lambda name: None)
     monkeypatch.setattr(systems.paths, "system_application_dirs", lambda: [apps])
 
-    executable, arguments = systems.find_executable(systems.by_id("gamecube"))
+    executable, arguments, icon = systems.find_executable(systems.by_id("gamecube"))
     assert executable.endswith("org.DolphinEmu.dolphin-emu")
     assert "%U" not in " ".join(arguments), "field codes must not survive"
     assert arguments[-2:] == ("-b", "-e")
+    assert icon == "org.DolphinEmu.dolphin-emu", "Icon= is the declared name"
 
 
 def test_the_emulators_own_config_is_read_for_rom_paths(monkeypatch, tmp_path):
@@ -197,3 +203,31 @@ def test_a_configured_path_that_no_longer_exists_is_ignored(tmp_path):
     ini.write_text("[General]\nISOPath0 = /gone/for/good\n")
     system = replace(systems.by_id("gamecube"), config=str(ini))
     assert systems.from_emulator_config(system) == []
+
+
+def test_the_icon_name_comes_from_the_launcher_entry(monkeypatch, tmp_path):
+    """Deriving it from the executable works for Dolphin by luck alone.
+
+    pcsx2-qt installs PCSX2, duckstation-qt installs duckstation, PPSSPPQt
+    installs ppsspp: the binary is not named after the icon.
+    """
+    apps = tmp_path / "applications"
+    apps.mkdir()
+    (apps / "PCSX2.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=PCSX2\n"
+        "Exec=/usr/bin/pcsx2-qt %f\nIcon=PCSX2\n")
+    monkeypatch.setattr(systems.paths, "system_application_dirs", lambda: [apps])
+    monkeypatch.setattr(systems.shutil, "which",
+                        lambda n: "/usr/bin/pcsx2-qt" if n == "pcsx2-qt" else None)
+
+    executable, _arguments, icon = systems.find_executable(systems.by_id("ps2"))
+    assert executable == "/usr/bin/pcsx2-qt", "the native binary still wins"
+    assert icon == "PCSX2", "but the icon is the one the package declared"
+
+
+def test_an_emulator_keeps_the_icon_it_was_detected_with():
+    from kairo import emulators as emu
+
+    original = emu.Emulator(name="PCSX2", executable="/usr/bin/pcsx2-qt",
+                            icon="PCSX2").normalised()
+    assert emu.Emulator.from_dict(original.as_dict()).icon == "PCSX2"

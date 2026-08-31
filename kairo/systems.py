@@ -139,7 +139,7 @@ def _flatpak_installed(app_id: str) -> bool:
 _FIELD_CODE = re.compile(r"%[fFuUdDnNickvm]")
 
 
-def from_desktop_entry(system: System) -> tuple[str, tuple[str, ...]]:
+def from_desktop_entry(system: System) -> tuple[str, tuple[str, ...], str]:
     """Find the emulator through its installed launcher entry.
 
     This is the general answer to "how was it installed". A native package, an
@@ -168,29 +168,38 @@ def from_desktop_entry(system: System) -> tuple[str, tuple[str, ...]]:
             parts = _FIELD_CODE.sub("", exec_line).split()
             if not parts:
                 continue
-            return parts[0], (*parts[1:], *system.arguments)
-    return "", ()
+            # Icon= is the authoritative name. Deriving it from the executable
+            # works for Dolphin by luck and misses PCSX2, DuckStation, PPSSPP,
+            # simple64 and snes9x, whose binaries are not named after their
+            # icons.
+            icon = parser["Desktop Entry"].get("Icon", "").strip()
+            return parts[0], (*parts[1:], *system.arguments), icon
+    return "", (), ""
 
 
-def find_executable(system: System) -> tuple[str, tuple[str, ...]]:
+def find_executable(system: System) -> tuple[str, tuple[str, ...], str]:
     """``(executable, leading arguments)`` for this system, or ``("", ())``.
 
     A native binary on PATH first, then the installed launcher entry — which
     covers Flatpak, Snap, AppImage and anything else that registers itself —
     then the Flatpak export directories as a last resort.
     """
+    # The command is found exactly as before — a native binary first, then
+    # the launcher entry, then the Flatpak exports. Only the icon name is new,
+    # and it always comes from the launcher entry when there is one, because
+    # that is the only place it is declared rather than guessed.
+    _entry_exec, _entry_args, declared = from_desktop_entry(system)
     for command in system.commands:
         found = shutil.which(command)
         if found:
-            return found, system.arguments
-    executable, arguments = from_desktop_entry(system)
-    if executable:
-        return executable, arguments
+            return found, system.arguments, declared or command
+    if _entry_exec:
+        return _entry_exec, _entry_args, declared
     for app_id in system.flatpaks:
         if _flatpak_installed(app_id):
             flatpak = shutil.which("flatpak") or "/usr/bin/flatpak"
-            return flatpak, ("run", app_id, *system.arguments)
-    return "", ()
+            return flatpak, ("run", app_id, *system.arguments), declared or app_id
+    return "", (), ""
 
 
 def _config_path(value: str) -> Path:
@@ -285,6 +294,7 @@ class Detection:
     system: System
     executable: str = ""
     arguments: tuple[str, ...] = field(default_factory=tuple)
+    icon: str = ""
     roms: str = ""
 
     @property
@@ -299,7 +309,10 @@ def detect() -> list[Detection]:
     offering. The rest stay in the list so a system can still be set up before
     its emulator is, rather than silently disappearing.
     """
-    found = [Detection(system, *find_executable(system), find_roms(system))
-             for system in CATALOGUE]
+    found = []
+    for system in CATALOGUE:
+        executable, arguments, icon = find_executable(system)
+        found.append(Detection(system, executable, arguments, icon,
+                               find_roms(system)))
     found.sort(key=lambda d: (not d.installed, d.system.name.lower()))
     return found

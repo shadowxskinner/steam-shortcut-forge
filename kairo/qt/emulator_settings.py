@@ -247,6 +247,7 @@ class SystemPicker(QDialog):
         return emu.Emulator(
             name=system.emulator or system.name,
             executable=self.chosen.executable,
+            icon=self.chosen.icon,
             arguments=(*self.chosen.arguments, emu.ROM_PLACEHOLDER),
             folders=(emu.RomFolder(self.chosen.roms, system.extensions,
                                    system.name),)).normalised()

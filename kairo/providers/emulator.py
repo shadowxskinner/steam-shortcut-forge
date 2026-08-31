@@ -81,10 +81,11 @@ class EmulatorProvider(AppProvider):
         self.id = provider_id(emulator.id)
         self.label = emulator.name
         self.order = order
-        # The emulator's own icon, by the name its package installed. Falls
-        # back to the drawn glyph when nothing in the theme matches, so an
-        # emulator Kairo has never heard of still gets a sensible mark.
-        self.nav_icon_name = Path(emulator.executable).name or ""
+        # The name its launcher entry declares, which is the only reliable
+        # one: pcsx2-qt installs PCSX2, duckstation-qt installs duckstation,
+        # PPSSPPQt installs ppsspp. The executable is a last resort, and a
+        # drawn glyph is the one after that.
+        self.nav_icon_name = emulator.icon or Path(emulator.executable).name
 
     def available(self) -> bool:
         """Configured badly is still configured: the section stays visible.

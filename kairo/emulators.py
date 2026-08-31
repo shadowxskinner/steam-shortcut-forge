@@ -132,6 +132,9 @@ class Emulator:
     executable: str = ""
     arguments: tuple[str, ...] = (ROM_PLACEHOLDER,)
     folders: tuple[RomFolder, ...] = field(default_factory=tuple)
+    #: The icon name its package installed, taken from its launcher entry.
+    #: Empty is fine: the sidebar falls back to a drawn glyph.
+    icon: str = ""
 
     def normalised(self) -> "Emulator":
         arguments = tuple(str(a) for a in self.arguments if str(a).strip())
@@ -179,6 +182,7 @@ class Emulator:
         return {"id": self.id, "name": self.name,
                 "executable": self.executable,
                 "arguments": list(self.arguments),
+                "icon": self.icon,
                 "folders": [f.as_dict() for f in self.folders]}
 
     @classmethod
@@ -190,6 +194,7 @@ class Emulator:
                    name=str(raw.get("name", "")),
                    executable=str(raw.get("executable", "")),
                    arguments=tuple(str(a) for a in arguments),
+                   icon=str(raw.get("icon", "")),
                    folders=tuple(RomFolder.from_dict(f)
                                  for f in raw.get("folders") or [])).normalised()
 
