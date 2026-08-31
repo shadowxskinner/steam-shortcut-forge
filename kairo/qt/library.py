@@ -9,6 +9,8 @@ wired to it.
 
 from __future__ import annotations
 
+import time
+
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -32,6 +34,15 @@ ACTIVITY_ARTWORK = "artwork"
 ACTIVITY_APPLY = "apply"
 ACTIVITY_SCAN = "scan"
 ACTIVITY_ROWS = "rows"
+
+#: Prepared images are handed over in groups rather than one at a time. One
+#: signal per icon made a page of rows fill in a visible trickle — 120
+#: separate paints over 86ms, which reads as the window assembling itself in
+#: front of you. A group is flushed when it reaches this many or when this
+#: long has passed, whichever comes first, so a fast disk delivers a page in
+#: one go and a slow one still shows progress.
+BATCH_SIZE = 24
+BATCH_MS = 45
 
 #: How many rows exist at once. A row is five widgets, so a 2000-game library
 #: built the lot and spent 1.8 seconds and 225MB doing it — every time the
@@ -69,7 +80,6 @@ class LibraryPane(QWidget):
         self.tiles: list[ArtworkTile] = []
         self._tile_at: dict[int, ArtworkTile] = {}
         self.chosen_tile = None
-        self._sources: dict[str, str] = {}
         self._streamer = None
         self._row_streamer = None
         self._icon_generation = 0
@@ -536,21 +546,38 @@ class LibraryPane(QWidget):
         self._row_streamer = streamer
 
         def pump():
+            # Every row in a group has its own entry key, so the key travels
+            # per item. Tagging the whole group with one — the last one seen —
+            # made show_prepared_icon reject every other row in it, and a page
+            # of 120 painted five icons.
+            batch = []
+            last = time.monotonic()
+
+            def flush():
+                if batch and not token.cancelled:
+                    streamer.item.emit(0, list(batch), "")
+                batch.clear()
+
             for index, path, key, generation in pending:
                 if token.cancelled:
                     return
                 image = images.prepare(Q.WELL_ROW - 12, path=path)
                 if token.cancelled:
                     return
-                streamer.item.emit(index, (image, generation), key)
+                batch.append((index, image, key, generation))
+                now = time.monotonic()
+                if len(batch) >= BATCH_SIZE or (now - last) * 1000 >= BATCH_MS:
+                    flush()
+                    last = now
+            flush()
 
         work.submit(pump)
 
-    def _fill_row_icon(self, index: int, payload: object, key: str) -> None:
-        if not (0 <= index < len(self.rows)):
-            return
-        image, generation = payload
-        self.rows[index].show_prepared_icon(image, key, generation)
+    def _fill_row_icon(self, _index: int, payload: object, _key: str) -> None:
+        """Paint a whole group, so a page fills in waves rather than drips."""
+        for index, image, key, generation in payload:
+            if 0 <= index < len(self.rows):
+                self.rows[index].show_prepared_icon(image, key, generation)
 
     def _grow_if_near_bottom(self, value: int) -> None:
         """Add the next page as the end of the built rows comes into view."""
@@ -587,7 +614,6 @@ class LibraryPane(QWidget):
         self.current_well.show_path(entry.current_icon, "—")
         self._clear_proposal()
         self._update_actions()
-        self._refresh_sources()
         if load:
             self._seed_query()
             self._load_artwork()
@@ -640,9 +666,6 @@ class LibraryPane(QWidget):
 
         return sorted(available, key=rank)
 
-    def _refresh_sources(self) -> None:
-        """Kept for the panes that call it; there are no tabs to refresh now."""
-        self._sources = {s.label: s.id for s in self.sources()}
 
     def _seed_query(self) -> None:
         """One search box for every source that wants one."""
@@ -707,9 +730,11 @@ class LibraryPane(QWidget):
             be found and clicked before its results existed at all.
             """
             found = []
+            failures = 0
+            asked = 0
             for source in sources:
                 if token.cancelled:
-                    return found
+                    return found, failures, asked
                 query = base
                 if source.needs_query:
                     term = typed or (base.icon_name if source.id == "theme"
@@ -717,21 +742,30 @@ class LibraryPane(QWidget):
                     if not term:
                         continue
                     query = base.with_text(term)
+                asked += 1
                 try:
                     found.extend((art, source) for art in source.find(query))
                 except Exception:
-                    continue        # one source down is not an empty library
-            return found
+                    failures += 1   # one source down is not an empty library
+            return found, failures, asked
 
-        def arrived(results):
+        def arrived(outcome):
+            results, failures, asked = outcome
             if token.cancelled or self.selected is None:
                 return
             if self.selected.entry.key != key:
                 return
             self._clear_grid()
             if not results:
-                self._grid_note(f"Nothing found for {entry.name}.\n"
-                                "Try a different search.")
+                # Every source failing is not the same as this game having no
+                # artwork, and telling someone to try a different search when
+                # their network is down sends them the wrong way entirely.
+                if asked and failures == asked:
+                    self._grid_note("Could not reach any artwork source.\n"
+                                    "Check your connection and try again.")
+                else:
+                    self._grid_note(f"Nothing found for {entry.name}.\n"
+                                    "Try a different search.")
                 return
             self.subtitle.setText(f"{len(results)} artwork options")
             arts = [art for art, _source in results]
@@ -776,6 +810,16 @@ class LibraryPane(QWidget):
         self._streamer = streamer
 
         def pump():
+            batch = []
+            last = time.monotonic()
+
+            def flush():
+                # The entry key alone is not enough: changing the query keeps
+                # the same selected entry. The token says which request asked.
+                if batch and not token.cancelled:
+                    streamer.item.emit(0, (list(batch), token), key)
+                batch.clear()
+
             for index, (art, source) in enumerate(results):
                 if token.cancelled:
                     return
@@ -787,29 +831,32 @@ class LibraryPane(QWidget):
                     data = None         # say so, rather than leaving a blank
                 if token.cancelled:
                     return
-                # The entry key alone is not enough: changing source or query
-                # keeps the same selected entry. Carry the request token so a
-                # preview already queued by the old tab cannot paint into the
-                # new tab's tiles.
-                streamer.item.emit(index, (data, token), key)
+                batch.append((index, data))
+                now = time.monotonic()
+                if len(batch) >= BATCH_SIZE or (now - last) * 1000 >= BATCH_MS:
+                    flush()
+                    last = now
+            flush()
 
         work.submit(pump)
 
-    def _fill_tile(self, index: int, payload: object, key: str) -> None:
-        data, token = payload
+    def _fill_tile(self, _index: int, payload: object, key: str) -> None:
+        batch, token = payload
         if token.cancelled:
             return
         if self.selected is None or self.selected.entry.key != key:
             return
-        tile = self._tile_at.get(index)
-        if tile is None:
-            return
-        # data is None when the preview could not be fetched at all. Either
-        # way there is nothing to show, and an empty tile is worse than none.
-        if data is None:
-            self._drop_tile(tile)
-            return
-        tile.set_image(data)
+        for index, data in batch:
+            tile = self._tile_at.get(index)
+            if tile is None:
+                continue
+            # data is None when the preview could not be fetched at all.
+            # Either way there is nothing to show, and an empty tile is worse
+            # than none.
+            if data is None:
+                self._drop_tile(tile)
+                continue
+            tile.set_image(data)
 
     def _drop_tile(self, tile) -> None:
         """Remove a tile and close the hole it leaves behind."""

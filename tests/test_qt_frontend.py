@@ -10,7 +10,6 @@ grepped for.
 """
 
 import ast
-from pathlib import Path
 import threading
 import time
 from pathlib import Path
@@ -131,8 +130,9 @@ def test_reading_surfaces_balance_legibility_with_visible_blur():
 
 
 def test_qt_material_is_neutral_not_the_tk_navy_palette():
-    from kairo.qt import theme as Q
     from kairo.ui import theme as T
+
+    from kairo.qt import theme as Q
 
     def spread(colour):
         value = colour.lstrip("#")
@@ -164,7 +164,6 @@ def test_every_preset_keeps_that_ordering():
 def test_text_never_takes_the_surface_alpha():
     """The whole reason for leaving Tk."""
     from kairo.qt import theme as Q
-    from kairo.ui import theme as T
 
     sheet = Q.stylesheet("frosted")
     for label in ("QLabel#title", "QLabel#rowName", "QLabel#meta"):
@@ -631,7 +630,6 @@ def test_a_clicked_signal_is_never_wired_straight_to_a_bare_signal():
     display cannot catch by itself.
     """
     import re
-    from pathlib import Path
     root = Path(__file__).resolve().parent.parent / "kairo" / "qt"
     pattern = re.compile(r"clicked\.connect\(\s*self\.\w+\.emit\s*\)")
     offenders = [path.name for path in sorted(root.glob("*.py"))
@@ -652,7 +650,6 @@ def test_a_disabled_button_never_keeps_its_accent():
 
 def test_only_one_primary_action_is_offered_at_a_time():
     """Apply is the primary action; nothing else competes with it."""
-    from pathlib import Path
     source = (Path(__file__).resolve().parent.parent
               / "kairo" / "qt" / "library.py").read_text()
     primaries = [line.strip() for line in source.splitlines()
@@ -667,7 +664,6 @@ def test_a_cleared_widget_is_unparented_before_it_is_deleted():
     Until then the old tiles keep painting over the new grid, so a source
     switch flickers the previous results on top of the incoming ones.
     """
-    from pathlib import Path
     source = (Path(__file__).resolve().parent.parent
               / "kairo" / "qt" / "library.py").read_text()
     index = source.index("widget.deleteLater()")
@@ -682,7 +678,6 @@ def test_a_pane_subclass_asks_for_its_own_background():
     palette and read as light grey panels.
     """
     import re
-    from pathlib import Path
     root = Path(__file__).resolve().parent.parent / "kairo" / "qt"
     offenders = []
     for path in sorted(root.glob("*.py")):
@@ -891,7 +886,9 @@ def test_a_queued_preview_cannot_cross_sources_for_the_same_application():
     source = (QT_DIR / "library.py").read_text()
     pump = source.split("def _stream_previews")[1].split("\n    def ")[0]
     fill = source.split("def _fill_tile")[1].split("\n    def ")[0]
-    assert "(data, token)" in pump
+    # Previews are handed over in groups now, so the payload is the batch and
+    # the token that asked for it — the guard is what matters, not the shape.
+    assert "token)" in pump, "the request token must travel with the payload"
     assert "token.cancelled" in fill
 
 
@@ -1103,10 +1100,12 @@ def test_a_preview_carries_the_token_that_asked_for_it():
     """
     source = (QT_DIR / "library.py").read_text()
     fill = source.split("def _fill_tile")[1].split("\n    def ")[0]
-    assert "data, token = payload" in fill
+    assert "token = payload" in fill, "the payload carries its request token"
     assert "token.cancelled" in fill
+    assert fill.index("token.cancelled") < fill.index("for index"), \
+        "a cancelled batch must be dropped before any tile is touched"
     stream = source.split("def _stream_previews")[1].split("\n    def ")[0]
-    assert "(data, token)" in stream
+    assert "token)" in stream
 
 
 def test_pixmaps_are_never_built_off_the_gui_thread():
@@ -1253,3 +1252,37 @@ def test_the_current_icon_belongs_to_the_title():
     compare = source.split("def _build_compare")[1].split("\n    def ")[0]
     assert "CURRENT" not in compare
     assert "PROPOSED" in compare
+
+
+def test_prepared_images_are_handed_over_in_groups():
+    """One signal per image made a page fill in a visible trickle.
+
+    120 separate paints spread over 86ms reads as the window assembling
+    itself in front of you rather than appearing.
+    """
+    from kairo.qt.library import BATCH_MS, BATCH_SIZE
+
+    assert 1 < BATCH_SIZE <= 64
+    assert 0 < BATCH_MS <= 100, "a slow disk must still show progress"
+
+    source = (QT_DIR / "library.py").read_text()
+    rows = source.split("def _stream_row_icons")[1].split("\n    def ")[0]
+    assert "BATCH_SIZE" in rows and "BATCH_MS" in rows
+    assert "batch.clear()" in rows, "a flushed group must not be sent twice"
+
+    fill = source.split("def _fill_row_icon")[1].split("\n    def ")[0]
+    assert "for index, image, key, generation in payload" in fill, \
+        "each row in a group carries its own entry key"
+
+
+def test_a_group_carries_a_key_per_row_not_one_for_the_group():
+    """Rows in a page belong to different entries.
+
+    Tagging a whole group with the last key seen made show_prepared_icon
+    reject every other row in it: a page of 120 painted five icons.
+    """
+    source = (QT_DIR / "library.py").read_text()
+    rows = source.split("def _stream_row_icons")[1].split("\n    def ")[0]
+    assert "batch.append((index, image, key, generation))" in rows
+    assert 'streamer.item.emit(0, list(batch), "")' in rows, \
+        "the group-level key must not be used to match rows"

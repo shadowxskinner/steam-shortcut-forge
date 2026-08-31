@@ -179,7 +179,6 @@ WT_SEMI = 600                # the heaviest weight in the product
 # Truncation. Sized to the column rather than inherited, so a narrower list
 # does not clip mid-glyph — an explicit ellipsis reads as a choice.
 LIST_NAME_CHARS = 30
-LIST_META_CHARS = 34
 
 # Named columns, so labels and readouts share one left edge.
 W_QUERY = 240                # artwork search field
@@ -266,7 +265,6 @@ def stylesheet(glass=None) -> str:
     QLabel#rowNameOn  {{ color: {C_TEXT}; font-size: {FS_ROW}px;
                          font-weight: {WT_MEDIUM}; }}
     QLabel#rowMeta    {{ color: {C_TEXT3}; font-size: {FS_ROW_META}px; }}
-    QLabel#rowMetaOn  {{ color: {C_TEXT2}; font-size: {FS_ROW_META}px; }}
     QLabel#navName    {{ color: {C_TEXT2}; font-size: {FS_ROW}px; }}
     QLabel#navNameOn  {{ color: {C_TEXT}; font-size: {FS_ROW}px;
                          font-weight: {WT_MEDIUM}; }}
