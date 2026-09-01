@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -227,7 +228,16 @@ def from_desktop_entry(system: System) -> tuple[str, tuple[str, ...], str]:
             exec_line = parser["Desktop Entry"].get("Exec", "").strip()
             if not exec_line:
                 continue
-            parts = _FIELD_CODE.sub("", exec_line).split()
+            try:
+                # Exec= has quoting rules. A plain split turns
+                # "/opt/My Emulator/pcsx2-qt" into two broken arguments and
+                # makes an otherwise valid AppImage or local install unusable.
+                parts = [part for part in shlex.split(
+                    _FIELD_CODE.sub("", exec_line), posix=True) if part]
+            except ValueError:
+                # An unmatched quote is a malformed launcher, not a reason to
+                # make the whole emulator picker fail on the way open.
+                continue
             if not parts:
                 continue
             # Icon= is the authoritative name. Deriving it from the executable

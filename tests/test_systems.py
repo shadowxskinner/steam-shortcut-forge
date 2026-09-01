@@ -57,6 +57,8 @@ def test_a_native_binary_is_preferred_over_a_flatpak(monkeypatch):
     monkeypatch.setattr(systems.shutil, "which",
                         lambda name: "/usr/bin/dolphin-emu"
                         if name == "dolphin-emu" else None)
+    monkeypatch.setattr(systems, "from_desktop_entry",
+                        lambda _system: ("", (), ""))
     executable, arguments, icon = systems.find_executable(system)
     assert executable == "/usr/bin/dolphin-emu"
     assert "run" not in arguments
@@ -79,6 +81,10 @@ def test_a_flatpak_is_invoked_through_flatpak_run(monkeypatch):
 def test_nothing_installed_is_reported_not_guessed(monkeypatch):
     monkeypatch.setattr(systems.shutil, "which", lambda name: None)
     monkeypatch.setattr(systems, "_flatpak_installed", lambda app_id: False)
+    # This test describes a bare machine. Do not let an actual PCSX2 launcher
+    # installed on the developer's machine silently change the fixture.
+    monkeypatch.setattr(systems, "from_desktop_entry",
+                        lambda _system: ("", (), ""))
     assert systems.find_executable(systems.by_id("ps2")) == ("", (), "")
 
 
@@ -225,6 +231,35 @@ def test_the_icon_name_comes_from_the_launcher_entry(monkeypatch, tmp_path):
     assert icon == "PCSX2", "but the icon is the one the package declared"
 
 
+def test_a_quoted_desktop_exec_keeps_an_executable_path_with_spaces(
+        monkeypatch, tmp_path):
+    apps = tmp_path / "applications"
+    apps.mkdir()
+    (apps / "PCSX2.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=PCSX2\n"
+        'Exec="/opt/My Emulator/pcsx2-qt" --fullscreen %f\nIcon=PCSX2\n')
+    monkeypatch.setattr(systems.paths, "system_application_dirs", lambda: [apps])
+    monkeypatch.setattr(systems.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(systems, "_flatpak_installed", lambda _app_id: False)
+
+    executable, arguments, icon = systems.find_executable(systems.by_id("ps2"))
+
+    assert executable == "/opt/My Emulator/pcsx2-qt"
+    assert arguments == ("--fullscreen", "-batch")
+    assert icon == "PCSX2"
+
+
+def test_a_malformed_quoted_exec_is_ignored(monkeypatch, tmp_path):
+    apps = tmp_path / "applications"
+    apps.mkdir()
+    (apps / "PCSX2.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=PCSX2\n"
+        'Exec="/opt/Broken Emulator/pcsx2-qt --fullscreen\nIcon=PCSX2\n')
+    monkeypatch.setattr(systems.paths, "system_application_dirs", lambda: [apps])
+
+    assert systems.from_desktop_entry(systems.by_id("ps2")) == ("", (), "")
+
+
 def test_an_emulator_keeps_the_icon_it_was_detected_with():
     from kairo import emulators as emu
 
@@ -248,6 +283,9 @@ def test_an_unreadable_directory_does_not_crash_detection(monkeypatch, tmp_path)
     assert systems.from_desktop_entry(systems.by_id("ps2")) == ("", (), "")
 
     monkeypatch.setattr(systems, "ROM_ROOTS", ("/nope",))
+    # A real PCSX2.ini may name a live ROM collection. This case is about the
+    # hostile conventional root, so isolate the emulator-config source too.
+    monkeypatch.setattr(systems, "from_emulator_config", lambda _system: [])
     assert systems.find_roms(systems.by_id("ps2")) == ""
 
 

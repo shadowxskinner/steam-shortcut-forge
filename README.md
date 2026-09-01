@@ -17,14 +17,14 @@ application you care about.
 Kairo does that part.
 
 ```
-Scan  →  Match  →  Review  →  Apply
+Scan  →  Choose an application  →  Preview artwork  →  Apply
 
-63 applications discovered  ·  51 artwork matches found
+Steam games  ·  desktop applications  ·  emulator libraries
 ```
 
-Matching never writes anything. Kairo works out what it thinks each
-application should have, shows you **current → suggested** for every one, and
-waits. You tick what you want and press Apply.
+Scanning and browsing never write anything. Choose an application, inspect the
+available artwork, and Kairo shows the proposed icon before Apply becomes
+available. Each change is recorded and can be restored from Changes.
 
 You should never need to know what a `.desktop` file is, where your
 distribution keeps launcher entries, or what a Flatpak app id looks like.
@@ -33,21 +33,22 @@ distribution keeps launcher entries, or what a Flatpak app id looks like.
 
 - **Steam games** — every library on every drive, native and Flatpak installs,
   with artwork from [SteamGridDB](https://www.steamgriddb.com).
-- **Everything else with a launcher entry** — native packages, Flatpaks and
-  AppImages all install a freedesktop `.desktop` file, so they are all
-  discovered by the same scanner. Artwork comes from your installed icon
-  themes or from [Iconify](https://iconify.design)'s ~275,000 open source
-  icons.
+- **Everything else registered with the desktop** — native packages, Flatpaks
+  and AppImages that provide a freedesktop `.desktop` file are discovered by
+  the same scanner. Artwork comes from installed icon themes or from
+  [Iconify](https://iconify.design)'s open source icon sets.
+- **Emulator libraries** — configure Dolphin, PCSX2 or another catalogue entry
+  once and browse its ROMs beside Steam and desktop applications.
 - **Your own images** — any `.png`, `.svg`, `.ico` or `.xpm`.
 
-## Matching you can trust
+## Results you can trust
 
 Kairo would rather find nothing than put the wrong icon on an application. A
 wrong icon applied silently has to be noticed before it can be undone, and one
 bad guess costs more trust than ten missing matches.
 
-So every source says how confident it is, and anything below the threshold
-leaves the application unmatched rather than guessing:
+Every source says how confident it is, and low-confidence results remain
+choices for the user rather than being silently applied:
 
 | | |
 | --- | --- |
@@ -93,13 +94,11 @@ marker inside the file decides that, never the history.
 
 ## Install
 
-### Arch Linux (AUR)
+### Arch Linux
 
-```bash
-yay -S kairo
-```
-
-Upgrading from `steam-shortcut-forge` replaces it automatically.
+The release package is not published yet. The repository includes a PKGBUILD,
+but it is deliberately gated until a matching Git tag and real source checksum
+exist; maintainers should follow [RELEASING.md](RELEASING.md).
 
 ### From source
 
@@ -111,7 +110,15 @@ pip install -e .
 kairo
 ```
 
-Requires Python 3.10+ and Tk (`pacman -S tk`, `apt install python3-tk`).
+Requires Python 3.10+. PySide6 is installed with Kairo because the Qt frontend
+is the shipping application. `kairo-qt` is an explicit alias.
+
+The previous Tk frontend is optional:
+
+```bash
+pip install -e ".[tk]"
+kairo-tk
+```
 
 A free [SteamGridDB API key](https://www.steamgriddb.com/profile/preferences/api)
 is optional — it is only needed for Steam game artwork. Icon themes, Iconify
@@ -147,9 +154,10 @@ so every icon override you made before the rename stays restorable.
 Two extension points, so a new kind of application or a new source of artwork
 is an added file rather than a rewrite:
 
-- **`AppProvider`** — where applications come from. `SteamProvider` generates
-  launcher entries; `DesktopEntryProvider` shadows existing ones. Those are the
-  only two ways to own a launcher entry, so there are exactly two writers.
+- **`AppProvider`** — where applications come from. Steam and emulator
+  providers generate launcher entries; the desktop provider creates guarded
+  user overrides for existing entries. Those ownership models remain isolated
+  behind their writers.
 - **`ArtworkSource`** — where icons come from. SteamGridDB, icon themes,
   Iconify and local files.
 

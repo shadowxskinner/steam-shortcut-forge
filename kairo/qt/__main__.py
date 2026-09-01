@@ -1,26 +1,23 @@
-"""Entry point for the Qt shell:  python -m kairo.qt
-
-The Tk shell is untouched and still runs as ``python -m kairo``. Both drive the
-same backend; only the frontend differs.
-"""
+"""Entry point for Kairo's shipping Qt application."""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-HELP = """Kairo — automatic launcher artwork for Linux (Qt shell milestone)
+HELP = """Kairo — automatic launcher artwork for Linux
 
-  python -m kairo.qt                  frosted, blur if the compositor offers it
-  python -m kairo.qt --glass clear    thinner surfaces, for comparison
-  python -m kairo.qt --glass solid    no transparency at all
-  python -m kairo.qt --alpha 0.85     nudge every surface toward one value
-  python -m kairo.qt --no-blur        translucent, never ask for blur
-  python -m kairo.qt --opaque         same as --glass solid
+Usage:
+  kairo                             frosted, blur if the compositor offers it
+  kairo --glass clear               thinner surfaces, for comparison
+  kairo --glass solid               no transparency at all
+  kairo --alpha 0.85                nudge every surface toward one value
+  kairo --no-blur                   translucent, never ask for blur
+  kairo --opaque                    same as --glass solid
+  kairo --version
 
-  In the window: Ctrl+1/2/3 switch presets, Ctrl+[ and Ctrl+] nudge them.
-
-  python -m kairo                 the CustomTkinter shell, unchanged
+The optional legacy frontend is available as kairo-tk after installing
+Kairo's `tk` extra.
 """
 
 
@@ -47,6 +44,11 @@ def main(argv: list[str] | None = None) -> int:
         print(HELP)
         return 0
 
+    if "--version" in argv:
+        from kairo import __version__
+        print(__version__)
+        return 0
+
     if not sys.platform.startswith("linux"):
         print("Kairo targets Linux desktops.", file=sys.stderr)
         return 1
@@ -55,10 +57,10 @@ def main(argv: list[str] | None = None) -> int:
         from PySide6.QtGui import QFont, QGuiApplication
         from PySide6.QtWidgets import QApplication
     except ImportError:
-        print("The Qt shell needs PySide6:\n"
+        print("Kairo needs PySide6:\n"
               "    sudo pacman -S pyside6\n"
               "  or:  pip install PySide6\n"
-              "The CustomTkinter shell still works: python -m kairo",
+              "The optional legacy frontend is available as kairo-tk.",
               file=sys.stderr)
         return 1
 

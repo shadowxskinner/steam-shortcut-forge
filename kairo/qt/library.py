@@ -1,11 +1,4 @@
-"""The middle and right columns.
-
-Read-only for this milestone. Scanning, browsing, searching, filtering,
-selecting artwork and previewing a proposal all work against the real backend;
-nothing writes. Apply, Reset and Remove are present so the layout can be judged
-but are disabled, because the shell is being validated before behaviour is
-wired to it.
-"""
+"""The library list, artwork browser and guarded apply/reset actions."""
 
 from __future__ import annotations
 
@@ -239,11 +232,7 @@ class LibraryPane(QWidget):
         self.customize_btn.clicked.connect(
             lambda _checked: self.customize_launcher.emit(self._launcher_id()))
 
-        self.match_btn = QPushButton("Auto Match")
-        self.match_btn.setObjectName("secondary")
-        self.match_btn.setEnabled(False)
-        self.match_btn.setToolTip("Not wired yet — this milestone is read-only")
-        for button in (self.customize_btn, self.rescan_btn, self.match_btn):
+        for button in (self.customize_btn, self.rescan_btn):
             button.setFixedHeight(Q.H_BUTTON)
             head.addWidget(button, 0, Qt.AlignVCenter)
         layout.addWidget(header)

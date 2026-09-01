@@ -1,4 +1,4 @@
-"""Entry point."""
+"""Entry point for Kairo's optional legacy Tk frontend."""
 
 from __future__ import annotations
 
@@ -9,10 +9,11 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
 
     if "--help" in argv or "-h" in argv:
-        print("Kairo — automatic launcher artwork for Linux\n"
-              "\n  kairo             the three-column window"
-              "\n  kairo --classic   the previous single-provider window"
-              "\n  kairo --version")
+        print("Kairo legacy Tk frontend\n"
+              "\n  kairo-tk             the three-column Tk window"
+              "\n  kairo-tk --classic   the previous single-provider window"
+              "\n  kairo-tk --version"
+              "\n\nThe shipping Qt application is: kairo")
         return 0
 
     if "--version" in argv:
@@ -27,7 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         import customtkinter  # noqa: F401
     except ImportError:
-        print("Kairo needs customtkinter:  pip install customtkinter",
+        print("kairo-tk needs the optional Tk dependencies:"
+              "  pip install 'kairo[tk]'",
               file=sys.stderr)
         return 1
 

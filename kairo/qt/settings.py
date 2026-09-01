@@ -1,4 +1,4 @@
-"""The Settings destination, read-only for this milestone."""
+"""Settings for artwork sources, emulators and application information."""
 
 from __future__ import annotations
 

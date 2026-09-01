@@ -1806,7 +1806,7 @@ def test_the_shell_refreshes_logos_on_change_and_rescan():
 def test_the_customize_action_is_only_a_deep_link():
     source = (QT_DIR / "library.py").read_text()
     block = source.split("self.customize_btn = QPushButton")[1].split(
-        "self.match_btn")[0]
+        "for button in")[0]
     assert "customize_launcher.emit" in block
     for forbidden in ("apply_icon", "restore_entry", "remove_entry",
                       "QFileDialog"):
@@ -1819,6 +1819,12 @@ def test_the_customize_action_is_only_a_deep_link():
     assert "_select(key)" in handler and "reveal_launcher" in handler
     for forbidden in ("apply_icon", "restore_entry", "remove_entry"):
         assert forbidden not in handler
+
+
+def test_unimplemented_auto_match_is_not_advertised_in_qt():
+    source = (QT_DIR / "library.py").read_text()
+    assert "Auto Match" not in source
+    assert "match_btn" not in source
 
 
 def test_the_reveal_retry_is_bounded():

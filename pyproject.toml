@@ -24,29 +24,26 @@ classifiers = [
 ]
 dependencies = [
     "Pillow>=10.0.0",
+    "PySide6>=6.6",
 ]
 
 [project.scripts]
-# The .desktop file and the PKGBUILD both say Exec=kairo, so the command has
-# to exist. Without this the packaged app installed fine and then had nothing
-# to launch.
+# The desktop file, package and documentation all use the Qt application.
+# Keep the legacy frontend explicit so installers never have two entry-point
+# groups racing to create a different executable at the same path.
 kairo = "kairo.qt.__main__:main"
+kairo-qt = "kairo.qt.__main__:main"
+kairo-tk = "kairo.__main__:main"
 
 [project.optional-dependencies]
-# The two frontends. Neither is required by the other, and the backend needs
-# neither: providers, artwork, the ledger, migration and matching are all
-# toolkit-free and their tests run with no GUI library installed at all.
+# The Qt frontend is the shipping application and therefore a normal runtime
+# dependency. The previous Tk frontend remains available for comparison.
 tk = ["customtkinter>=6.0.0", "cairosvg"]
-qt = ["PySide6>=6.6"]
 
 [project.urls]
 Homepage = "https://github.com/shadowxskinner/kairo"
 Repository = "https://github.com/shadowxskinner/kairo"
 Issues = "https://github.com/shadowxskinner/kairo/issues"
-
-[project.gui-scripts]
-kairo = "kairo.__main__:main"
-kairo-qt = "kairo.qt.__main__:main"
 
 [tool.setuptools.dynamic]
 # Single source of truth. Nothing else stores a version string.

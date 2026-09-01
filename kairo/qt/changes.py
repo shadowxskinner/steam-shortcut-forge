@@ -107,7 +107,7 @@ class ChangeRow(QFrame):
         self.remove = QPushButton("Remove")
         self.remove.setObjectName("danger")
         self.remove.setEnabled(False)
-        self.remove.setToolTip("Not wired yet — this milestone is read-only")
+        self.remove.setToolTip("Removing generated shortcuts is not available yet")
         layout.addWidget(self.remove)
         self.bind(record)
 
@@ -185,7 +185,7 @@ class ChangesPane(QWidget):
         self.cleanup_btn = QPushButton("Clean up unused artwork")
         self.cleanup_btn.setObjectName("secondary")
         self.cleanup_btn.setEnabled(False)
-        self.cleanup_btn.setToolTip("Not wired yet")
+        self.cleanup_btn.setToolTip("Unused artwork cleanup is not available yet")
         self.restore_all_btn = QPushButton("Restore all")
         self.restore_all_btn.setObjectName("secondary")
         self.restore_all_btn.clicked.connect(
