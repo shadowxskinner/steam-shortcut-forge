@@ -121,8 +121,18 @@ MIN_ALPHA, MAX_ALPHA = 0.0, 1.0
 # proportions around behind it.
 # ---------------------------------------------------------------------------
 
+MIN_WINDOW_WIDTH = 900
+BREAKPOINT_COMPACT = 1320
+BREAKPOINT_NARROW = 1040
+
 W_NAV = 244
 W_LIST = 372                 # narrower than the workspace: artwork is the work
+W_NAV_COMPACT = 196
+W_LIST_COMPACT = 320
+W_NAV_NARROW = 80            # mark and destination icons, without labels
+W_LIST_NARROW = 280          # the inspector keeps at least 540px at the floor
+W_QUERY_COMPACT = 200
+W_QUERY_NARROW = 180
 
 H_HEADER = 88                # the header band, shared by all three columns
 H_NAV_ITEM = 44

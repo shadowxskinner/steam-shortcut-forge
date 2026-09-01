@@ -108,6 +108,9 @@ class LibraryPane(QWidget):
         self._preview_generation = 0
         self._paint_ratio = 0.0
         self._paint_token = None
+        self._layout_mode = "wide"
+        self._restore_full_label = ""
+        self._remove_full_label = ""
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -125,9 +128,11 @@ class LibraryPane(QWidget):
 
     def _build_list(self) -> QWidget:
         column = QWidget()
+        self._list_column = column
         column.setObjectName("list")
         column.setFixedWidth(Q.W_LIST)
         layout = QVBoxLayout(column)
+        self._list_layout = layout
         layout.setContentsMargins(Q.PAD_COLUMN, 0, Q.PAD_COLUMN, Q.PAD_COLUMN)
         layout.setSpacing(Q.GAP)
 
@@ -174,14 +179,17 @@ class LibraryPane(QWidget):
 
     def _build_workspace(self) -> QWidget:
         space = QWidget()
+        self._workspace = space
         space.setObjectName("workspace")
         layout = QVBoxLayout(space)
+        self._workspace_layout = layout
         layout.setContentsMargins(Q.PAD_PANE, 0, Q.PAD_PANE, Q.PAD_PANE)
         layout.setSpacing(Q.GAP_WIDE)
 
         header = QWidget()
         header.setFixedHeight(Q.H_HEADER)
         head = QHBoxLayout(header)
+        self._header_layout = head
         head.setContentsMargins(0, 0, 0, 0)
         head.setSpacing(T.S2)
         # The icon belongs to the title, not to a labelled column beside a
@@ -270,6 +278,7 @@ class LibraryPane(QWidget):
         says nothing at all until there is one.
         """
         row = QHBoxLayout()
+        self._compare_layout = row
         row.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD, Q.PAD_CARD, Q.GAP)
         row.setSpacing(Q.GAP)
         caption = QLabel("PROPOSED")
@@ -290,6 +299,7 @@ class LibraryPane(QWidget):
 
     def _build_artwork_controls(self):
         row = QHBoxLayout()
+        self._artwork_controls_layout = row
         row.setContentsMargins(Q.PAD_CARD, Q.GAP, Q.PAD_CARD, Q.GAP)
         row.setSpacing(Q.GAP)
         heading = QLabel("ARTWORK")
@@ -326,6 +336,7 @@ class LibraryPane(QWidget):
 
     def _build_actions(self):
         row = QHBoxLayout()
+        self._actions_layout = row
         row.setContentsMargins(Q.PAD_CARD, Q.GAP, Q.PAD_CARD, Q.GAP)
         row.setSpacing(T.S2)
         self.browse_btn = QPushButton("Browse local file…")
@@ -354,6 +365,74 @@ class LibraryPane(QWidget):
         row.addWidget(self.apply_btn)
         return row
 
+    def set_layout_mode(self, mode: str) -> None:
+        """Compress secondary chrome while protecting the artwork workspace."""
+        if mode not in ("wide", "compact", "narrow"):
+            mode = "wide"
+        self._layout_mode = mode
+        widths = {
+            "wide": Q.W_LIST,
+            "compact": Q.W_LIST_COMPACT,
+            "narrow": Q.W_LIST_NARROW,
+        }
+        self._list_column.setFixedWidth(widths[mode])
+
+        narrow = mode == "narrow"
+        pane_pad = 20 if narrow else Q.PAD_PANE
+        card_pad = 16 if narrow else Q.PAD_CARD
+        self._workspace_layout.setContentsMargins(
+            pane_pad, 0, pane_pad, pane_pad)
+        self._compare_layout.setContentsMargins(
+            card_pad, card_pad, card_pad, Q.GAP)
+        self._artwork_controls_layout.setContentsMargins(
+            card_pad, Q.GAP, card_pad, Q.GAP)
+        self._actions_layout.setContentsMargins(
+            card_pad, Q.GAP, card_pad, Q.GAP)
+        self.grid.setContentsMargins(max(0, card_pad - T.S2), 0,
+                                    max(0, card_pad - T.S2), 0)
+
+        query_width = {
+            "wide": Q.W_QUERY,
+            "compact": Q.W_QUERY_COMPACT,
+            "narrow": Q.W_QUERY_NARROW,
+        }
+        self.query.setFixedWidth(query_width[mode])
+        full_customize = self._customize_label()
+        customize = {
+            "wide": full_customize,
+            "compact": "Launcher icon…",
+            "narrow": "Launcher…",
+        }
+        self.customize_btn.setText(customize[mode])
+        if self.customize_btn.isEnabled():
+            self.customize_btn.setToolTip(
+                "" if mode == "wide" else full_customize)
+        self._refresh_action_labels()
+        self._elide_heading()
+        if self.tiles:
+            self._reflow_tiles()
+
+    @staticmethod
+    def _short_action_label(label: str) -> str:
+        for verb in ("Reset", "Restore", "Remove"):
+            if label.startswith(verb):
+                return verb
+        return label
+
+    def _refresh_action_labels(self) -> None:
+        compact = self._layout_mode != "wide"
+        self.browse_btn.setText("Local file…" if compact
+                                else "Browse local file…")
+        self.browse_btn.setToolTip("Browse local file…" if compact else "")
+        restore = self._restore_full_label
+        remove = self._remove_full_label
+        self.restore_btn.setText(
+            self._short_action_label(restore) if compact else restore)
+        self.remove_btn.setText(
+            self._short_action_label(remove) if compact else remove)
+        self.restore_btn.setToolTip(restore if compact else "")
+        self.remove_btn.setToolTip(remove if compact else "")
+
     @staticmethod
     def _divider() -> QFrame:
         """A hairline, not a gap — it groups where a gap would separate."""
@@ -376,11 +455,12 @@ class LibraryPane(QWidget):
             writer = self.provider.writer()
         except Exception:
             return
-        self.restore_btn.setText(writer.restore_label)
+        self._restore_full_label = writer.restore_label
         supports_remove = bool(getattr(writer, "supports_remove", False))
         self.remove_btn.setVisible(supports_remove)
         if supports_remove:
-            self.remove_btn.setText(writer.remove_label)
+            self._remove_full_label = writer.remove_label
+        self._refresh_action_labels()
 
     # -- writing -----------------------------------------------------------
     #
@@ -503,6 +583,11 @@ class LibraryPane(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._elide_heading()
+        if hasattr(self, "grid") and self.tiles:
+            columns = self._columns()
+            if columns != getattr(self, "_last_columns", None):
+                self._last_columns = columns
+                self._reflow_tiles()
 
     def _customizable(self) -> bool:
         """Steam and emulators have an application of their own; games do not."""

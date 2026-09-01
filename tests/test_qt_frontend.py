@@ -2523,3 +2523,67 @@ def test_ratio_refreshed_header_icons_follow_the_selected_row_and_tile(qt_core):
     LibraryPane._fill_tile(
         pane, 0, (([(0, proposed, b"preview")], 4), token), "apps:one")
     assert shown_proposal == [proposed]
+
+
+# -- responsive three-column composition ---------------------------------
+
+def test_the_window_has_deliberate_wide_compact_and_narrow_modes():
+    """Snapping the window must change composition before content clips."""
+    from kairo.qt.shell import layout_mode
+
+    assert layout_mode(1420) == "wide"
+    assert layout_mode(1120) == "compact"
+    assert layout_mode(900) == "narrow"
+
+
+def test_the_narrow_width_budget_protects_the_inspector():
+    """Navigation and list yield space; the artwork workspace never does."""
+    from kairo.qt import theme as Q
+
+    used = Q.W_NAV_NARROW + Q.W_LIST_NARROW
+    assert used <= 360
+    assert Q.MIN_WINDOW_WIDTH - used >= 520, \
+        "the side columns still starve the inspector at minimum width"
+
+
+def test_compact_navigation_is_icon_only_but_stays_discoverable(qt_core):
+    from kairo.qt.widgets import NavButton
+
+    button = NavButton("steam", "Steam", "steam")
+    button.set_count(7)
+    button.set_compact(True)
+
+    assert button.name.isHidden()
+    assert button.count.isHidden()
+    assert "Steam" in button.toolTip() and "7" in button.toolTip()
+
+    button.set_compact(False)
+    assert not button.name.isHidden()
+    assert not button.count.isHidden()
+
+
+def test_resizing_propagates_the_mode_to_every_created_pane():
+    """A pane made before the snap must adapt as reliably as a later one."""
+    source = (QT_DIR / "shell.py").read_text()
+    resize = source.split("def resizeEvent")[1].split("\n    def ")[0]
+    apply = source.split("def _apply_layout_mode")[1].split("\n    def ")[0]
+    factory = source.split("def _pane_for")[1].split("\n    def ")[0]
+
+    assert "_apply_layout_mode" in resize
+    assert "self.panes.values()" in apply
+    assert "set_layout_mode" in factory
+
+
+def test_compact_library_labels_are_short_without_changing_their_actions():
+    """Short labels are presentation; callbacks and writer verbs stay put."""
+    source = (QT_DIR / "library.py").read_text()
+    mode = source.split("def set_layout_mode")[1].split("\n    def ")[0]
+    labels = source.split("def _refresh_action_labels")[1].split("\n    def ")[0]
+    actions = source.split("def _update_actions")[1].split("\n    def ")[0]
+
+    assert "Local file" in labels
+    assert "Launcher icon" in mode
+    assert "writer.restore_label" in actions
+    assert "writer.remove_label" in actions
+    for callback in ("_browse", "_restore", "_remove", "_apply"):
+        assert f"lambda _c: self.{callback}()" in source

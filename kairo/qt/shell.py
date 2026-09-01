@@ -39,6 +39,15 @@ from kairo.ui import theme as T
 CLOSE_DRAIN_SECONDS = 5.0
 
 
+def layout_mode(width: int) -> str:
+    """Choose a composition before fixed side columns can clip the work."""
+    if width < Q.BREAKPOINT_NARROW:
+        return "narrow"
+    if width < Q.BREAKPOINT_COMPACT:
+        return "compact"
+    return "wide"
+
+
 class Context:
     """What every pane needs, and nothing more."""
 
@@ -55,9 +64,10 @@ class KairoWindow(QMainWindow):
                  glass=None):
         super().__init__()
         self.glass = Q.resolve(glass)
+        self._layout_mode = ""
         self.setWindowTitle(APP_NAME)
         self.resize(1420, 900)
-        self.setMinimumSize(1120, 700)
+        self.setMinimumSize(Q.MIN_WINDOW_WIDTH, 700)
 
         # Per-pixel alpha. Text and icons stay opaque; only the surfaces let
         # anything through. This is the thing Tk could not express.
@@ -98,6 +108,7 @@ class KairoWindow(QMainWindow):
         self.panes: dict[str, QWidget] = {}
 
         self._build()
+        self._apply_layout_mode(force=True)
         self._adopt()
 
         first = next((item for item in self.items if item.provider is not None),
@@ -138,17 +149,21 @@ class KairoWindow(QMainWindow):
 
     def _build_nav(self) -> QWidget:
         column = QWidget()
+        self.nav_column = column
         column.setObjectName("nav")
         column.setFixedWidth(Q.W_NAV)
         layout = QVBoxLayout(column)
+        self.nav_layout = layout
         layout.setContentsMargins(T.S2, 0, T.S2, Q.PAD_COLUMN)
         layout.setSpacing(1)
 
         # The header band every column uses, so the wordmark, the provider
         # name and the selected item's title all begin on one line.
         header = QWidget()
+        self.nav_header = header
         header.setFixedHeight(Q.H_HEADER)
         header_layout = QHBoxLayout(header)
+        self.nav_header_layout = header_layout
         header_layout.setContentsMargins(T.S3, 0, T.S3, 0)
         header_layout.setSpacing(T.S2)
         # The mark carries the identity and the wordmark carries the name.
@@ -156,8 +171,10 @@ class KairoWindow(QMainWindow):
         # around one-per-row was the busiest thing on screen, and the mark
         # says the same thing without needing a font that ships CJK.
         stamp = branding.mark(Q.MARK_SIZE)
+        self.nav_badge = None
         if not stamp.isNull():
             badge = QLabel()
+            self.nav_badge = badge
             badge.setObjectName("badge")
             badge.setPixmap(stamp)
             badge.setFixedSize(Q.MARK_SIZE, Q.MARK_SIZE)
@@ -165,12 +182,14 @@ class KairoWindow(QMainWindow):
             header_layout.addSpacing(T.S2)
 
         logo = QLabel("KAIRO")
+        self.nav_logo = logo
         logo.setObjectName("logo")
         header_layout.addWidget(logo, 0, Qt.AlignVCenter)
         header_layout.addStretch(1)
         layout.addWidget(header)
 
         current_group = None
+        self.nav_headings = []
         for item in self.items:
             if item.group != current_group:
                 current_group = item.group
@@ -178,6 +197,7 @@ class KairoWindow(QMainWindow):
                 heading.setObjectName("micro")
                 heading.setContentsMargins(T.S3, Q.GAP_WIDE, 0, T.S2)
                 layout.addWidget(heading)
+                self.nav_headings.append(heading)
             logo = (getattr(item.provider, "nav_icon_names", None)
                     or getattr(item.provider, "nav_icon_name", "")
                     ) if item.provider else ""
@@ -218,6 +238,8 @@ class KairoWindow(QMainWindow):
             pane.changed.connect(self.refresh_nav_icons)
         self.panes[key] = pane
         self.stack.addWidget(pane)
+        if hasattr(pane, "set_layout_mode"):
+            pane.set_layout_mode(self._layout_mode)
         return pane
 
     def _select(self, key: str) -> None:
@@ -250,6 +272,7 @@ class KairoWindow(QMainWindow):
         old_nav.setParent(None)
         old_nav.deleteLater()
         body.insertWidget(0, self._build_nav())
+        self._apply_layout_mode(force=True)
         keys = [item.key for item in self.items]
         self._select(current if current in keys else keys[0])
 
@@ -396,8 +419,41 @@ class KairoWindow(QMainWindow):
     def resizeEvent(self, event):
         """Keep the compositor region in step without flooding Wayland."""
         super().resizeEvent(event)
+        self._apply_layout_mode()
         if self.blur.active and not self._closing:
             self._blur_resize_timer.start()
+
+    def _apply_layout_mode(self, *, force: bool = False) -> None:
+        """Let secondary columns yield before the inspector loses content."""
+        if not hasattr(self, "nav_column"):
+            return
+        mode = layout_mode(self.width())
+        if mode == self._layout_mode and not force:
+            return
+        self._layout_mode = mode
+
+        widths = {
+            "wide": Q.W_NAV,
+            "compact": Q.W_NAV_COMPACT,
+            "narrow": Q.W_NAV_NARROW,
+        }
+        self.nav_column.setFixedWidth(widths[mode])
+        narrow = mode == "narrow"
+        margin = 0 if narrow else T.S2
+        self.nav_layout.setContentsMargins(
+            margin, 0, margin, Q.PAD_COLUMN)
+        self.nav_header_layout.setContentsMargins(T.S3, 0, T.S3, 0)
+        self.nav_header_layout.setSpacing(0 if narrow else T.S2)
+        if self.nav_badge is not None:
+            self.nav_badge.setVisible(True)
+        self.nav_logo.setVisible(not narrow or self.nav_badge is None)
+        for heading in self.nav_headings:
+            heading.setVisible(not narrow)
+        for button in self.buttons.values():
+            button.set_compact(narrow)
+        for pane in self.panes.values():
+            if hasattr(pane, "set_layout_mode"):
+                pane.set_layout_mode(mode)
 
     def _update_blur_region(self) -> None:
         if self.blur.active and not self._closing:

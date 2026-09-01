@@ -242,6 +242,9 @@ class NavButton(QPushButton):
                  logo_name: str = ""):
         super().__init__(parent)
         self.key = key
+        self._label = label
+        self._count_value = None
+        self._compact = False
         self._icon = icon
         self._logo_name = logo_name
         self._logo = None
@@ -252,9 +255,9 @@ class NavButton(QPushButton):
         self.setAutoExclusive(False)
         self.setCursor(Qt.PointingHandCursor)
 
-        row = QHBoxLayout(self)
-        row.setContentsMargins(T.S3, 0, T.S3, 0)
-        row.setSpacing(T.S3)
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(T.S3, 0, T.S3, 0)
+        self._layout.setSpacing(T.S3)
         self.glyph = QLabel(self)
         self.glyph.setFixedSize(QSize(Q.NAV_ICON, Q.NAV_ICON))
         self.glyph.setAlignment(Qt.AlignCenter)
@@ -265,10 +268,10 @@ class NavButton(QPushButton):
         # Children of a button must not swallow the press that reaches it.
         for child in (self.glyph, self.name, self.count):
             child.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        row.addWidget(self.glyph)
-        row.addWidget(self.name)
-        row.addStretch(1)
-        row.addWidget(self.count)
+        self._layout.addWidget(self.glyph)
+        self._layout.addWidget(self.name)
+        self._layout.addStretch(1)
+        self._layout.addWidget(self.count)
 
         self._paint_icon(False)
         self.toggled.connect(self._paint_icon)
@@ -321,8 +324,34 @@ class NavButton(QPushButton):
         self._paint_icon(self.isChecked())
 
     def set_count(self, value) -> None:
+        self._count_value = value
         self.count.setText("" if value is None else str(value))
-        self.setToolTip("" if value is None else f"{value} items")
+        self._update_tooltip()
+
+    def set_compact(self, compact: bool) -> None:
+        """Collapse to a centred glyph without making the row mysterious."""
+        compact = bool(compact)
+        if compact == self._compact:
+            self._update_tooltip()
+            return
+        self._compact = compact
+        self.name.setVisible(not compact)
+        self.count.setVisible(not compact)
+        if compact:
+            gutter = max(0, (Q.W_NAV_NARROW - Q.NAV_ICON) // 2)
+            self._layout.setContentsMargins(gutter, 0, gutter, 0)
+            self._layout.setSpacing(0)
+        else:
+            self._layout.setContentsMargins(T.S3, 0, T.S3, 0)
+            self._layout.setSpacing(T.S3)
+        self._update_tooltip()
+
+    def _update_tooltip(self) -> None:
+        count = ("" if self._count_value is None
+                 else f" · {self._count_value} items")
+        self.setToolTip(f"{self._label}{count}" if self._compact else
+                        (f"{self._count_value} items"
+                         if self._count_value is not None else ""))
 
 
 # ---------------------------------------------------------------------------
