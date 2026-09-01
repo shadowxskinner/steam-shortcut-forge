@@ -124,9 +124,9 @@ class DesktopEntryProvider(AppProvider):
         local_dir = paths.applications_dir()
 
         for directory in paths.system_application_dirs():
-            if not directory.is_dir():
+            if not paths.is_readable_dir(directory):
                 continue
-            for path in sorted(directory.glob("*.desktop")):
+            for path in paths.entries_matching(directory, "*.desktop"):
                 basename = path.name
 
                 # Our own generated entries belong to their own provider.
@@ -153,7 +153,8 @@ class DesktopEntryProvider(AppProvider):
                     continue
 
                 local_path = local_dir / basename
-                managed = local_path.is_file() and de.is_managed(local_path)
+                managed = (paths.is_readable_file(local_path)
+                           and de.is_managed(local_path))
                 icon_value = section.get("Icon", "").strip()
 
                 # Later directories have higher precedence and overwrite
@@ -195,7 +196,7 @@ class DesktopEntryProvider(AppProvider):
             if directory == local:
                 continue
             candidate = directory / basename
-            if candidate.is_file():
+            if paths.is_readable_file(candidate):
                 return candidate
         return None
 
@@ -215,7 +216,7 @@ class DesktopEntryProvider(AppProvider):
     def refresh(self, entry: AppEntry) -> None:
         local = Path(entry.payload.get("local") or
                      (paths.applications_dir() / entry.payload.get("basename", "")))
-        if local.is_file() and de.is_managed(local):
+        if paths.is_readable_file(local) and de.is_managed(local):
             entry.customized = True
             value = de.read_entry_icon(local)
             entry.current_icon = Path(value) if value else None

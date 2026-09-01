@@ -68,13 +68,14 @@ def candidate_roots() -> list[Path]:
         h / ".var" / "app" / FLATPAK_STEAM_ID / "data" / "Steam",
         Path("/usr/share/steam"),
     ]
-    return [p for p in candidates if (p / "steamapps").is_dir()]
+    return [p for p in candidates
+            if paths.is_readable_dir(p / "steamapps")]
 
 
 def extra_libraries(steamapps: Path) -> list[Path]:
     """Additional library folders on other drives, from libraryfolders.vdf."""
     vdf = steamapps / "libraryfolders.vdf"
-    if not vdf.is_file():
+    if not paths.is_readable_file(vdf):
         return []
     try:
         text = vdf.read_text(errors="ignore")
@@ -83,7 +84,7 @@ def extra_libraries(steamapps: Path) -> list[Path]:
     out: list[Path] = []
     for raw in re.findall(r'"path"\s+"([^"]+)"', text):
         candidate = Path(raw.replace("\\\\", "/")) / "steamapps"
-        if candidate.is_dir():
+        if paths.is_readable_dir(candidate):
             out.append(candidate)
     return out
 
@@ -160,10 +161,10 @@ def existing_generated() -> dict[str, Path]:
     """
     out: dict[str, Path] = {}
     directory = paths.applications_dir()
-    if not directory.is_dir():
+    if not paths.is_readable_dir(directory):
         return out
     for prefix in paths.all_desktop_prefixes():
-        for path in directory.glob(f"{prefix}*.desktop"):
+        for path in paths.entries_matching(directory, f"{prefix}*.desktop"):
             appid = paths.strip_generated_prefix(path.name)
             if appid and appid not in out:
                 out[appid] = path
@@ -215,7 +216,8 @@ class SteamProvider(AppProvider):
     def scan(self) -> list[AppEntry]:
         found: dict[str, AppEntry] = {}
         for steamapps in find_steamapps():
-            for manifest in steamapps.glob("appmanifest_*.acf"):
+            for manifest in paths.entries_matching(steamapps,
+                                                   "appmanifest_*.acf"):
                 try:
                     text = manifest.read_text(errors="ignore")
                 except OSError:

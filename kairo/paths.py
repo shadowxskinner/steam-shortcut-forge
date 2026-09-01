@@ -184,3 +184,42 @@ def theme_roots() -> list[Path]:
 
 def pixmaps_dir() -> Path:
     return Path("/usr/share/pixmaps")
+
+
+# ---------------------------------------------------------------------------
+# Probing paths we do not control
+# ---------------------------------------------------------------------------
+#
+# Every scan walks directories supplied by the system, the user, or another
+# package's installer. ``Path.is_dir`` and ``Path.is_file`` do not return
+# False for something that cannot be stat'ed at all — they raise. An
+# unreadable parent, a stale automount, or a Flatpak export directory being
+# replaced mid-uninstall is therefore an uncaught exception rather than a
+# directory to skip, and it takes the whole scan with it.
+
+def is_readable_dir(path: Path) -> bool:
+    """True when ``path`` is a directory that can actually be looked at."""
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
+def is_readable_file(path: Path) -> bool:
+    """True when ``path`` is a file that can actually be looked at."""
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
+def entries_matching(directory: Path, pattern: str) -> list[Path]:
+    """Sorted matches inside ``directory``, or nothing if it cannot be read.
+
+    Listing can fail even after is_dir() succeeded — the directory may lose
+    its read bit, or vanish, between the two calls.
+    """
+    try:
+        return sorted(directory.glob(pattern))
+    except OSError:
+        return []

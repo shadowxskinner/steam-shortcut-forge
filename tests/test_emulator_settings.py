@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from tests.conftest import settle
+
 QT_DIR = Path(__file__).resolve().parents[1] / "kairo" / "qt"
 
 
@@ -171,3 +173,118 @@ def test_a_picked_system_arrives_already_filled_in():
     assert "ROM_PLACEHOLDER" in build
     assert callable(SystemPicker.emulator)
     assert systems.by_id("gamecube").extensions
+
+
+# ---------------------------------------------------------------------------
+# ROM counting, against directories that misbehave
+# ---------------------------------------------------------------------------
+
+def _folder_row(qt_app, path="", extensions=".iso"):
+    from kairo.emulators import RomFolder
+    from kairo.qt.emulator_settings import FolderRow
+
+    row = FolderRow(RomFolder(path=path, extensions=tuple(
+        e for e in extensions.split() if e)))
+    return row
+
+
+def test_an_unreadable_rom_folder_does_not_raise_on_the_gui_thread(
+        qt_app, tmp_path):
+    """This runs from a text-change handler, so a raise here is a traceback.
+
+    Path.is_dir() does not return False for a directory under an unreadable
+    parent — it raises. Typing such a path character by character hit it on
+    every keystroke.
+    """
+    import os
+
+    blocked = tmp_path / "blocked"
+    (blocked / "roms").mkdir(parents=True)
+    os.chmod(blocked, 0o000)
+    try:
+        row = _folder_row(qt_app, path=str(blocked / "roms"))
+        row.recount()                      # must not raise
+    finally:
+        os.chmod(blocked, 0o755)
+    assert row.matched.text() == "no folder"
+
+
+def test_a_symlink_loop_inside_a_rom_tree_terminates(qt_app, tmp_path):
+    """rglob does not descend into symlinks. Pinned, not assumed."""
+    import os
+    import time
+
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    (roms / "game.iso").write_bytes(b"x")
+    os.symlink(roms, roms / "loop")
+
+    row = _folder_row(qt_app, path=str(roms))
+    started = time.monotonic()
+    row.recount()
+    assert settle(qt_app, timeout=10.0), "the count never finished"
+    assert time.monotonic() - started < 10.0
+    assert row.matched.text() == "1 file"
+
+
+def test_empty_path_and_empty_extensions_answer_immediately(qt_app, tmp_path):
+    from kairo.qt import work
+
+    row = _folder_row(qt_app, path="")
+    row.recount()
+    assert row.matched.text() == ""
+    assert work.is_idle(), "an empty path started a walk"
+
+    row = _folder_row(qt_app, path=str(tmp_path), extensions="")
+    row.recount()
+    assert row.matched.text() == "no types"
+    assert work.is_idle(), "an empty extension list started a walk"
+
+
+def test_a_deleted_folder_reports_rather_than_raises(qt_app, tmp_path):
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    row = _folder_row(qt_app, path=str(gone))
+    gone.rmdir()
+    row.recount()
+    assert row.matched.text() == "no folder"
+
+
+def test_a_stale_count_cannot_replace_a_newer_one(qt_app, tmp_path):
+    roms = tmp_path / "roms"
+    roms.mkdir()
+    for i in range(3):
+        (roms / f"g{i}.iso").write_bytes(b"x")
+
+    row = _folder_row(qt_app, path=str(roms))
+    row.recount()
+    assert settle(qt_app, timeout=10.0)
+    assert row.matched.text() == "3 files"
+
+    # A result from before the user typed again must be discarded.
+    stale = row._recount_serial
+    row._schedule_recount()
+    row._recounted((stale, 999))
+    assert "999" not in row.matched.text(), "an obsolete count was painted"
+
+
+def test_one_unreadable_file_does_not_void_the_whole_count(qt_app, tmp_path):
+    """A folder is not 'unreadable' because a single entry inside it is."""
+    import os
+
+    roms = tmp_path / "roms"
+    hidden = roms / "hidden"
+    hidden.mkdir(parents=True)
+    (roms / "a.iso").write_bytes(b"x")
+    (hidden / "b.iso").write_bytes(b"x")
+
+    os.chmod(hidden, 0o000)
+    try:
+        row = _folder_row(qt_app, path=str(roms))
+        row.recount()
+        assert settle(qt_app, timeout=10.0)
+        text = row.matched.text()
+    finally:
+        os.chmod(hidden, 0o755)
+    assert text.endswith("file") or text.endswith("files"), text
+    assert text != "unreadable", "one blocked subdirectory voided the count"

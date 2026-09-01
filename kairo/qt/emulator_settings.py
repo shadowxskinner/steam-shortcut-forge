@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QFrame,
 
 from kairo import emulators as emu
 from kairo import systems
+from kairo import paths
 from kairo.qt import work
 from kairo.qt import theme as Q
 from kairo.ui import theme as T
@@ -116,7 +117,10 @@ class FolderRow(QFrame):
             self.matched.setText("")
             return
         root = Path(folder.path).expanduser()
-        if not root.is_dir():
+        # is_dir() raises rather than returning False on a path that cannot
+        # be stat'ed, and this runs on the GUI thread from a text-change
+        # handler — typing a path under an unreadable parent was a traceback.
+        if not paths.is_readable_dir(root):
             self.matched.setText("no folder")
             return
         if not folder.extensions:
@@ -125,11 +129,18 @@ class FolderRow(QFrame):
         self.matched.setText("Counting…")
 
         def count_files():
+            # rglob does not descend into symlinked directories, so a loop
+            # inside the ROM tree terminates rather than hanging this worker.
+            # One unreadable file is skipped; only a walk that fails outright
+            # reports the folder as unreadable.
+            count = 0
             try:
-                count = sum(1 for p in root.rglob("*")
-                            if folder.matches(p.name) and p.is_file())
+                for candidate in root.rglob("*"):
+                    if (folder.matches(candidate.name)
+                            and paths.is_readable_file(candidate)):
+                        count += 1
             except OSError:
-                count = None
+                return serial, None
             return serial, count
 
         work.submit(count_files, on_done=self._recounted)

@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from kairo import paths
@@ -57,12 +57,20 @@ class System:
     config_fallbacks: tuple[str, ...] = ()
     #: Restrict generic key parsing when an INI uses the same name elsewhere.
     config_section: str = ""
+    #: Icon names this emulator's packages are known to install, most specific
+    #: first. Tried in order against the icon theme; whichever resolves wins.
+    #: These are candidates for a lookup, never assertions that a file exists,
+    #: so an extra spelling costs nothing and a wrong one is simply skipped.
+    icons: tuple[str, ...] = ()
+    #: What this system's games came on. Decides the drawn glyph when no icon
+    #: is installed at all, which is the normal case for an AppImage.
+    medium: str = "disc"
 
     def display(self) -> str:
         return f"{self.name} — {self.emulator}" if self.emulator else self.name
 
 
-CATALOGUE: tuple[System, ...] = (
+_CATALOGUE: tuple[System, ...] = (
     System("gamecube", "GameCube", (".iso", ".gcm", ".rvz", ".ciso", ".gcz", ".tgc"),
            ("dolphin-emu",), ("org.DolphinEmu.dolphin-emu",), ("-b", "-e"),
            ("gc", "gamecube", "ngc"), "Dolphin",
@@ -117,6 +125,54 @@ CATALOGUE: tuple[System, ...] = (
            ("flycast",), ("org.flycast.Flycast",), (),
            ("dreamcast", "dc"), "Flycast"),
 )
+
+
+#: Icon names each emulator's packages are known to install, most specific
+#: first. Kept beside the catalogue rather than repeated inside every System
+#: line, because an icon belongs to the emulator and not to each console it
+#: runs: Dolphin appears twice, mGBA three times, RetroArch twice.
+#:
+#: These are candidates for a theme lookup, not claims that a file exists.
+#: Trying an extra spelling costs one failed index hit; guessing wrong costs
+#: nothing at all, because whatever fails to resolve is simply skipped.
+EMULATOR_ICONS: dict[str, tuple[str, ...]] = {
+    "Dolphin": ("dolphin-emu", "org.DolphinEmu.dolphin-emu"),
+    "Cemu": ("Cemu", "cemu", "info.cemu.Cemu"),
+    "PCSX2": ("PCSX2", "pcsx2", "net.pcsx2.PCSX2", "pcsx2-qt"),
+    "DuckStation": ("duckstation", "DuckStation",
+                    "org.duckstation.DuckStation", "duckstation-qt"),
+    "RPCS3": ("rpcs3", "RPCS3", "net.rpcs3.RPCS3"),
+    "PPSSPP": ("ppsspp", "PPSSPP", "org.ppsspp.PPSSPP"),
+    "Ryujinx": ("ryujinx", "Ryujinx", "org.ryujinx.Ryujinx"),
+    "Azahar": ("azahar", "org.azahar_emu.Azahar", "citra", "citra-qt"),
+    "melonDS": ("melonDS", "melonds", "net.kuribo64.melonDS"),
+    "simple64": ("simple64", "io.github.simple64.simple64", "simple64-gui",
+                 "mupen64plus"),
+    "Snes9x": ("snes9x", "com.snes9x.Snes9x", "snes9x-gtk"),
+    "Mesen": ("mesen", "Mesen", "io.github.mesen.Mesen"),
+    "mGBA": ("mgba", "io.mgba.mGBA", "mgba-qt"),
+    "RetroArch": ("retroarch", "org.libretro.RetroArch"),
+    "Flycast": ("flycast", "org.flycast.Flycast"),
+}
+
+#: What each system's games arrived on. Only used to pick a drawn glyph when
+#: no icon is installed anywhere, which is the normal case for an AppImage:
+#: it registers nothing with the icon theme, so there is no logo to find and
+#: no search can invent one.
+MEDIUM: dict[str, str] = {
+    "gamecube": "disc", "wii": "disc", "wiiu": "disc", "ps1": "disc",
+    "ps2": "disc", "ps3": "disc", "dreamcast": "disc",
+    "switch": "cartridge", "n64": "cartridge", "snes": "cartridge",
+    "nes": "cartridge", "genesis": "cartridge",
+    "psp": "handheld", "3ds": "handheld", "nds": "handheld",
+    "gba": "handheld", "gb": "handheld",
+}
+
+CATALOGUE: tuple[System, ...] = tuple(
+    replace(system,
+            icons=EMULATOR_ICONS.get(system.emulator, ()),
+            medium=MEDIUM.get(system.id, "disc"))
+    for system in _CATALOGUE)
 
 
 def by_id(system_id: str) -> System | None:
@@ -325,3 +381,31 @@ def detect() -> list[Detection]:
                                find_roms(system)))
     found.sort(key=lambda d: (not d.installed, d.system.name.lower()))
     return found
+
+
+def icon_candidates(emulator_name: str,
+                    systems: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Icon names worth trying for an emulator, most specific first.
+
+    Looked up by emulator name, and falling back to whatever the configured
+    systems say when the name has been edited. Order is preserved and
+    duplicates removed, so the caller can simply take the first that resolves.
+    """
+    names: list[str] = list(EMULATOR_ICONS.get(emulator_name, ()))
+    for system_id in systems:
+        system = by_id(system_id)
+        if system is not None:
+            names.extend(system.icons)
+    return tuple(dict.fromkeys(name for name in names if name))
+
+
+def medium_for(systems: tuple[str, ...]) -> str:
+    """The drawn glyph for a set of configured systems.
+
+    An emulator spanning several consoles takes the medium they agree on,
+    and the neutral chip when they do not — a multi-system front end like
+    RetroArch should not claim to be a cartridge.
+    """
+    found = {system.medium for system_id in systems
+             if (system := by_id(system_id)) is not None}
+    return found.pop() if len(found) == 1 else "chip"

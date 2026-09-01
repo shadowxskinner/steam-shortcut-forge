@@ -532,20 +532,9 @@ def test_qt_jobs_are_destroyed_on_the_gui_thread():
 # proves the line exists; these prove the behaviour it was meant to buy.
 
 @pytest.fixture
-def qt_core():
-    """The one application object this process is allowed.
-
-    A QGuiApplication rather than a QCoreApplication, because QPixmap aborts
-    the process outright without one and Qt permits exactly one instance —
-    so the worker tests, which need nothing from it, have to share the kind
-    the drawing tests require. No window is ever shown.
-    """
-    import os
-    from PySide6.QtGui import QGuiApplication
-
-    if not os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("DISPLAY"):
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    yield QGuiApplication.instance() or QGuiApplication([])
+def qt_core(qt_app):
+    """Historic name for the shared application object; see conftest."""
+    return qt_app
 
 
 def settle(app, timeout=10.0):
@@ -1550,3 +1539,177 @@ def test_leaving_the_event_loop_drains_before_the_interpreter_does():
         "exec() must be wrapped, or an exception on the way out skips it")
     assert "work.drain()" in tail
     assert tail.index("return application.exec()") < tail.index("work.drain()")
+
+
+# ---------------------------------------------------------------------------
+# Nav logos: a search, not a single guess
+# ---------------------------------------------------------------------------
+
+def test_the_logo_search_takes_the_first_candidate_that_resolves(qt_core,
+                                                                 tmp_path):
+    """resolve_icon takes an absolute path verbatim, which makes this real."""
+    from PIL import Image
+    from kairo.qt.widgets import _theme_logo
+
+    real = tmp_path / "emulator.png"
+    Image.new("RGBA", (128, 128), (10, 200, 90, 255)).save(real)
+    missing = str(tmp_path / "not-installed.png")
+
+    assert _theme_logo((missing, str(real)), 22) is not None, (
+        "a candidate that does not resolve must not end the search")
+    assert _theme_logo((missing,), 22) is None
+    assert _theme_logo((), 22) is None
+    assert _theme_logo("", 22) is None
+    # Still accepts the single name the old call site passed.
+    assert _theme_logo(str(real), 22) is not None
+
+
+def test_each_medium_draws_a_different_picture(qt_core):
+    """Four glyph names that render the same bitmap would be four bugs."""
+    from kairo.qt.widgets import nav_pixmap
+
+    drawn = {}
+    for kind in ("disc", "cartridge", "handheld", "chip", "grid", "sliders"):
+        image = nav_pixmap(kind, "#FFFFFF", 40).toImage()
+        drawn[kind] = image.constBits().tobytes()
+
+    assert len(set(drawn.values())) == len(drawn), (
+        "at least two glyph kinds render identically: "
+        f"{[k for k in drawn if list(drawn.values()).count(drawn[k]) > 1]}")
+
+
+def test_an_emulator_row_asks_for_every_candidate(qt_core):
+    source = (QT_DIR / "shell.py").read_text()
+    assert "nav_icon_names" in source, (
+        "the sidebar must pass the whole candidate list, not the first name")
+
+
+# ---------------------------------------------------------------------------
+# Changes: paging, reuse, and how many widgets that costs
+# ---------------------------------------------------------------------------
+
+class _Ledger:
+    def __init__(self, records):
+        self._records = list(records)
+
+    def records(self):
+        return list(self._records)
+
+    def set(self, records):
+        self._records = list(records)
+
+
+def _records(count, *, prefix="app", suffix=""):
+    from kairo.ledger import ChangeRecord
+
+    return [ChangeRecord(key=f"steam:{prefix}{i}", provider_id="steam",
+                         name=f"Game {i}{suffix}", action="overrode",
+                         target=f"/tmp/{prefix}{i}.desktop",
+                         applied_at="2026-01-01T00:00:00")
+            for i in range(count)]
+
+
+def _changes_pane(records, qt_core):
+    from types import SimpleNamespace
+    from kairo.qt.changes import ChangesPane
+
+    ledger = _Ledger(records)
+    pane = ChangesPane(SimpleNamespace(ledger=ledger))
+    pane.resize(900, 700)
+    return pane, ledger
+
+
+def _visible_keys(pane):
+    """Rows the pane has chosen to show.
+
+    isHidden(), not isVisible(): the pane itself is never shown in a test, and
+    isVisible() is false for every descendant of an unshown parent regardless
+    of what the pane decided.
+    """
+    return [row.record.key for row in pane._row_widgets.values()
+            if not row.isHidden()]
+
+
+def test_changes_holds_up_at_every_size_the_history_can_be(qt_core):
+    from kairo.qt.changes import CHANGES_PAGE
+
+    for total in (0, 1, CHANGES_PAGE - 1, CHANGES_PAGE, CHANGES_PAGE + 1,
+                  300, 1000):
+        pane, _ = _changes_pane(_records(total), qt_core)
+        pane.refresh()
+
+        expected = min(total, CHANGES_PAGE) if total else 0
+        assert len(_visible_keys(pane)) == expected, f"{total} records"
+        assert len(pane._row_widgets) <= max(expected, 0) , (
+            f"{total} records built widgets for rows nobody asked for")
+        if total == 0:
+            assert pane._empty is not None, "no empty state for no history"
+        else:
+            assert pane._empty is None, "the empty state outlived the history"
+        assert str(total) in pane.count.text(), "the full total must be shown"
+
+
+def test_paging_reaches_the_last_record_without_duplicating_one(qt_core):
+    from kairo.qt.changes import CHANGES_PAGE
+
+    total = 300
+    pane, _ = _changes_pane(_records(total), qt_core)
+    pane.refresh()
+
+    while pane._shown < total:
+        before = pane._shown
+        pane._shown = min(total, pane._shown + CHANGES_PAGE)
+        pane._bind_records(pane._records[:pane._shown])
+        assert pane._shown > before, "paging stopped making progress"
+
+    keys = _visible_keys(pane)
+    assert len(keys) == total
+    assert len(set(keys)) == total, "a record was materialised twice"
+    assert keys == [r.key for r in pane._records], "rows are out of order"
+
+
+def test_revisiting_an_unchanged_history_rebuilds_nothing(qt_core):
+    pane, _ = _changes_pane(_records(300), qt_core)
+    pane.refresh()
+    first = dict(pane._row_widgets)
+
+    pane.refresh()
+    assert pane._row_widgets == first, "identical history rebuilt its rows"
+    assert all(pane._row_widgets[k] is v for k, v in first.items())
+
+
+def test_adding_replacing_and_removing_one_record(qt_core):
+    base = _records(50)
+    pane, ledger = _changes_pane(base, qt_core)
+    pane.refresh()
+
+    # Added.
+    ledger.set([*base, *_records(1, prefix="new")])
+    pane.refresh()
+    assert "steam:new0" in {r.key for r in pane._records}
+
+    # Replaced in place: same key, different content.
+    changed = list(base)
+    changed[3] = _records(4, suffix=" (renamed)")[3]
+    ledger.set(changed)
+    pane.refresh()
+    assert pane._row_widgets["steam:app3"].record.name.endswith("(renamed)")
+
+    # Removed: its widget must not survive as a hidden orphan.
+    ledger.set(base[:10])
+    pane.refresh()
+    assert set(pane._row_widgets) <= {r.key for r in base[:10]}, (
+        "widgets for removed records were left parented to the pane")
+
+
+def test_widget_count_stays_bounded_across_unrelated_histories(qt_core):
+    """Every record replaced by a different one, ten times over."""
+    pane, ledger = _changes_pane(_records(60), qt_core)
+    pane.refresh()
+
+    for round_ in range(10):
+        ledger.set(_records(60, prefix=f"round{round_}-"))
+        pane.refresh()
+
+    assert len(pane._row_widgets) <= 60, (
+        f"{len(pane._row_widgets)} widgets for 60 records — rows leak")

@@ -16,6 +16,8 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
+from kairo import systems as systems_mod
+
 from kairo import emulators as emu
 from kairo import paths
 from kairo.desktop import entry as de
@@ -81,11 +83,26 @@ class EmulatorProvider(AppProvider):
         self.id = provider_id(emulator.id)
         self.label = emulator.name
         self.order = order
-        # The name its launcher entry declares, which is the only reliable
-        # one: pcsx2-qt installs PCSX2, duckstation-qt installs duckstation,
-        # PPSSPPQt installs ppsspp. The executable is a last resort, and a
-        # drawn glyph is the one after that.
-        self.nav_icon_name = emulator.icon or Path(emulator.executable).name
+        # Whatever its launcher entry declared, then the names its packages
+        # are known to install, then the executable. All candidates for one
+        # theme lookup rather than a single guess, because the declared name
+        # only exists when something registered a .desktop file — an AppImage
+        # never does, which is why PCSX2 fell back to a glyph while Dolphin,
+        # installed as a package, did not.
+        systems = tuple(folder.system for folder in emulator.folders
+                        if folder.system)
+        self.nav_icon_names = tuple(dict.fromkeys(
+            name for name in (emulator.icon,
+                              *systems_mod.icon_candidates(
+                                  emulator.name, systems),
+                              Path(emulator.executable).name)
+            if name))
+        # Kept for anything still reading the old single-name attribute.
+        self.nav_icon_name = (self.nav_icon_names[0]
+                              if self.nav_icon_names else "")
+        # And when nothing at all is installed, a glyph that says what the
+        # games came on rather than one generic chip for every emulator.
+        self.nav_icon = systems_mod.medium_for(systems)
 
     def available(self) -> bool:
         """Configured badly is still configured: the section stays visible.

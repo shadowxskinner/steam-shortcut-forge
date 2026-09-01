@@ -257,3 +257,80 @@ def test_an_unreadable_flatpak_export_is_not_installed(monkeypatch):
 
     monkeypatch.setattr(Path, "exists", explode)
     assert systems._flatpak_installed("net.pcsx2.PCSX2") is False
+
+
+# ---------------------------------------------------------------------------
+# Emulator identity: the icon to look for, and the glyph when there is none
+# ---------------------------------------------------------------------------
+
+def test_every_catalogued_emulator_has_icon_candidates_and_a_medium():
+    from kairo.systems import CATALOGUE
+
+    for system in CATALOGUE:
+        assert system.icons, f"{system.emulator} has nothing to look up"
+        assert system.medium in {"disc", "cartridge", "handheld"}, (
+            f"{system.id} has no drawable medium")
+
+
+def test_icon_candidates_are_ordered_and_deduplicated():
+    from kairo.systems import icon_candidates
+
+    found = icon_candidates("PCSX2", ("ps2",))
+    assert found[0] == "PCSX2", "the packaged name should be tried first"
+    assert "net.pcsx2.PCSX2" in found, "a Flatpak install names its icon by id"
+    assert len(found) == len(set(found))
+
+
+def test_candidates_survive_a_renamed_emulator():
+    """The name is user-editable; the configured systems are not."""
+    from kairo.systems import icon_candidates
+
+    assert icon_candidates("My PS2 Thing", ("ps2",))[0] == "PCSX2"
+    assert icon_candidates("Unknown", ()) == ()
+
+
+def test_a_multi_system_front_end_does_not_claim_a_medium():
+    from kairo.systems import medium_for
+
+    assert medium_for(("gamecube", "wii")) == "disc"
+    assert medium_for(("nes", "genesis")) == "cartridge"
+    assert medium_for(("gba", "nds")) == "handheld"
+    # RetroArch across a disc system and a cartridge one is neither.
+    assert medium_for(("ps2", "snes")) == "chip"
+    assert medium_for(()) == "chip"
+
+
+def test_an_emulator_with_no_launcher_entry_still_has_a_logo_to_find():
+    """The PCSX2 case: an AppImage registers no .desktop, so Icon= is empty.
+
+    Before this, nav_icon_name fell back to the executable file name, which
+    for an AppImage is something like 'pcsx2-Qt.AppImage' and resolves to
+    nothing — so PCSX2 drew a generic chip while Dolphin, installed as a
+    package, showed its real logo.
+    """
+    from kairo.emulators import Emulator, RomFolder
+    from kairo.providers.emulator import EmulatorProvider
+
+    emulator = Emulator(id="pcsx2", name="PCSX2",
+                        executable="/home/someone/Apps/pcsx2-Qt.AppImage",
+                        icon="",
+                        folders=(RomFolder(path="/roms/ps2", system="ps2"),))
+    provider = EmulatorProvider(emulator, order=0)
+
+    assert "PCSX2" in provider.nav_icon_names
+    assert "net.pcsx2.PCSX2" in provider.nav_icon_names
+    assert provider.nav_icon_names[-1] == "pcsx2-Qt.AppImage", (
+        "the executable stays as a last resort, not the only one")
+    assert provider.nav_icon == "disc", "PS2 games came on discs"
+
+
+def test_a_declared_icon_still_wins():
+    from kairo.emulators import Emulator, RomFolder
+    from kairo.providers.emulator import EmulatorProvider
+
+    emulator = Emulator(id="dolphin", name="Dolphin",
+                        executable="/usr/bin/dolphin-emu", icon="dolphin-emu",
+                        folders=(RomFolder(path="/roms/gc",
+                                           system="gamecube"),))
+    provider = EmulatorProvider(emulator, order=0)
+    assert provider.nav_icon_names[0] == "dolphin-emu"

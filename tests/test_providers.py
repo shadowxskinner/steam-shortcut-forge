@@ -592,3 +592,147 @@ def test_deletes_launcher_distinguishes_the_two_actions():
     from kairo.ledger import ACTION_CREATED, ACTION_OVERRODE, deletes_launcher
     assert deletes_launcher(ACTION_CREATED) is True
     assert deletes_launcher(ACTION_OVERRODE) is False
+
+
+# ---------------------------------------------------------------------------
+# Applications, against launcher directories that fight back
+# ---------------------------------------------------------------------------
+
+def test_one_unreadable_launcher_directory_does_not_end_the_scan(
+        fake_home, system_apps, monkeypatch):
+    """Path.is_dir() raises on a directory that cannot be stat'ed.
+
+    This is the same failure that once crashed the emulator picker on the way
+    open. One unreadable entry on the search path — a stale automount, a
+    permission-denied parent, a Flatpak export dir mid-uninstall — took the
+    entire Applications list with it.
+    """
+    import os
+    from kairo import paths
+    from kairo.providers.desktop_entry import DesktopEntryProvider
+
+    blocked = fake_home / "blocked"
+    (blocked / "applications").mkdir(parents=True)
+    unreadable = blocked / "applications"
+    local = fake_home / ".local" / "share" / "applications"
+    monkeypatch.setattr(paths, "system_application_dirs",
+                        lambda: [unreadable, system_apps, local])
+
+    os.chmod(blocked, 0o000)
+    try:
+        entries = DesktopEntryProvider().scan()
+    finally:
+        os.chmod(blocked, 0o755)
+
+    names = {entry.name for entry in entries}
+    assert "Firefox" in names, "a readable directory was skipped too"
+    assert "Dolphin" in names
+
+
+def test_visibility_keys_are_all_honoured(fake_home, system_apps, monkeypatch):
+    from kairo.providers.desktop_entry import DesktopEntryProvider
+
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "KDE")
+    (system_apps / "onlygnome.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=OnlyGnome\n"
+        "OnlyShowIn=GNOME;\nIcon=x\nExec=x\n")
+    (system_apps / "notkde.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=NotKde\n"
+        "NotShowIn=KDE;\nIcon=x\nExec=x\n")
+    (system_apps / "onlykde.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=OnlyKde\n"
+        "OnlyShowIn=KDE;\nIcon=x\nExec=x\n")
+    (system_apps / "reallyhidden.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=ReallyHidden\n"
+        "Hidden=true\nIcon=x\nExec=x\n")
+
+    names = {entry.name for entry in DesktopEntryProvider().scan()}
+    assert "OnlyKde" in names
+    assert "OnlyGnome" not in names
+    assert "NotKde" not in names
+    assert "ReallyHidden" not in names
+    assert "Hidden" not in names          # NoDisplay, from the fixture
+    assert "A Link" not in names          # Type=Link
+    assert all(n for n in names), "an entry with no Name got through"
+
+
+def test_the_users_own_copy_outranks_the_packaged_one(
+        fake_home, system_apps, monkeypatch):
+    """Duplicate basenames resolve by precedence, user last and highest."""
+    from kairo.providers.desktop_entry import DesktopEntryProvider
+
+    local = fake_home / ".local" / "share" / "applications"
+    (local / "firefox.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Firefox Nightly\n"
+        "Icon=firefox-nightly\nExec=firefox %u\n")
+
+    entries = {e.payload["basename"]: e for e in DesktopEntryProvider().scan()}
+    assert entries["firefox.desktop"].name == "Firefox Nightly"
+    assert len([e for e in DesktopEntryProvider().scan()
+                if e.payload["basename"] == "firefox.desktop"]) == 1
+
+
+def test_unusual_icon_values_do_not_break_a_row(
+        fake_home, system_apps, monkeypatch):
+    """Absolute, extensionless, missing, and outright corrupt."""
+    from kairo.providers.desktop_entry import DesktopEntryProvider
+
+    art = fake_home / "art"
+    art.mkdir()
+    real = art / "custom.png"
+    from PIL import Image
+    Image.new("RGBA", (64, 64), (1, 2, 3, 255)).save(real)
+    corrupt = art / "corrupt.png"
+    corrupt.write_bytes(b"\x89PNG\r\n\x1a\n" + b"garbage" * 8)
+
+    (system_apps / "abs.desktop").write_text(
+        f"[Desktop Entry]\nType=Application\nName=Absolute\n"
+        f"Icon={real}\nExec=x\n")
+    (system_apps / "corrupt-icon.desktop").write_text(
+        f"[Desktop Entry]\nType=Application\nName=CorruptIcon\n"
+        f"Icon={corrupt}\nExec=x\n")
+    (system_apps / "gone.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=MissingIcon\n"
+        "Icon=/nowhere/at/all.png\nExec=x\n")
+    (system_apps / "noicon.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=NoIconAtAll\nExec=x\n")
+    (system_apps / "unicode.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Тест — 日本語 ✓\n"
+        "Icon=x\nExec=x\n", encoding="utf-8")
+
+    by_name = {e.name: e for e in DesktopEntryProvider().scan()}
+    assert by_name["Absolute"].current_icon == real
+    assert by_name["MissingIcon"].current_icon is None
+    assert by_name["NoIconAtAll"].current_icon is None
+    assert "Тест — 日本語 ✓" in by_name, "a Unicode name was dropped"
+    # A corrupt file still resolves as a path; decoding is the UI's problem
+    # and must produce a placeholder, not an exception.
+    assert by_name["CorruptIcon"].current_icon == corrupt
+
+
+def test_an_unreachable_steam_library_does_not_end_the_steam_scan(
+        fake_home, steam_library):
+    """The everyday case: a library folder on a drive that is not plugged in.
+
+    libraryfolders.vdf still lists it, so every scan probes a path whose
+    parent cannot be stat'ed.
+    """
+    import os
+    from kairo.providers.steam import SteamProvider
+
+    detached = fake_home / "detached"
+    (detached / "games" / "steamapps").mkdir(parents=True)
+    (steam_library / "libraryfolders.vdf").write_text(
+        '"libraryfolders"\n{\n\t"0"\n\t{\n'
+        f'\t\t"path"\t\t"{detached / "games"}"\n\t}}\n}}\n')
+
+    os.chmod(detached, 0o000)
+    try:
+        entries = SteamProvider().scan()
+    finally:
+        os.chmod(detached, 0o755)
+
+    names = {entry.name for entry in entries}
+    assert "Team Fortress 2" in names, "the reachable library was dropped too"
+    assert "Portal 2" in names
+    assert "Steam Linux Runtime 3.0" not in names, "runtimes are still filtered"

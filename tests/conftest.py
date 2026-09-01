@@ -141,3 +141,37 @@ def legacy_install(fake_home):
     (apps / "steam-shortcut-forge-999.desktop").mkdir()
 
     return {"config": config, "cache": cache, "icons": icons, "apps": apps}
+
+
+@pytest.fixture
+def qt_app():
+    """The one application object this process is allowed.
+
+    A QApplication, not a QCoreApplication: QPixmap aborts the process
+    outright without a GUI application object, and constructing any QWidget
+    needs the widgets layer specifically. Qt permits exactly one instance per
+    process, so every Qt test shares this one. No window is ever shown.
+
+    Imported inside the fixture so the backend-only suite still runs with no
+    GUI library installed at all.
+    """
+    import os
+    from PySide6.QtWidgets import QApplication
+
+    if not os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("DISPLAY"):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    return QApplication.instance() or QApplication([])
+
+
+def settle(app, timeout=10.0):
+    """Pump the loop until every job has been released on this thread."""
+    import time
+
+    from kairo.qt import work
+
+    deadline = time.monotonic() + timeout
+    while not work.is_idle() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    app.processEvents()
+    return work.is_idle()

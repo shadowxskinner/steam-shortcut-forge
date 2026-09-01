@@ -21,22 +21,34 @@ from kairo.qt import theme as Q
 from kairo.ui import theme as T
 
 
-def _theme_logo(name: str, size: int, ratio: float = 1.0):
+def _theme_logo(names, size: int, ratio: float = 1.0):
     """A provider's own icon from the installed theme, or None.
 
     Nothing is bundled: this uses whatever the user's Steam, Dolphin or
     emulator package already installed, so no trademark ships with Kairo and
     a machine without that package simply keeps the drawn glyph.
+
+    ``names`` is an ordered list of candidates rather than one name. A single
+    name only works when something registered a .desktop file for Kairo to
+    read Icon= from; packages do, AppImages do not. Trying the names those
+    packages are known to install costs one failed index lookup each and
+    covers every install method with the same code.
     """
-    if not name:
-        return None
+    if isinstance(names, str):
+        names = (names,)
     from kairo.desktop.lookup import resolve_icon
     from kairo.qt import images
 
-    path = resolve_icon(name)
-    if path is None:
-        return None
-    return images.load(size, path=path, ratio=ratio)
+    for name in names:
+        if not name:
+            continue
+        path = resolve_icon(name)
+        if path is None:
+            continue
+        logo = images.load(size, path=path, ratio=ratio)
+        if logo is not None and not logo.isNull():
+            return logo
+    return None
 
 
 def restyle(*widgets) -> None:
@@ -154,6 +166,48 @@ def nav_pixmap(kind: str, colour: str, size: int = 20,
         painter.drawEllipse(QPointF(centre + radius * 0.34,
                                     centre - radius * 0.34),
                             stroke * 1.3, stroke * 1.3)
+        painter.restore()
+    elif kind == "disc":
+        # Optical media: GameCube, Wii, PlayStation, Dreamcast.
+        radius = centre - inset
+        painter.drawEllipse(QPointF(centre, centre), radius, radius)
+        painter.drawEllipse(QPointF(centre, centre),
+                            radius * 0.30, radius * 0.30)
+    elif kind == "cartridge":
+        # Slot media: NES, SNES, N64, Mega Drive, Switch. Body, label, and
+        # the connector pins at the bottom. An earlier attempt notched one
+        # shoulder instead, which just read as a dog-eared sheet of paper.
+        width, height = size * 0.58, size * 0.66
+        left, top = centre - width / 2, centre - height / 2
+        painter.drawRoundedRect(QRectF(left, top, width, height),
+                                size * 0.08, size * 0.08)
+        inset = width * 0.20
+        painter.drawRoundedRect(
+            QRectF(left + inset, top + height * 0.14,
+                   width - 2 * inset, height * 0.34),
+            size * 0.04, size * 0.04)
+        for offset in (-width * 0.18, width * 0.18):
+            painter.drawLine(
+                QPointF(centre + offset, top + height * 0.74),
+                QPointF(centre + offset, top + height))
+    elif kind == "handheld":
+        # Portables: Game Boy, DS, 3DS, PSP. A screen with a control either
+        # side, which no other glyph in the set resembles.
+        width, height = size * 0.72, size * 0.52
+        left, top = centre - width / 2, centre - height / 2
+        painter.drawRoundedRect(QRectF(left, top, width, height),
+                                size * 0.10, size * 0.10)
+        screen = size * 0.24
+        painter.drawRoundedRect(QRectF(centre - screen / 2, centre - screen / 2,
+                                       screen, screen),
+                                size * 0.03, size * 0.03)
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(ink)
+        for side in (-1, 1):
+            painter.drawEllipse(
+                QPointF(centre + side * width * 0.34, centre),
+                stroke * 0.85, stroke * 0.85)
         painter.restore()
     else:                                # "chip" and anything unknown
         body = size * 0.46
