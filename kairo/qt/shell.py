@@ -197,6 +197,11 @@ class KairoWindow(QMainWindow):
             return pane
         if key == nav.VIEW_CHANGES:
             pane = ChangesPane(self.ctx)
+            # A restore is a write like any other: the library panes are now
+            # showing the wrong icon for that entry, and if the entry was
+            # Steam's or an emulator's own launcher, so is the sidebar.
+            pane.changed.connect(self._rescan_libraries)
+            pane.changed.connect(self.refresh_nav_icons)
         elif key == nav.VIEW_SETTINGS:
             pane = SettingsPane(self.ctx, self._providers_changed)
         else:
@@ -314,6 +319,17 @@ class KairoWindow(QMainWindow):
                 # A launcher directory that cannot be read is not a reason to
                 # leave the sidebar half-painted.
                 continue
+
+    def _rescan_libraries(self) -> None:
+        """Re-read the providers after a write, without touching Changes.
+
+        Separate from rescan(): that one also refreshes Changes, and calling
+        it from Changes' own signal would have the pane rebuild itself in the
+        middle of reporting what it just did.
+        """
+        for pane in self.panes.values():
+            if isinstance(pane, LibraryPane):
+                pane.rescan()
 
     def _refresh_changes(self) -> None:
         pane = self.panes.get(nav.VIEW_CHANGES)

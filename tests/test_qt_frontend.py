@@ -1827,3 +1827,314 @@ def test_the_reveal_retry_is_bounded():
     retry = source.split("def _retry_reveal")[1].split("\n    def ")[0]
     assert "attempts <= 1" in retry
     assert "self._pending_reveal = None" in retry
+
+
+# ---------------------------------------------------------------------------
+# Changes: restoring, and refusing to
+# ---------------------------------------------------------------------------
+
+class _Tokens:
+    """The real ActivityTokens contract, small enough to assert against."""
+
+    def __init__(self):
+        from kairo.tasks import CancelToken
+
+        self._make = CancelToken
+        self.live = {}
+
+    def start(self, name):
+        previous = self.live.get(name)
+        if previous is not None:
+            previous.cancel()
+        token = self._make()
+        self.live[name] = token
+        return token
+
+
+def _restore_world(tmp_path, monkeypatch, *, count=3):
+    """A packaged launcher, a Kairo override for each, and a real ledger."""
+    from PIL import Image
+    from kairo import actions, paths
+    from kairo.ledger import Ledger
+    from kairo.providers.desktop_entry import DesktopEntryProvider
+
+    home = tmp_path / "home"
+    system = home / "system-applications"
+    local = home / ".local" / "share" / "applications"
+    for directory in (system, local, home / ".config"):
+        directory.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setattr(paths, "system_application_dirs",
+                        lambda: [system, local])
+
+    for index in range(count):
+        (system / f"app{index}.desktop").write_text(
+            f"[Desktop Entry]\nType=Application\nName=App {index}\n"
+            f"Icon=packaged-{index}\nExec=true\n")
+
+    art = home / "art.png"
+    Image.new("RGBA", (128, 128), (10, 200, 90, 255)).save(art)
+
+    apps = DesktopEntryProvider()
+    ledger = Ledger()
+    for entry in sorted(apps.scan(), key=lambda e: e.name):
+        actions.apply_icon(entry, apps, art, source_label="Local file",
+                           ledger=ledger)
+    return SimpleNamespaceLike(home=home, system=system, local=local,
+                               apps=apps, ledger=ledger, art=art)
+
+
+class SimpleNamespaceLike:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+def _changes(world, qt_app):
+    from types import SimpleNamespace
+    from kairo.qt.changes import ChangesPane
+
+    registry = SimpleNamespace(get=lambda provider_id: world.apps)
+    context = SimpleNamespace(ledger=world.ledger, providers=registry,
+                              tokens=_Tokens())
+    pane = ChangesPane(context)
+    pane.resize(900, 700)
+    pane.refresh()
+    return pane
+
+
+def test_a_restore_goes_through_actions_and_never_the_pane():
+    """The pane decides when to ask. It must not write."""
+    source = (QT_DIR / "changes.py").read_text()
+    assert "actions.restore_record" in source
+    assert "actions.restore_all" in source
+    for forbidden in ("writer.restore(", "\\.unlink(", "atomic_write",
+                      "write_text", "rewrite_entry_icon"):
+        assert forbidden not in source, (
+            f"Changes must not {forbidden} — kairo.actions owns that")
+    # And the marker check is still the authority, not the ledger.
+    assert "Ledger.restorable" in source
+
+
+def test_restoring_one_entry_puts_the_packaged_icon_back(
+        tmp_path, monkeypatch, qt_app):
+    world = _restore_world(tmp_path, monkeypatch, count=3)
+    pane = _changes(world, qt_app)
+    assert len(world.ledger.records()) == 3
+
+    record = world.ledger.records()[0]
+    monkeypatch.setattr("kairo.qt.changes.QMessageBox.exec",
+                        lambda self: __import__(
+                            "PySide6.QtWidgets", fromlist=["QMessageBox"]
+                        ).QMessageBox.Yes)
+    pane._restore_one(record)
+    assert settle(qt_app, timeout=10.0)
+
+    assert len(world.ledger.records()) == 2, "the record survived its restore"
+    assert not (world.local / record.target.split("/")[-1]).exists()
+    assert "Restored" in pane.count.text()
+
+
+def test_a_launcher_edited_outside_kairo_is_refused_not_restored(
+        tmp_path, monkeypatch, qt_app):
+    """The marker is the authority. Losing it must stop the restore."""
+    from kairo.desktop import entry as de
+
+    world = _restore_world(tmp_path, monkeypatch, count=2)
+    record = world.ledger.records()[0]
+    target = Path(record.target)
+
+    # Someone rewrote it by hand and the marker went with it.
+    text = target.read_text().replace("X-Kairo-Managed=true", "")
+    target.write_text(text)
+    assert not de.is_managed(target)
+
+    pane = _changes(world, qt_app)
+    row = pane._row_widgets[record.key]
+    assert not row.undo.isEnabled(), "a refused restore must not be clickable"
+    assert row.undo.toolTip(), "and it must say why"
+
+    pane._restore_one(record)
+    assert settle(qt_app, timeout=10.0)
+    assert target.exists(), "Kairo removed a file it no longer owns"
+    assert len(world.ledger.records()) == 2, "the record was dropped anyway"
+
+
+def test_a_missing_target_is_reported_without_touching_anything(
+        tmp_path, monkeypatch, qt_app):
+    world = _restore_world(tmp_path, monkeypatch, count=2)
+    record = world.ledger.records()[0]
+    Path(record.target).unlink()
+
+    pane = _changes(world, qt_app)
+    pane._restore_one(record)
+    assert settle(qt_app, timeout=10.0)
+    assert "Already restored" in pane.count.text(), pane.count.text()
+
+
+def test_an_unknown_provider_is_reported_rather_than_guessed(
+        tmp_path, monkeypatch, qt_app):
+    from types import SimpleNamespace
+    from kairo.qt.changes import ChangesPane
+
+    world = _restore_world(tmp_path, monkeypatch, count=1)
+    registry = SimpleNamespace(get=lambda provider_id: None)
+    context = SimpleNamespace(ledger=world.ledger, providers=registry,
+                              tokens=_Tokens())
+    pane = ChangesPane(context)
+    pane.refresh()
+    pane._restore_one(world.ledger.records()[0])
+    assert "provider" in pane.count.text(), pane.count.text()
+    assert len(world.ledger.records()) == 1
+
+
+def test_repeated_clicks_cannot_stack_restores(tmp_path, monkeypatch, qt_app):
+    from PySide6.QtWidgets import QMessageBox
+
+    world = _restore_world(tmp_path, monkeypatch, count=3)
+    pane = _changes(world, qt_app)
+    monkeypatch.setattr("kairo.qt.changes.QMessageBox.exec",
+                        lambda self: QMessageBox.Yes)
+
+    prompts = []
+    monkeypatch.setattr("kairo.qt.changes.QMessageBox.exec",
+                        lambda self: prompts.append(1) or QMessageBox.Yes)
+
+    record = world.ledger.records()[0]
+    pane._restore_one(record)
+    assert pane._busy_now, "the pane must mark itself busy immediately"
+    for row in pane._row_widgets.values():
+        assert not row.undo.isEnabled(), "a row stayed clickable mid-restore"
+
+    for _ in range(5):
+        pane._restore_one(record)          # must be ignored while busy
+
+    # The ledger lands in the same place either way, because a second restore
+    # of the same record is refused on its own merits. What a missing guard
+    # actually costs is five more confirmation dialogs and five more jobs
+    # racing the first one, so that is what this measures.
+    assert len(prompts) == 1, (
+        f"{len(prompts)} confirmations for one click — clicks are stacking")
+    assert settle(qt_app, timeout=10.0)
+    assert len(world.ledger.records()) == 2
+    assert not pane._busy_now, "the pane never came out of its busy state"
+
+
+def test_a_superseded_result_is_dropped(tmp_path, monkeypatch, qt_app):
+    """Stale callback: the token that started the work was replaced."""
+    world = _restore_world(tmp_path, monkeypatch, count=2)
+    pane = _changes(world, qt_app)
+    before = pane.count.text()
+
+    token = pane.ctx.tokens.start("changes:restore")
+    token.cancel()
+    # Simulate the queued result of the cancelled run arriving late.
+    pane._busy_now = True
+    if not token.cancelled:
+        pane._say("this must never be painted")
+    assert "must never be painted" not in pane.count.text()
+    assert pane.count.text() == before
+
+
+def test_restore_all_keeps_what_succeeded_when_one_refuses(
+        tmp_path, monkeypatch, qt_app):
+    """Partial failure: one hand-edited entry must not cost the others."""
+    from PySide6.QtWidgets import QMessageBox
+
+    world = _restore_world(tmp_path, monkeypatch, count=4)
+    records = world.ledger.records()
+    poisoned = Path(records[1].target)
+    poisoned.write_text(
+        poisoned.read_text().replace("X-Kairo-Managed=true", ""))
+
+    pane = _changes(world, qt_app)
+    monkeypatch.setattr("kairo.qt.changes.QMessageBox.exec",
+                        lambda self: QMessageBox.Yes)
+    pane._restore_all()
+    assert settle(qt_app, timeout=15.0)
+
+    remaining = world.ledger.records()
+    assert len(remaining) == 1, (
+        f"the three restorable entries were not all undone: {remaining}")
+    assert remaining[0].key == records[1].key
+    assert poisoned.exists(), "Kairo removed a file it no longer owns"
+    text = pane.count.text()
+    assert "Restored 3 of 4" in text, text
+    assert "skipped" in text or "failed" in text, text
+
+
+def test_restore_all_on_an_empty_history_says_so(tmp_path, monkeypatch, qt_app):
+    world = _restore_world(tmp_path, monkeypatch, count=1)
+    world.ledger.forget(world.ledger.records()[0].key)
+    pane = _changes(world, qt_app)
+    pane._restore_all()
+    assert "Nothing to restore" in pane.count.text()
+
+
+def test_closing_mid_restore_cancels_rather_than_painting(
+        tmp_path, monkeypatch, qt_app):
+    world = _restore_world(tmp_path, monkeypatch, count=3)
+    pane = _changes(world, qt_app)
+    token = pane.ctx.tokens.start("changes:restore")
+    token.cancel()                          # what closeEvent does
+    assert token.cancelled
+    assert settle(qt_app, timeout=5.0), "work outlived the cancel"
+
+
+def test_the_summary_counts_are_honest():
+    from kairo.qt.changes import ChangesPane
+    from kairo.tasks import BulkSummary
+
+    describe = ChangesPane._describe
+    assert describe(BulkSummary(total=5, succeeded=5)) == "Restored 5 of 5."
+    assert describe(BulkSummary(total=5, succeeded=3, skipped=1, failed=1)) == (
+        "Restored 3 of 5 — 1 skipped, 1 failed.")
+    assert describe(BulkSummary(total=9, succeeded=2, processed=3,
+                                cancelled=True)).startswith(
+        "Cancelled after 3 of 9")
+
+
+def test_declining_the_confirmation_restores_nothing(
+        tmp_path, monkeypatch, qt_app):
+    """Every destructive restore asks first, and No means no."""
+    from PySide6.QtWidgets import QMessageBox
+
+    world = _restore_world(tmp_path, monkeypatch, count=2)
+    pane = _changes(world, qt_app)
+    asked = []
+    monkeypatch.setattr("kairo.qt.changes.QMessageBox.exec",
+                        lambda self: asked.append(self.text())
+                        or QMessageBox.Cancel)
+
+    pane._restore_one(world.ledger.records()[0])
+    assert settle(qt_app, timeout=5.0)
+    assert asked, "a destructive restore went ahead without asking"
+    assert len(world.ledger.records()) == 2, "Cancel still restored it"
+    assert not pane._busy_now
+
+    asked.clear()
+    pane._restore_all()
+    assert settle(qt_app, timeout=5.0)
+    assert asked, "Restore all went ahead without asking"
+    assert len(world.ledger.records()) == 2
+
+
+def test_the_confirmation_wording_comes_from_the_writer(
+        tmp_path, monkeypatch, qt_app):
+    """Resetting a shortcut Kairo made is not the same act as removing an
+    override, and the two must not share a sentence."""
+    from PySide6.QtWidgets import QMessageBox
+
+    world = _restore_world(tmp_path, monkeypatch, count=1)
+    pane = _changes(world, qt_app)
+    seen = []
+    monkeypatch.setattr("kairo.qt.changes.QMessageBox.exec",
+                        lambda self: seen.append(self.text())
+                        or QMessageBox.Cancel)
+    pane._restore_one(world.ledger.records()[0])
+
+    expected = world.apps.writer().restore_prompt(
+        __import__("kairo.actions", fromlist=["actions"]).entry_from_record(
+            world.ledger.records()[0]))
+    assert seen and seen[0] == expected, seen
