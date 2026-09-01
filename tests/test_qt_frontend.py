@@ -2144,3 +2144,202 @@ def test_the_confirmation_wording_comes_from_the_writer(
         __import__("kairo.actions", fromlist=["actions"]).entry_from_record(
             world.ledger.records()[0]))
     assert seen and seen[0] == expected, seen
+
+
+# ---------------------------------------------------------------------------
+# Device pixel ratio through the asynchronous paths
+#
+# images.load already decoded at the screen's ratio, but it is only used by
+# the synchronous callers. Every icon that arrives on a worker - the rows of
+# a page, the tiles of an artwork grid - went through images.prepare, which
+# had no ratio at all: it decoded at logical size and the GUI thread then
+# built a pixmap with no ratio set, so the compositor magnified it. The whole
+# library was soft on any display above 1x while the sidebar was sharp.
+
+def _png(edge: int, colour=(255, 0, 0, 255)) -> bytes:
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGBA", (edge, edge), colour).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _drawn_bounds(pixmap):
+    """The area a pixmap actually covers, in logical points.
+
+    Dividing by the ratio is the whole point: a correct 2x pixmap has twice
+    the pixels and covers the same logical box. One drawn at ratio squared
+    has the same pixel count and covers a quarter of it, which no assertion
+    on size or devicePixelRatio can see.
+    """
+    from PySide6.QtGui import QColor
+
+    image = pixmap.toImage()
+    ratio = pixmap.devicePixelRatio()
+    marked = [(x, y)
+              for y in range(image.height())
+              for x in range(image.width())
+              if QColor(image.pixelColor(x, y)).alpha() > 40]
+    assert marked, "nothing was drawn at all"
+    xs = [x / ratio for x, _ in marked]
+    ys = [y / ratio for _, y in marked]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def test_a_worker_prepares_an_image_at_the_screens_resolution(qt_core):
+    """prepare() is what every asynchronous icon goes through."""
+    from kairo.qt import images
+
+    images.clear_cache()
+    payload = _png(256)
+
+    plain = images.prepare(116, data=payload)
+    retina = images.prepare(116, data=payload, ratio=2.0)
+    assert plain is not None and retina is not None
+    assert max(plain.width(), plain.height()) == 116
+    assert max(retina.width(), retina.height()) == 232, \
+        "decoded at logical size, leaving the compositor to magnify it"
+    assert retina.devicePixelRatio() == 2.0, \
+        "the ratio must travel with the image to the GUI thread"
+
+
+def test_the_prepared_cache_never_serves_a_1x_image_to_a_2x_screen(qt_core):
+    """Ratio is a parameter, so it has to be part of the key.
+
+    A key of (source, logical size) is unique right up until the moment two
+    screens want the same icon, and then it hands whichever ratio asked
+    first to both of them. Dragging a window between a laptop panel and an
+    external display is the ordinary case, not a corner one.
+    """
+    from kairo.qt import images
+
+    images.clear_cache()
+    payload = _png(256)
+
+    first = images.prepare(116, data=payload, ratio=1.0)
+    second = images.prepare(116, data=payload, ratio=2.0)
+    assert max(second.width(), second.height()) == 232, \
+        "the 1x entry was served to a 2x caller"
+    # And back again: the 2x entry must not evict or answer for 1x either.
+    again = images.prepare(116, data=payload, ratio=1.0)
+    assert max(again.width(), again.height()) == 116
+    assert max(first.width(), first.height()) == 116
+
+    # The pixel count alone is not enough to tell two requests apart. 104
+    # logical points at 1x and 52 at 2x decode to the same 104 pixels and
+    # differ only in what those pixels mean, so a key without the ratio
+    # hands whichever was cached first to both - and the second one is then
+    # drawn at twice the size it was decoded for.
+    images.clear_cache()
+    wide = images.prepare(104, data=payload, ratio=1.0)
+    dense = images.prepare(52, data=payload, ratio=2.0)
+    assert wide.width() == dense.width() == 104
+    assert wide.devicePixelRatio() == 1.0
+    assert dense.devicePixelRatio() == 2.0, \
+        "the 1x entry of the same pixel size answered a 2x request"
+
+
+def test_a_prepared_icon_covers_the_same_area_at_every_ratio(qt_core):
+    """More pixels, not a bigger picture - measured on what was drawn.
+
+    QPainter already applies a pixmap's ratio. Setting the ratio and scaling
+    as well draws at ratio squared; every assertion on width and
+    devicePixelRatio still passes while three quarters of the image is gone.
+
+    Measured on the pixmap itself. QLabel.pixmap() is not a witness: it hands
+    back a 1x copy rescaled to the logical size, so every ratio compares
+    equal through it and the test passes whatever the code does.
+    """
+    from kairo.qt import images
+
+    payload = _png(256)
+    images.clear_cache()
+    plain = _drawn_bounds(images.load(52, data=payload))
+    for ratio in (2.0, 3.0):
+        images.clear_cache()
+        drawn = _drawn_bounds(images.load(52, data=payload, ratio=ratio))
+        for a, b in zip(plain, drawn):
+            assert abs(a - b) < 1.5, (
+                f"at {ratio}x the artwork covers a different area: "
+                f"{plain} against {drawn}")
+
+
+def test_a_worker_image_keeps_its_ratio_when_it_becomes_a_pixmap(qt_core):
+    """QPixmap.fromImage is where a worker's ratio was being dropped.
+
+    The image is prepared on a pool thread and converted on the GUI thread,
+    and the ratio has to survive that hop or the tile is drawn at double the
+    size it was decoded for.
+    """
+    from PySide6.QtGui import QPixmap
+
+    from kairo.qt import images
+
+    images.clear_cache()
+    prepared = images.prepare(52, data=_png(256), ratio=2.0)
+    assert prepared.devicePixelRatio() == 2.0
+
+    painted = QPixmap.fromImage(prepared)
+    painted.setDevicePixelRatio(prepared.devicePixelRatio())
+    assert painted.width() == 104, "decoded at logical size after all"
+    assert painted.devicePixelRatio() == 2.0, \
+        "the pixmap claims 1x, so Qt draws 104 real pixels into a 104 box"
+    assert round(painted.deviceIndependentSize().width()) == 52
+
+    # And the well is what performs that conversion for every async image.
+    well_source = (QT_DIR / "widgets.py").read_text()
+    block = well_source.split("def show_image")[1].split("\n    def ")[0]
+    assert "setDevicePixelRatio(image.devicePixelRatio())" in block, \
+        "the well must restate the ratio it was handed"
+
+
+def test_the_streaming_workers_capture_the_ratio_on_the_gui_thread():
+    """devicePixelRatioF() is a GUI-thread call; a pool thread cannot make it."""
+    source = (QT_DIR / "library.py").read_text()
+    for name in ("_stream_row_icons", "_stream_previews"):
+        block = source.split(f"def {name}")[1].split("\n    def ")[0]
+        assert "devicePixelRatioF()" in block, f"{name} never asks for a ratio"
+        assert block.index("devicePixelRatioF()") < block.index("def pump"), \
+            f"{name} reads the ratio inside the worker, not before it"
+        assert "ratio=" in block.split("def pump")[1], \
+            f"{name} does not hand the ratio to prepare()"
+
+
+def test_a_screen_change_regenerates_visible_artwork_without_refetching():
+    """Moving between mixed-DPI outputs changes the ratio under live images.
+
+    The retained preview bytes exist precisely so this costs no network: a
+    refetch here would hit SteamGridDB again for artwork already in hand.
+    """
+    source = (QT_DIR / "library.py").read_text()
+    assert "def refresh_device_pixel_ratio" in source
+    block = source.split("def refresh_device_pixel_ratio")[1].split("\n    def ")[0]
+    assert "preview_data" in block, "regenerate from the bytes already held"
+    assert "source.preview" not in block and "sources.get" not in block, \
+        "a ratio change must never re-enter an artwork source"
+
+    shell = (QT_DIR / "shell.py").read_text()
+    assert "refresh_device_pixel_ratio" in shell, \
+        "nothing tells the panes their screen changed"
+
+
+def test_a_tile_retains_the_bytes_its_preview_was_built_from(qt_core):
+    """Retention is what makes both the reuse and the ratio refresh possible."""
+    from kairo.qt import images
+    from kairo.qt.widgets import ArtworkTile
+
+    class _Art:
+        label = "Official"
+        name = "Thing"
+        kind = "logo"
+        official = True
+        dimensions = "512x512"
+        source_id = "steamgriddb"
+
+    images.clear_cache()
+    payload = _png(256)
+    tile = ArtworkTile(_Art())
+    tile.set_image(images.prepare(116, data=payload, ratio=1.0), data=payload)
+    assert tile.preview_data == payload

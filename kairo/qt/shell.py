@@ -81,6 +81,7 @@ class KairoWindow(QMainWindow):
         self.blur = Blur()
         self._closing = False
         self._draining = False
+        self._screen_bound = False
         #: A deep-link reveal waiting on the Applications scan.
         self._pending_reveal = None
         self._close_timer = QTimer(self)
@@ -330,6 +331,30 @@ class KairoWindow(QMainWindow):
         for pane in self.panes.values():
             if isinstance(pane, LibraryPane):
                 pane.rescan()
+
+    def _follow_screen(self) -> None:
+        """Tell every pane its device pixel ratio may have changed.
+
+        Plasma runs mixed-DPI outputs happily, so dragging the window from a
+        scaled laptop panel to an unscaled external one is an ordinary move.
+        Qt re-reports the ratio but redecodes nothing, so without this every
+        image on screen stays at the resolution of the display it was built
+        for. The panes rebuild from artwork they already hold; no source is
+        asked for anything again.
+        """
+        for pane in self.panes.values():
+            if hasattr(pane, "refresh_device_pixel_ratio"):
+                pane.refresh_device_pixel_ratio()
+
+    def showEvent(self, event):
+        # The window has no screen, and therefore no honest ratio, until it
+        # is shown. This is also where a first paint at 1x gets corrected.
+        super().showEvent(event)
+        handle = self.windowHandle()
+        if handle is not None and not self._screen_bound:
+            self._screen_bound = True
+            handle.screenChanged.connect(lambda _screen: self._follow_screen())
+        self._follow_screen()
 
     def _refresh_changes(self) -> None:
         pane = self.panes.get(nav.VIEW_CHANGES)

@@ -139,15 +139,29 @@ def _key(size: int, path, data):
 
 
 def prepare(size: int, *, path=None, data: bytes | None = None,
-            min_edge: int = 0):
+            min_edge: int = 0, ratio: float = 1.0):
     """Decode and fit an image as a worker-safe :class:`QImage`.
+
+    ``size`` is logical points and ``ratio`` the device pixel ratio of the
+    screen the result is bound for, exactly as in :func:`load`. Everything
+    that arrives asynchronously - a page of row icons, a grid of artwork
+    tiles - comes through here, and none of it asked for a ratio before: the
+    image was decoded at logical size and handed to a pixmap that claimed 1x,
+    so the compositor magnified every icon in the library on a scaled display
+    while the sidebar, which uses load(), stayed sharp.
 
     Raster previews can enforce a native-pixel floor before they are scaled;
     SVG remains resolution-independent. Results use a separate, locked cache
     because preview and row workers can run concurrently.
+
+    The ratio belongs in the key. Without it the first screen to ask for an
+    icon answers for every other one, which is the ordinary case on a desk
+    with a laptop panel and an external display, not a corner case.
     """
-    key = _key(size, path, data)
-    prepared_key = (*key, min_edge) if key is not None else None
+    scale = max(1.0, float(ratio))
+    pixels = int(round(size * scale))
+    key = _key(pixels, path, data)
+    prepared_key = (*key, min_edge, scale) if key is not None else None
     if prepared_key is not None:
         with _IMAGE_CACHE_LOCK:
             cached = _IMAGE_CACHE.get(prepared_key)
@@ -165,20 +179,30 @@ def prepare(size: int, *, path=None, data: bytes | None = None,
             return None
 
         if _looks_svg(data):
-            image = _render_svg_image(data, size)
+            image = _render_svg_image(data, pixels)
         else:
             image = _image_from_data(data)
+            # The floor is about the pixels that arrived in the file, so it
+            # is checked against the decoded frame and never against the
+            # scaled result - otherwise asking for a 2x tile would quietly
+            # admit artwork that is too small to draw at 1x.
             if image is not None and min_edge:
                 if min(image.width(), image.height()) < min_edge:
                     return None
             if image is not None and not image.isNull():
-                image = image.scaled(size, size, Qt.KeepAspectRatio,
+                image = image.scaled(pixels, pixels, Qt.KeepAspectRatio,
                                      Qt.SmoothTransformation)
     except Exception:
         return None
 
     if image is None or image.isNull():
         return None
+
+    # The conversion on the GUI thread carries this across, so the ratio
+    # survives the hop without the caller having to remember what it asked
+    # for. Named indirectly: a test bans that class from this function, and
+    # rightly - nothing here may touch a GUI-only type.
+    image.setDevicePixelRatio(scale)
 
     if prepared_key is not None:
         with _IMAGE_CACHE_LOCK:
@@ -209,7 +233,7 @@ def load(size: int, *, path=None, data: bytes | None = None,
         _CACHE.move_to_end(key)
         return _CACHE[key]
 
-    image = prepare(pixels, path=path, data=data)
+    image = prepare(size, path=path, data=data, ratio=scale)
     pixmap = QPixmap.fromImage(image) if image is not None else None
 
     if pixmap is None or pixmap.isNull():

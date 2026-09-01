@@ -103,6 +103,7 @@ class LibraryPane(QWidget):
         self._streamer = None
         self._row_streamer = None
         self._icon_generation = 0
+        self._paint_ratio = 0.0
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -668,6 +669,10 @@ class LibraryPane(QWidget):
         streamer = work.Streamer()
         streamer.item.connect(self._fill_row_icon)
         self._row_streamer = streamer
+        # Read here, not inside pump: devicePixelRatioF() is a GUI-thread
+        # question about which screen this widget is on, and a pool thread
+        # has no business asking it.
+        ratio = self.devicePixelRatioF()
 
         def pump():
             # Every row in a group has its own entry key, so the key travels
@@ -685,7 +690,8 @@ class LibraryPane(QWidget):
             for index, path, key, generation in pending:
                 if token.cancelled:
                     return
-                image = images.prepare(Q.WELL_ROW - 12, path=path)
+                image = images.prepare(Q.WELL_ROW - 12, path=path,
+                                       ratio=ratio)
                 if token.cancelled:
                     return
                 batch.append((index, image, key, generation))
@@ -945,6 +951,7 @@ class LibraryPane(QWidget):
         streamer = work.Streamer()
         streamer.item.connect(self._fill_tile)
         self._streamer = streamer
+        ratio = self.devicePixelRatioF()
 
         def pump():
             batch = []
@@ -960,15 +967,21 @@ class LibraryPane(QWidget):
             for index, (art, source) in enumerate(results):
                 if token.cancelled:
                     return
+                raw = None
                 try:
-                    data = source.preview(art)
-                    data = images.prepare(Q.TILE - 12, data=data,
-                                          min_edge=MIN_USABLE_EDGE)
+                    raw = source.preview(art)
+                    data = images.prepare(Q.TILE - 12, data=raw,
+                                          min_edge=MIN_USABLE_EDGE,
+                                          ratio=ratio)
                 except Exception:
                     data = None         # say so, rather than leaving a blank
+                    raw = None
                 if token.cancelled:
                     return
-                batch.append((index, data))
+                # The undecoded bytes travel with the image. They are what
+                # lets choosing this tile, and a change of screen, avoid
+                # asking the source for the same artwork twice.
+                batch.append((index, data, raw))
                 now = time.monotonic()
                 if len(batch) >= BATCH_SIZE or (now - last) * 1000 >= BATCH_MS:
                     flush()
@@ -987,7 +1000,7 @@ class LibraryPane(QWidget):
         # the loop re-seated every surviving tile per drop, so a group where
         # nothing was usable cost one reflow per tile.
         doomed = []
-        for index, data in batch:
+        for index, data, raw in batch:
             tile = self._tile_at.get(index)
             if tile is None:
                 continue
@@ -997,7 +1010,7 @@ class LibraryPane(QWidget):
             if data is None:
                 doomed.append(tile)
                 continue
-            tile.set_image(data)
+            tile.set_image(data, data=raw)
         for tile in doomed:
             self._drop_tile(tile, reflow=False)
         if doomed:
@@ -1031,6 +1044,44 @@ class LibraryPane(QWidget):
             self.grid.addWidget(tile, position // columns, position % columns)
         if not self.tiles:
             self._grid_note("nothing here is large enough to use")
+
+    # -- following the screen ----------------------------------------------
+
+    def refresh_device_pixel_ratio(self) -> None:
+        """Re-prepare what is on screen after the window changed displays.
+
+        A window dragged from a 1x panel to a 2x one keeps every pixmap it
+        already had, and each of those is now half the resolution the screen
+        wants. Qt does not redecode anything on its own; the ratio simply
+        changes underneath the images.
+
+        Nothing here re-enters an artwork source. Every tile is rebuilt from
+        the bytes it was already drawn from, so a lap of the desk costs no
+        network at all - which is the reason those bytes are retained.
+        """
+        ratio = self.devicePixelRatioF()
+        if ratio == self._paint_ratio:
+            return
+        self._paint_ratio = ratio
+        for tile in self.tiles:
+            payload = tile.preview_data
+            if payload is None:
+                continue
+            tile.set_image(images.prepare(Q.TILE - 12, data=payload,
+                                          min_edge=MIN_USABLE_EDGE,
+                                          ratio=ratio),
+                           data=payload)
+        # Rows read from files on disk, so they only need asking again. The
+        # generation bump is what stops a page still in flight at the old
+        # ratio from painting over the new one.
+        self._icon_generation += 1
+        self._bind_rows(self._filtered[:self._shown])
+
+    def showEvent(self, event) -> None:
+        # A widget has no screen until it is shown, so __init__ cannot know
+        # the ratio and the first paint has to be corrected here.
+        super().showEvent(event)
+        self.refresh_device_pixel_ratio()
 
     # -- proposing ---------------------------------------------------------
 

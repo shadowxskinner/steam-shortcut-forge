@@ -358,9 +358,10 @@ class IconWell(QFrame):
         self.label.setText("")
         self.label.setPixmap(pixmap)
 
-    def show_data(self, data: bytes) -> None:
+    def show_data(self, data: bytes, *, ratio: float | None = None) -> None:
         pixmap = images.load(self._size - 12, data=data,
-                             ratio=self.devicePixelRatioF())
+                             ratio=(self.devicePixelRatioF()
+                                    if ratio is None else ratio))
         if pixmap is None:
             self.show_placeholder("?")
             return
@@ -368,12 +369,20 @@ class IconWell(QFrame):
         self.label.setPixmap(pixmap)
 
     def show_image(self, image: QImage | None, placeholder: str = "?") -> None:
-        """Paint an image that was already decoded away from the GUI thread."""
+        """Paint an image that was already decoded away from the GUI thread.
+
+        The ratio the worker decoded at travels on the image and is restated
+        here. Leaving it to be inferred is how a 232-pixel tile ended up
+        claiming to be 232 logical points wide: correct pixels, drawn at
+        double the size, and no assertion on width or ratio could see it.
+        """
         if image is None or image.isNull():
             self.show_placeholder(placeholder)
             return
         self.label.setText("")
-        self.label.setPixmap(QPixmap.fromImage(image))
+        pixmap = QPixmap.fromImage(image)
+        pixmap.setDevicePixelRatio(image.devicePixelRatio())
+        self.label.setPixmap(pixmap)
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +564,10 @@ class ArtworkTile(QFrame):
         self.art = art
         self.origin = origin
         self._chosen = False
+        # The bytes this tile was drawn from. Held so that choosing the tile
+        # does not ask the artwork source for them a second time, and so a
+        # change of screen ratio can re-prepare it from what is already here.
+        self.preview_data: bytes | None = None
         self.setObjectName("tile")
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedSize(self.WIDTH, self.HEIGHT)
@@ -584,7 +597,9 @@ class ArtworkTile(QFrame):
         self.caption.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.caption)
 
-    def set_image(self, image: QImage) -> None:
+    def set_image(self, image: QImage, *, data: bytes | None = None) -> None:
+        if data is not None:
+            self.preview_data = data
         self.well.show_image(image)
 
     def set_chosen(self, chosen: bool) -> None:
