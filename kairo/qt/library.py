@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 
 from pathlib import Path
@@ -29,6 +30,7 @@ ACTIVITY_ARTWORK = "artwork"
 ACTIVITY_APPLY = "apply"
 ACTIVITY_SCAN = "scan"
 ACTIVITY_ROWS = "rows"
+ACTIVITY_DPR = "dpr"
 
 #: Prepared images are handed over in groups rather than one at a time. One
 #: signal per icon made a page of rows fill in a visible trickle — 120
@@ -103,7 +105,9 @@ class LibraryPane(QWidget):
         self._streamer = None
         self._row_streamer = None
         self._icon_generation = 0
+        self._preview_generation = 0
         self._paint_ratio = 0.0
+        self._paint_token = None
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -644,6 +648,10 @@ class LibraryPane(QWidget):
     def _bind_rows(self, entries) -> None:
         """Materialise rows now; decode their icons on one pool worker."""
         token = self.tokens.start(f"{ACTIVITY_ROWS}:{self.provider.id}")
+        selected_key = (self.selected.entry.key
+                        if self.selected is not None
+                        and self.selected.entry is not None else None)
+        restored = None
         while len(self.rows) < len(entries):
             row = EntryRow(self.grid_holder)
             row.clicked.connect(self.select)
@@ -657,10 +665,15 @@ class LibraryPane(QWidget):
             if needs_icon:
                 pending.append((index, entry.current_icon, entry.key,
                                 self._icon_generation))
-            row.set_selected(False)
+            is_selected = entry.key == selected_key
+            row.set_selected(is_selected)
+            if is_selected:
+                restored = row
             row.setVisible(True)
         for row in self.rows[len(entries):]:
             row.setVisible(False)
+        if selected_key is not None:
+            self.selected = restored
         if pending:
             self._stream_row_icons(pending, token)
 
@@ -707,7 +720,10 @@ class LibraryPane(QWidget):
         """Paint a whole group, so a page fills in waves rather than drips."""
         for index, image, key, generation in payload:
             if 0 <= index < len(self.rows):
-                self.rows[index].show_prepared_icon(image, key, generation)
+                row = self.rows[index]
+                accepted = row.show_prepared_icon(image, key, generation)
+                if accepted and self.selected is row:
+                    self.current_well.show_image(image, "—")
 
     def _grow_if_near_bottom(self, value: int) -> None:
         """Add the next page as the end of the built rows comes into view."""
@@ -821,8 +837,12 @@ class LibraryPane(QWidget):
         if not text.strip() and self._seeded:
             self._load_artwork()
 
-
     def _clear_grid(self) -> None:
+        # Any retained-image preparation belongs to the grid being removed.
+        # It must not be allowed to land in a later grid whose indexes happen
+        # to match.
+        self.tokens.cancel(f"{ACTIVITY_DPR}:{self.provider.id}")
+        self._preview_generation += 1
         while self.grid.count():
             item = self.grid.takeAt(0)
             widget = item.widget()
@@ -952,6 +972,7 @@ class LibraryPane(QWidget):
         streamer.item.connect(self._fill_tile)
         self._streamer = streamer
         ratio = self.devicePixelRatioF()
+        generation = self._preview_generation
 
         def pump():
             batch = []
@@ -961,7 +982,8 @@ class LibraryPane(QWidget):
                 # The entry key alone is not enough: changing the query keeps
                 # the same selected entry. The token says which request asked.
                 if batch and not token.cancelled:
-                    streamer.item.emit(0, (list(batch), token), key)
+                    streamer.item.emit(
+                        0, ((list(batch), generation), token), key)
                 batch.clear()
 
             for index, (art, source) in enumerate(results):
@@ -991,10 +1013,34 @@ class LibraryPane(QWidget):
         work.submit(pump)
 
     def _fill_tile(self, _index: int, payload: object, key: str) -> None:
-        batch, token = payload
+        body, token = payload
+        batch, generation = body
         if token.cancelled:
             return
         if self.selected is None or self.selected.entry.key != key:
+            return
+        if generation != self._preview_generation:
+            # These bytes still belong to the current artwork request, but
+            # their image was prepared for the screen we just left. Retain
+            # the download and re-prepare it off-thread at the current ratio;
+            # never flash the stale image and never ask the source again.
+            pending = []
+            doomed = []
+            for index, _image, raw in batch:
+                tile = self._tile_at.get(index)
+                if tile is None:
+                    continue
+                if raw is None:
+                    doomed.append(tile)
+                    continue
+                tile.preview_data = raw
+                pending.append((index, raw))
+            for tile in doomed:
+                self._drop_tile(tile, reflow=False)
+            if doomed:
+                self._reflow_tiles()
+            if pending:
+                self._prepare_retained_tiles(pending, token, key)
             return
         # Drops are collected and the grid re-seated once. Dropping inside
         # the loop re-seated every surviving tile per drop, so a group where
@@ -1011,10 +1057,39 @@ class LibraryPane(QWidget):
                 doomed.append(tile)
                 continue
             tile.set_image(data, data=raw)
+            if (tile is self.chosen_tile and self.proposed is tile.art):
+                self.proposed_well.show_image(data)
         for tile in doomed:
             self._drop_tile(tile, reflow=False)
         if doomed:
             self._reflow_tiles()
+
+    def _prepare_retained_tiles(self, pending, token, key: str) -> None:
+        """Rebuild downloaded previews for the current screen off-thread."""
+        pending = list(pending)
+        generation = self._preview_generation
+        ratio = self._paint_ratio
+        paint_token = self._paint_token
+        if not pending or paint_token is None or paint_token.cancelled:
+            return
+
+        def prepare_batch():
+            batch = []
+            for index, raw in pending:
+                if token.cancelled or paint_token.cancelled:
+                    return []
+                image = images.prepare(Q.TILE - 12, data=raw,
+                                       min_edge=MIN_USABLE_EDGE,
+                                       ratio=ratio)
+                batch.append((index, image, raw))
+            return batch
+
+        def arrived(batch):
+            if batch and not token.cancelled and not paint_token.cancelled:
+                self._fill_tile(0, ((batch, generation), token), key)
+
+        work.submit(prepare_batch, on_done=arrived,
+                    on_failed=lambda _message: None)
 
     def _drop_tile(self, tile, *, reflow: bool = True) -> None:
         """Remove a tile and close the hole it leaves behind.
@@ -1060,17 +1135,21 @@ class LibraryPane(QWidget):
         network at all - which is the reason those bytes are retained.
         """
         ratio = self.devicePixelRatioF()
-        if ratio == self._paint_ratio:
+        if math.isclose(ratio, self._paint_ratio, rel_tol=0.0,
+                        abs_tol=0.001):
             return
         self._paint_ratio = ratio
-        for tile in self.tiles:
-            payload = tile.preview_data
-            if payload is None:
-                continue
-            tile.set_image(images.prepare(Q.TILE - 12, data=payload,
-                                          min_edge=MIN_USABLE_EDGE,
-                                          ratio=ratio),
-                           data=payload)
+        self._preview_generation += 1
+        self._paint_token = self.tokens.start(
+            f"{ACTIVITY_DPR}:{self.provider.id}")
+        pending = [(index, tile.preview_data)
+                   for index, tile in self._tile_at.items()
+                   if tile.preview_data is not None]
+        artwork_token = self.tokens.current(ACTIVITY_ARTWORK)
+        key = (self.selected.entry.key
+               if self.selected is not None else "")
+        if pending and artwork_token is not None and key:
+            self._prepare_retained_tiles(pending, artwork_token, key)
         # Rows read from files on disk, so they only need asking again. The
         # generation bump is what stops a page still in flight at the old
         # ratio from painting over the new one.

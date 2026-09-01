@@ -530,15 +530,16 @@ class EntryRow(QFrame):
         return bool(entry.current_icon) and not self._icon_ready
 
     def show_prepared_icon(self, image: QImage | None, key: str,
-                           generation: int) -> None:
+                           generation: int) -> bool:
         if self.entry is None or self.entry.key != key:
-            return
+            return False
         if self._icon_identity[2] != generation:
-            return
+            return False
         placeholder = (self.entry.name or "?").strip()[:1].upper()
         self.well.show_image(image, placeholder)
         # Delivered: this row no longer needs to be queued by a later page.
         self._icon_ready = True
+        return True
 
     def set_selected(self, selected: bool) -> None:
         self._selected = selected

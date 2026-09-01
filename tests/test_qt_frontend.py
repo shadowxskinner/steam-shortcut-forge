@@ -2359,3 +2359,167 @@ def test_a_tile_retains_the_bytes_its_preview_was_built_from(qt_core):
     tile = ArtworkTile(_Art())
     tile.set_image(images.prepare(116, data=payload, ratio=1.0), data=payload)
     assert tile.preview_data == payload
+
+
+def test_rebinding_rows_preserves_the_selected_entry(qt_core):
+    """A ratio refresh must not leave model and highlight disagreeing."""
+    from types import SimpleNamespace
+
+    from kairo.qt.library import LibraryPane
+    from kairo.tasks import ActivityTokens
+
+    class Row:
+        def __init__(self, entry):
+            self.entry = entry
+            self.selected = False
+
+        def bind(self, entry, **_kwargs):
+            self.entry = entry
+            return False
+
+        def set_selected(self, selected):
+            self.selected = selected
+
+        def setVisible(self, _visible):
+            pass
+
+    entries = [SimpleNamespace(key="one"), SimpleNamespace(key="two")]
+    rows = [Row(entry) for entry in entries]
+    rows[1].selected = True
+    pane = SimpleNamespace(
+        tokens=ActivityTokens(), provider=SimpleNamespace(id="apps"),
+        rows=rows, selected=rows[1], _icon_generation=3,
+        _stream_row_icons=lambda _pending, _token: None,
+    )
+
+    LibraryPane._bind_rows(pane, entries)
+
+    assert pane.selected is rows[1]
+    assert [row.selected for row in rows] == [False, True], \
+        "the pane kept its selection but erased the visible highlight"
+
+
+def test_ratio_refresh_prepares_retained_artwork_off_the_gui_thread(
+        qt_core, monkeypatch):
+    """Moving screens must not synchronously decode a whole artwork grid."""
+    from types import SimpleNamespace
+
+    from kairo.qt import images
+    from kairo.qt.library import LibraryPane
+    from kairo.tasks import ActivityTokens
+
+    payload = _png(256)
+    tile = SimpleNamespace(preview_data=payload)
+    tokens = ActivityTokens()
+    tokens.start("artwork")
+    scheduled = []
+    pane = SimpleNamespace(
+        _paint_ratio=1.0, _preview_generation=7, _icon_generation=2,
+        devicePixelRatioF=lambda: 2.0, tiles=[tile], _tile_at={4: tile},
+        tokens=tokens, provider=SimpleNamespace(id="apps"),
+        selected=SimpleNamespace(
+            entry=SimpleNamespace(key="apps:one")),
+        _filtered=[], _shown=0,
+        _prepare_retained_tiles=lambda pending, token, key: scheduled.append(
+            (pending, token, key)),
+        _bind_rows=lambda _entries: None,
+    )
+
+    monkeypatch.setattr(
+        images, "prepare",
+        lambda *_args, **_kwargs: pytest.fail(
+            "refresh_device_pixel_ratio decoded on the GUI thread"),
+    )
+    LibraryPane.refresh_device_pixel_ratio(pane)
+
+    assert pane._preview_generation == 8
+    assert scheduled and scheduled[0][0] == [(4, payload)]
+    assert scheduled[0][2] == "apps:one"
+
+
+def test_a_late_old_ratio_preview_is_reprepared_instead_of_painted(qt_core):
+    """An old worker cannot overwrite tiles corrected for a new screen."""
+    from types import SimpleNamespace
+
+    from kairo.qt.library import LibraryPane
+    from kairo.tasks import CancelToken
+
+    class Tile:
+        preview_data = None
+
+        def __init__(self):
+            self.painted = []
+
+        def set_image(self, image, **_kwargs):
+            self.painted.append(image)
+
+    payload = _png(256)
+    stale_image = object()
+    tile = Tile()
+    scheduled = []
+    token = CancelToken()
+    pane = SimpleNamespace(
+        _preview_generation=2, _paint_ratio=2.0,
+        selected=SimpleNamespace(entry=SimpleNamespace(key="apps:one")),
+        _tile_at={0: tile}, tiles=[tile], chosen_tile=None, proposed=None,
+        _prepare_retained_tiles=lambda pending, current, key: scheduled.append(
+            (pending, current, key)),
+        _drop_tile=lambda *_args, **_kwargs: None,
+        _reflow_tiles=lambda: None,
+    )
+
+    LibraryPane._fill_tile(
+        pane, 0, (([(0, stale_image, payload)], 1), token), "apps:one")
+
+    assert tile.painted == [], "an old-ratio image reached the screen"
+    assert tile.preview_data == payload
+    assert scheduled == [([(0, payload)], token, "apps:one")]
+
+
+def test_ratio_refreshed_header_icons_follow_the_selected_row_and_tile(qt_core):
+    """The title and proposal cannot stay blurry while their grid is sharp."""
+    from types import SimpleNamespace
+
+    from kairo.qt.library import LibraryPane
+    from kairo.tasks import CancelToken
+
+    shown_current = []
+    row = SimpleNamespace(
+        show_prepared_icon=lambda image, key, generation: True)
+    pane = SimpleNamespace(
+        rows=[row], selected=row,
+        current_well=SimpleNamespace(
+            show_image=lambda image, placeholder: shown_current.append(image)),
+    )
+    current = object()
+    LibraryPane._fill_row_icon(pane, 0, [(0, current, "apps:one", 3)], "")
+    assert shown_current == [current]
+
+    shown_proposal = []
+    art = object()
+
+    class Tile:
+        preview_data = None
+
+        def __init__(self, artwork):
+            self.art = artwork
+
+        def set_image(self, image, *, data=None):
+            self.preview_data = data
+
+    tile = Tile(art)
+    token = CancelToken()
+    pane = SimpleNamespace(
+        _preview_generation=4,
+        selected=SimpleNamespace(entry=SimpleNamespace(key="apps:one")),
+        _tile_at={0: tile}, tiles=[tile], chosen_tile=tile, proposed=art,
+        proposed_well=SimpleNamespace(
+            show_image=lambda image, _placeholder="?": shown_proposal.append(
+                image)),
+        _drop_tile=lambda *_args, **_kwargs: None,
+        _reflow_tiles=lambda: None,
+    )
+    proposed = object()
+    LibraryPane._fill_tile(
+        pane, 0, (([(0, proposed, b"preview")], 4), token), "apps:one")
+    assert shown_proposal == [proposed]
