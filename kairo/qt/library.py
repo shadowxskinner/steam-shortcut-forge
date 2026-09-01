@@ -1113,6 +1113,15 @@ class LibraryPane(QWidget):
         self.proposal.setText(f"{label}  ·  ready to apply")
         self.apply_btn.setEnabled(True)
 
+        # The grid already downloaded, decoded and scaled this artwork to
+        # draw the tile. Asking the source for it again was a second fetch of
+        # bytes that were sitting in memory, and a decode back on the GUI
+        # thread on top of it.
+        retained = getattr(self.chosen_tile, "preview_data", None)
+        if retained is not None:
+            self.proposed_well.show_data(retained)
+            return
+
         source = self.ctx.sources.get(art.source_id)
         if source is None:
             return

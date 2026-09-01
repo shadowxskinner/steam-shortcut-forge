@@ -2325,6 +2325,22 @@ def test_a_screen_change_regenerates_visible_artwork_without_refetching():
         "nothing tells the panes their screen changed"
 
 
+def test_proposing_reuses_the_prepared_tile_rather_than_fetching_it_again():
+    """Choosing a tile refetched the very bytes the tile was drawn from.
+
+    The preview had already been downloaded, decoded and scaled to build the
+    grid; picking one asked the source for it a second time and decoded it
+    again on the GUI thread.
+    """
+    source = (QT_DIR / "library.py").read_text()
+    block = source.split("def _propose")[1].split("\n    def ")[0]
+    assert "preview_data" in block, "the retained bytes are never consulted"
+    assert block.index("preview_data") < block.index("work.submit"), \
+        "the fetch must be the fallback, not the first move"
+    assert "kairo.actions" not in block and "write" not in block, \
+        "proposing stays visual state only"
+
+
 def test_a_tile_retains_the_bytes_its_preview_was_built_from(qt_core):
     """Retention is what makes both the reuse and the ratio refresh possible."""
     from kairo.qt import images
