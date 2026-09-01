@@ -22,7 +22,9 @@ makedepends=(
     'python-setuptools'
     'python-wheel'
 )
-checkdepends=('python-pytest')
+# python-tomli is only consumed on Python < 3.11, where tomllib is absent;
+# current Arch python has tomllib and never reaches that fallback.
+checkdepends=('python-pytest' 'python-tomli')
 # Renamed from steam-shortcut-forge in 2.0.0. Without these three, pacman
 # leaves both packages installed and they fight over the same .desktop file.
 provides=('steam-shortcut-forge')

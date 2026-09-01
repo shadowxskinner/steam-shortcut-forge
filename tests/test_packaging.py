@@ -1,8 +1,15 @@
 """The installed application must agree with its package and documentation."""
 
 import re
-import tomllib
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10, which pyproject still supports
+    # A bare `import tomllib` here aborted collection of the whole suite -
+    # not one test - on every Python below 3.11, and PKGBUILD's check()
+    # runs pytest, so packaging failed on the floor the project declares.
+    import tomli as tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
