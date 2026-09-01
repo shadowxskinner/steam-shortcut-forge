@@ -81,6 +81,8 @@ class KairoWindow(QMainWindow):
         self.blur = Blur()
         self._closing = False
         self._draining = False
+        #: A deep-link reveal waiting on the Applications scan.
+        self._pending_reveal = None
         self._close_timer = QTimer(self)
         self._close_timer.setInterval(50)
         self._close_timer.timeout.connect(self._finish_close)
@@ -201,8 +203,13 @@ class KairoWindow(QMainWindow):
             item = next(i for i in self.items if i.key == key)
             pane = LibraryPane(item.provider, self.ctx)
             pane.rescan_requested.connect(self.rescan)
+            pane.customize_launcher.connect(self.open_launcher_in_applications)
             # A write in one pane changes what Changes has to show.
             pane.changed.connect(self._refresh_changes)
+            # An apply or reset in Applications can be a change to Steam's or
+            # an emulator's own launcher, so the sidebar re-reads on the same
+            # signal that refreshes the history.
+            pane.changed.connect(self.refresh_nav_icons)
         self.panes[key] = pane
         self.stack.addWidget(pane)
         return pane
@@ -240,6 +247,74 @@ class KairoWindow(QMainWindow):
         keys = [item.key for item in self.items]
         self._select(current if current in keys else keys[0])
 
+    def open_launcher_in_applications(self, basename: str) -> None:
+        """Deep link: show this launcher's row in the Applications provider.
+
+        Applications remains the only place artwork is chosen — nothing here
+        applies or resets anything. It navigates, because an emulator's own
+        launcher is otherwise one row among several hundred with nothing
+        pointing at it.
+
+        The Applications pane scans off the GUI thread, so the row may not
+        exist for a moment after switching to it. The request is held and
+        retried when rows arrive rather than quietly failing.
+        """
+        if not basename:
+            return
+        key = next((item.key for item in self.items
+                    if item.provider is not None
+                    and item.provider.id == "desktop"), None)
+        if key is None:
+            return
+        self._select(key)
+        pane = self.panes.get(key)
+        if pane is None:
+            return
+        if not pane.reveal_launcher(basename):
+            self._pending_reveal = (key, basename)
+            QTimer.singleShot(120, self._retry_reveal)
+
+    def _retry_reveal(self, attempts: int = 12) -> None:
+        pending = getattr(self, "_pending_reveal", None)
+        if not pending:
+            return
+        key, basename = pending
+        pane = self.panes.get(key)
+        if pane is not None and pane.reveal_launcher(basename):
+            self._pending_reveal = None
+            return
+        if attempts <= 1:
+            self._pending_reveal = None     # bounded: never retry forever
+            return
+        QTimer.singleShot(120, lambda: self._retry_reveal(attempts - 1))
+
+    def refresh_nav_icons(self) -> None:
+        """Re-read every provider's launcher icon and repaint just the glyphs.
+
+        Customising Steam or an emulator through the Applications provider
+        rewrites that launcher's Icon=, and this is what makes the sidebar
+        agree without a restart. Only the pixmap changes: no pane is rebuilt,
+        no button is recreated, and the current selection is untouched.
+
+        Providers that share a launcher — two Dolphin libraries, say — read
+        the same file and therefore land on the same logo by construction,
+        rather than by anything being copied between them.
+        """
+        for item in self.items:
+            button = self.buttons.get(item.key)
+            provider = item.provider
+            if button is None or provider is None:
+                continue
+            values = getattr(provider, "nav_icon_values", None)
+            if values is None:
+                continue
+            try:
+                button.set_logo_names(values())
+            except OSError:
+                # A launcher directory that cannot be read is not a reason to
+                # leave the sidebar half-painted.
+                continue
+
     def _refresh_changes(self) -> None:
         pane = self.panes.get(nav.VIEW_CHANGES)
         if pane is not None and hasattr(pane, "refresh"):
@@ -248,6 +323,7 @@ class KairoWindow(QMainWindow):
     def rescan(self) -> None:
         self.ledger.prune()
         self._adopt()
+        self.refresh_nav_icons()
         for pane in self.panes.values():
             if isinstance(pane, LibraryPane):
                 pane.rescan()

@@ -299,6 +299,22 @@ class NavButton(QPushButton):
         self.glyph.setPixmap(
             nav_pixmap(self._icon, colour, Q.NAV_ICON, ratio))
 
+    def set_logo_names(self, names) -> None:
+        """Point this row at a different set of icon candidates.
+
+        Repaints in place. Nothing is rebuilt and nothing is reparented, so
+        the row keeps its checked state and the sidebar does not flash — the
+        alternative, recreating the navigation after every apply, would drop
+        the selection the user is looking at.
+        """
+        names = (names,) if isinstance(names, str) else tuple(names or ())
+        if names == self._logo_name:
+            return
+        self._logo_name = names
+        self._logo = None
+        self._logo_ratio = 0.0          # force the next paint to re-resolve
+        self._paint_icon(self.isChecked())
+
     def showEvent(self, event) -> None:
         # __init__ paints at ratio 1 because the button has no screen yet.
         super().showEvent(event)

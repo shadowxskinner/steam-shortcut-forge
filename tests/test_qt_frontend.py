@@ -1172,8 +1172,13 @@ def test_a_row_shows_the_name_and_nothing_else():
     widgets = (QT_DIR / "widgets.py").read_text()
     assert "self.meta" not in widgets.split("class ArtworkTile")[0].split("class EntryRow")[1]
     library = (QT_DIR / "library.py").read_text()
-    select = library.split("self.title.setText")[1].split("def ")[0]
-    assert 'self.subtitle.setText("")' in select, "the appid must not reappear"
+    select = library.split("def select(self, row")[1].split("\n    def ")[0]
+    assert "self._set_heading(entry.name)" in select, (
+        "the heading is the name alone; _set_heading defaults the second "
+        "line to empty, which is what keeps the appid out of it")
+    code = "\n".join(line for line in select.splitlines()
+                     if not line.lstrip().startswith("#"))
+    assert "entry.subtitle" not in code, "the appid must not reappear"
 
 
 def test_every_method_a_qt_pane_calls_on_itself_exists():
@@ -1713,3 +1718,112 @@ def test_widget_count_stays_bounded_across_unrelated_histories(qt_core):
 
     assert len(pane._row_widgets) <= 60, (
         f"{len(pane._row_widgets)} widgets for 60 records — rows leak")
+
+
+# ---------------------------------------------------------------------------
+# The sidebar follows the launcher, and cannot strand a stale logo
+# ---------------------------------------------------------------------------
+
+def test_a_nav_row_repaints_in_place_without_being_rebuilt(qt_core, tmp_path):
+    """Acceptance 3 and 9, at the widget.
+
+    The selection and the widget identity must both survive, because the
+    alternative — rebuilding navigation after every apply — drops the row the
+    user is looking at.
+    """
+    from PIL import Image
+    from kairo.qt.widgets import NavButton
+
+    first = tmp_path / "one.png"
+    second = tmp_path / "two.png"
+    Image.new("RGBA", (64, 64), (200, 30, 30, 255)).save(first)
+    Image.new("RGBA", (64, 64), (30, 30, 200, 255)).save(second)
+
+    button = NavButton("provider:emu-pcsx2", "PCSX2", "disc",
+                       logo_name=(str(first),))
+    button.setChecked(True)
+    button._paint_icon(True)
+    before = button.glyph.pixmap().toImage()
+
+    button.set_logo_names((str(second),))
+    after = button.glyph.pixmap().toImage()
+
+    assert before != after, "the row kept the icon it was built with"
+    assert button.isChecked(), "repainting dropped the selection"
+
+    # Idempotent: the same names must not churn the pixmap.
+    same = button.glyph.pixmap()
+    button.set_logo_names((str(second),))
+    assert button.glyph.pixmap().cacheKey() == same.cacheKey()
+
+    # And falling back is a repaint too, not a blank row.
+    button.set_logo_names((str(tmp_path / "gone.png"),))
+    assert not button.glyph.pixmap().isNull(), "the row went blank"
+
+
+def test_rapid_apply_and_reset_cannot_strand_a_stale_logo(qt_core, tmp_path):
+    """Acceptance 9. Whatever the launcher says last is what is painted."""
+    from PIL import Image
+    from kairo.qt.widgets import NavButton
+
+    icons = []
+    for index, colour in enumerate(((220, 20, 20), (20, 220, 20),
+                                    (20, 20, 220), (220, 220, 20))):
+        path = tmp_path / f"i{index}.png"
+        Image.new("RGBA", (64, 64), (*colour, 255)).save(path)
+        icons.append(str(path))
+
+    button = NavButton("provider:emu", "PCSX2", "disc", logo_name=(icons[0],))
+    button._paint_icon(False)
+    for _ in range(15):
+        for name in icons:
+            button.set_logo_names((name,))
+    settled = button.glyph.pixmap().toImage()
+
+    fresh = NavButton("provider:emu", "PCSX2", "disc", logo_name=(icons[-1],))
+    fresh._paint_icon(False)
+    assert settled == fresh.glyph.pixmap().toImage(), (
+        "the row settled on something other than the last value set")
+
+
+def test_the_shell_refreshes_logos_on_change_and_rescan():
+    """Acceptance 3 and 9, at the wiring."""
+    source = (QT_DIR / "shell.py").read_text()
+    assert "pane.changed.connect(self.refresh_nav_icons)" in source, (
+        "an apply in Applications can be a change to an emulator's launcher")
+    rescan = source.split("def rescan")[1].split("\n    def ")[0]
+    assert "self.refresh_nav_icons()" in rescan
+
+    refresh = source.split("def refresh_nav_icons")[1].split("\n    def ")[0]
+    assert "set_logo_names" in refresh
+    for destructive in ("_build_nav", "deleteLater", "setParent(None)",
+                        "clear()"):
+        assert destructive not in refresh, (
+            f"refreshing logos must not {destructive} — that rebuilds the "
+            "sidebar and drops the selection")
+
+
+def test_the_customize_action_is_only_a_deep_link():
+    source = (QT_DIR / "library.py").read_text()
+    block = source.split("self.customize_btn = QPushButton")[1].split(
+        "self.match_btn")[0]
+    assert "customize_launcher.emit" in block
+    for forbidden in ("apply_icon", "restore_entry", "remove_entry",
+                      "QFileDialog"):
+        assert forbidden not in block, (
+            f"the deep link must not {forbidden}; Applications owns that")
+
+    shell = (QT_DIR / "shell.py").read_text()
+    handler = shell.split("def open_launcher_in_applications")[1].split(
+        "\n    def ")[0]
+    assert "_select(key)" in handler and "reveal_launcher" in handler
+    for forbidden in ("apply_icon", "restore_entry", "remove_entry"):
+        assert forbidden not in handler
+
+
+def test_the_reveal_retry_is_bounded():
+    """A scan that never produces the row must not retry forever."""
+    source = (QT_DIR / "shell.py").read_text()
+    retry = source.split("def _retry_reveal")[1].split("\n    def ")[0]
+    assert "attempts <= 1" in retry
+    assert "self._pending_reveal = None" in retry

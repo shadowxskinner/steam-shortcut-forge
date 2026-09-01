@@ -14,7 +14,9 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+                               QSizePolicy,
                                QLabel, QLineEdit, QMessageBox, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
@@ -86,6 +88,8 @@ class LibraryPane(QWidget):
     changed = Signal()
     status = Signal(str)
     rescan_requested = Signal()
+    #: Carries the launcher basename this provider's application lives in.
+    customize_launcher = Signal(str)
 
     def __init__(self, provider, context, parent=None):
         super().__init__(parent)
@@ -206,18 +210,40 @@ class LibraryPane(QWidget):
         names.addWidget(self.title)
         names.addWidget(self.subtitle)
         names.addStretch(1)
-        head.addLayout(names)
-        head.addStretch(1)
+        # A long game name must yield to the actions rather than run under
+        # them. QLabel asks for its full text width and a QHBoxLayout grants
+        # it, so without this a third button in the header simply overlapped
+        # the title. Ignored lets the column shrink below that request; the
+        # text itself is elided to whatever room is left.
+        for label in (self.title, self.subtitle):
+            label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        head.addLayout(names, 1)
         self.rescan_btn = QPushButton("Rescan")
         self.rescan_btn.setObjectName("secondary")
         # clicked carries a checked flag; a zero-argument Signal cannot take it.
         self.rescan_btn.clicked.connect(
             lambda _checked: self.rescan_requested.emit())
+        # A deep link, not a second icon editor. Applications stays the one
+        # place artwork is chosen; this only carries you to the right row,
+        # which is otherwise one entry among several hundred with nothing
+        # pointing at it.
+        self.customize_btn = QPushButton(self._customize_label())
+        self.customize_btn.setObjectName("secondary")
+        launcher = self._launcher_id()
+        self.customize_btn.setVisible(bool(self._customizable()))
+        self.customize_btn.setEnabled(bool(launcher))
+        if self._customizable() and not launcher:
+            self.customize_btn.setToolTip(
+                f"{self.provider.label} has no launcher entry Kairo can "
+                "customise, so the sidebar is using its drawn glyph.")
+        self.customize_btn.clicked.connect(
+            lambda _checked: self.customize_launcher.emit(self._launcher_id()))
+
         self.match_btn = QPushButton("Auto Match")
         self.match_btn.setObjectName("secondary")
         self.match_btn.setEnabled(False)
         self.match_btn.setToolTip("Not wired yet — this milestone is read-only")
-        for button in (self.rescan_btn, self.match_btn):
+        for button in (self.customize_btn, self.rescan_btn, self.match_btn):
             button.setFixedHeight(Q.H_BUTTON)
             head.addWidget(button, 0, Qt.AlignVCenter)
         layout.addWidget(header)
@@ -278,6 +304,7 @@ class LibraryPane(QWidget):
         row.addSpacing(T.S1)
         row.addStretch(1)
         self._seeded = ""
+        self._heading = ("", "")
         self.query = QLineEdit()
         self.query.setPlaceholderText("Search artwork…")
         self.query.setToolTip(
@@ -462,6 +489,85 @@ class LibraryPane(QWidget):
 
     # -- entries -----------------------------------------------------------
 
+    def _set_heading(self, title: str, subtitle: str = "") -> None:
+        """Remember the full text; show as much of it as there is room for."""
+        self._heading = (title, subtitle)
+        self._elide_heading()
+
+    def _elide_heading(self) -> None:
+        title, subtitle = getattr(self, "_heading", ("", ""))
+        for label, text in ((self.title, title), (self.subtitle, subtitle)):
+            room = max(0, label.width())
+            if not room:
+                label.setText(text)
+                continue
+            metrics = QFontMetrics(label.font())
+            label.setText(metrics.elidedText(text, Qt.ElideRight, room))
+            label.setToolTip(text if metrics.horizontalAdvance(text) > room
+                             else "")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide_heading()
+
+    def _customizable(self) -> bool:
+        """Steam and emulators have an application of their own; games do not."""
+        return hasattr(self.provider, "launcher_ids")
+
+    def _customize_label(self) -> str:
+        if not self._customizable():
+            return ""
+        which = "Steam" if self.provider.id == "steam" else "emulator"
+        return f"Customize {which} icon…"
+
+    def _launcher_id(self) -> str:
+        """The basename of this provider's own launcher, or ""."""
+        finder = getattr(self.provider, "launcher_path", None)
+        if finder is None:
+            return ""
+        try:
+            path = finder()
+        except OSError:
+            return ""
+        return path.name if path is not None else ""
+
+    def reveal_launcher(self, basename: str) -> bool:
+        """Select the row for ``basename`` and scroll it into view.
+
+        Matched on the launcher file, which is identity: two applications can
+        share a display name, and the name shown is the one in the entry
+        rather than anything Kairo controls.
+
+        Returns False when the scan has not produced that entry yet; the
+        caller retries once rows arrive rather than silently doing nothing.
+        """
+        if not basename:
+            return False
+        wanted = next((entry for entry in self.entries
+                       if entry.payload.get("basename") == basename), None)
+        if wanted is None:
+            return False
+
+        # Clear any filter hiding it, then page far enough to build its row.
+        if self.search.text():
+            self.search.clear()
+        self.refilter()
+        index = next((i for i, entry in enumerate(self._filtered)
+                      if entry.key == wanted.key), None)
+        if index is None:
+            return False
+        if index >= self._shown:
+            self._shown = min(len(self._filtered),
+                              ((index // ROW_PAGE) + 1) * ROW_PAGE)
+            self._bind_rows(self._filtered[:self._shown])
+
+        for row in self.rows[:self._shown]:
+            if row.entry is not None and row.entry.key == wanted.key:
+                self.select(row)
+                self.scroll.ensureWidgetVisible(row, 0, Q.H_ROW)
+                return True
+        return False
+
     def rescan(self) -> None:
         """Scan off the UI thread.
 
@@ -635,11 +741,12 @@ class LibraryPane(QWidget):
         self.selected = row
 
         entry = row.entry
-        self.title.setText(T.ellipsize(entry.name, 46))
+        # Elided to the room actually available, not to a fixed
+        # character count that cannot know how wide the header is.
+        self._set_heading(entry.name)
         # entry.subtitle is a Steam appid or a .desktop basename for two
         # providers out of three. The artwork count replaces it once a
         # search lands; until then the title stands alone.
-        self.subtitle.setText("")
         self.current_well.show_path(entry.current_icon, "—")
         self._clear_proposal()
         self._update_actions()
@@ -650,11 +757,11 @@ class LibraryPane(QWidget):
     def _empty_workspace(self) -> None:
         term = self.search.text().strip()
         if self.entries:
-            self.title.setText("No matches")
+            heading = "No matches"
             note = (f"Nothing here matches “{term}”." if term
                     else "Nothing matches the current filter.")
         else:
-            self.title.setText(f"No {self.provider.noun} found")
+            heading = f"No {self.provider.noun} found"
             # A provider that knows why it is empty should say so. An
             # emulator pointed at the wrong folder, or at an executable that
             # is not there, otherwise shows a blank list and no explanation —
@@ -671,7 +778,7 @@ class LibraryPane(QWidget):
             else:
                 note = (f"Kairo found no {self.provider.noun} for "
                         f"{self.provider.label} on this machine.")
-        self.subtitle.setText("")
+        self._set_heading(heading)
         self.current_well.show_placeholder("—")
         self._clear_grid()
         self._grid_note(note)
@@ -807,7 +914,8 @@ class LibraryPane(QWidget):
                     self._grid_note(f"Nothing found for {entry.name}.\n"
                                     "Try a different search.")
                 return
-            self.subtitle.setText(f"{len(results)} artwork options")
+            self._set_heading(self._heading[0],
+                              f"{len(results)} artwork options")
             arts = [art for art, _source in results]
             self._build_tiles(arts, [source.label for _art, source in results])
             self._stream_previews(results, token, key)

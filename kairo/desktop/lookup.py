@@ -53,3 +53,47 @@ def resolve_icon(value: str) -> Path | None:
             return direct
 
     return None
+
+
+def launcher_entry(desktop_ids) -> "Path | None":
+    """The launcher file the desktop would actually use, by precedence.
+
+    ``desktop_ids`` are basenames to accept, compared case-insensitively
+    because packages disagree about capitalisation — PCSX2 installs
+    ``PCSX2.desktop`` while its binary is ``pcsx2-qt``.
+
+    Later directories in the search path outrank earlier ones and the user's
+    own directory is last, so a Kairo override shadows the packaged file here
+    exactly as it does for the desktop itself. That is the whole point: the
+    answer has to come from the same precedence the menu obeys, not from a
+    value copied out of a package at some earlier moment.
+    """
+    from kairo import paths
+
+    wanted = {str(name).lower() for name in desktop_ids if name}
+    if not wanted:
+        return None
+    found = None
+    for directory in paths.system_application_dirs():
+        if not paths.is_readable_dir(directory):
+            continue
+        for path in paths.entries_matching(directory, "*.desktop"):
+            if path.name.lower() in wanted:
+                found = path            # keep going: last wins
+    return found
+
+
+def effective_icon(desktop_ids) -> str:
+    """The ``Icon=`` value in force for a launcher, or "".
+
+    Returned raw, because both forms are legitimate and mean different
+    things: a bare name is looked up in the icon theme, while an absolute
+    path is used verbatim. Kairo's own overrides write an absolute path, so
+    collapsing the two here would lose exactly the case this exists for.
+    """
+    from kairo.desktop import entry as de
+
+    path = launcher_entry(desktop_ids)
+    if path is None:
+        return ""
+    return de.read_entry_icon(path)

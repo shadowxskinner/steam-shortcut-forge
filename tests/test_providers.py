@@ -736,3 +736,188 @@ def test_an_unreachable_steam_library_does_not_end_the_steam_scan(
     assert "Team Fortress 2" in names, "the reachable library was dropped too"
     assert "Portal 2" in names
     assert "Steam Linux Runtime 3.0" not in names, "runtimes are still filtered"
+
+
+# ---------------------------------------------------------------------------
+# Sidebar logos follow the effective launcher icon
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def launchers(fake_home, monkeypatch):
+    """A packaged launcher for PCSX2, Dolphin and Steam, plus the user's dir."""
+    from kairo import paths
+
+    system = fake_home / "usr-share-applications"
+    system.mkdir()
+    for basename, name, icon, command in (
+            ("PCSX2.desktop", "PCSX2", "PCSX2", "pcsx2-qt %f"),
+            ("dolphin-emu.desktop", "Dolphin Emulator", "dolphin-emu",
+             "dolphin-emu -b %f"),
+            ("steam.desktop", "Steam", "steam", "steam %U")):
+        (system / basename).write_text(
+            f"[Desktop Entry]\nType=Application\nName={name}\n"
+            f"Icon={icon}\nExec={command}\n")
+
+    local = fake_home / ".local" / "share" / "applications"
+    monkeypatch.setattr(paths, "system_application_dirs",
+                        lambda: [system, local])
+    return system, local
+
+
+def _emulator_provider(name, system_id, **kwargs):
+    from kairo.emulators import Emulator, RomFolder
+    from kairo.providers.emulator import EmulatorProvider
+
+    emulator = Emulator(id=kwargs.pop("id", name.lower()), name=name,
+                        executable=kwargs.pop("executable", f"/usr/bin/{name}"),
+                        folders=(RomFolder(path="/roms", system=system_id),),
+                        **kwargs)
+    return EmulatorProvider(emulator, order=0)
+
+
+def _customize(entry_name, art, launchers):
+    """Apply an icon through the Applications provider, as a user would."""
+    from kairo import actions
+    from kairo.ledger import Ledger
+    from kairo.providers.desktop_entry import DesktopEntryProvider
+
+    apps = DesktopEntryProvider()
+    entry = {e.name: e for e in apps.scan()}[entry_name]
+    ledger = Ledger()
+    actions.apply_icon(entry, apps, art, source_label="Local file",
+                       ledger=ledger)
+    return apps, ledger
+
+
+@pytest.fixture
+def artwork(fake_home):
+    from PIL import Image
+
+    path = fake_home / "chosen.png"
+    Image.new("RGBA", (256, 256), (255, 90, 20, 255)).save(path)
+    return path
+
+
+def test_a_sidebar_logo_starts_at_the_packaged_icon(launchers):
+    """Acceptance 1."""
+    assert _emulator_provider("PCSX2", "ps2").nav_icon_values()[0] == "PCSX2"
+    assert _emulator_provider("Dolphin", "gamecube").nav_icon_values()[0] \
+        == "dolphin-emu"
+
+    from kairo.providers.steam import SteamProvider
+    assert SteamProvider().nav_icon_values()[0] == "steam"
+
+
+def test_customising_moves_every_matching_sidebar_row(launchers, artwork):
+    """Acceptance 2, 3 and 7 — and the two-Dolphin-libraries case."""
+    from kairo.providers.steam import SteamProvider
+
+    _, local = launchers
+    _customize("PCSX2", artwork, launchers)
+
+    applied = _emulator_provider("PCSX2", "ps2").nav_icon_values()[0]
+    assert Path(applied).is_absolute(), "the override writes a path, not a name"
+    assert Path(applied).is_file()
+
+    # A second provider for the same emulator reads the same launcher.
+    second = _emulator_provider("PCSX2", "ps2", id="pcsx2-b")
+    assert second.nav_icon_values()[0] == applied
+
+    # And an unrelated emulator is unaffected.
+    assert _emulator_provider("Dolphin", "gamecube").nav_icon_values()[0] \
+        == "dolphin-emu"
+    assert SteamProvider().nav_icon_values()[0] == "steam"
+
+    # The desktop sees it too: the override is what precedence selects.
+    assert (local / "PCSX2.desktop").is_file()
+    assert "X-Kairo-Managed" in (local / "PCSX2.desktop").read_text()
+
+
+def test_the_customised_logo_survives_a_restart(launchers, artwork):
+    """Acceptance 4. Nothing is cached in the provider that made the change."""
+    _customize("PCSX2", artwork, launchers)
+    applied = _emulator_provider("PCSX2", "ps2").nav_icon_values()[0]
+
+    fresh = _emulator_provider("PCSX2", "ps2", icon="PCSX2")
+    assert fresh.nav_icon_values()[0] == applied, (
+        "a value stored when the emulator was configured went stale")
+
+
+def test_reset_returns_the_packaged_icon_everywhere(launchers, artwork):
+    """Acceptance 5 and 6."""
+    from types import SimpleNamespace
+    from kairo import actions
+
+    system, local = launchers
+    apps, ledger = _customize("PCSX2", artwork, launchers)
+    assert _emulator_provider("PCSX2", "ps2").nav_icon_values()[0] != "PCSX2"
+
+    registry = SimpleNamespace(get=lambda provider_id: apps)
+    actions.restore_record(ledger.records()[0], registry, ledger=ledger)
+
+    assert _emulator_provider("PCSX2", "ps2").nav_icon_values()[0] == "PCSX2"
+    assert not (local / "PCSX2.desktop").exists(), "the override outlived reset"
+    assert "Icon=PCSX2" in (system / "PCSX2.desktop").read_text(), (
+        "the packaged file must never have been touched")
+    assert ledger.records() == []
+
+
+def test_steam_follows_and_resets_too(launchers, artwork):
+    """Acceptance 7, for the provider that is not an emulator."""
+    from types import SimpleNamespace
+    from kairo import actions
+    from kairo.providers.steam import SteamProvider
+
+    apps, ledger = _customize("Steam", artwork, launchers)
+    assert Path(SteamProvider().nav_icon_values()[0]).is_absolute()
+
+    registry = SimpleNamespace(get=lambda provider_id: apps)
+    actions.restore_record(ledger.records()[0], registry, ledger=ledger)
+    assert SteamProvider().nav_icon_values()[0] == "steam"
+
+
+def test_an_emulator_with_no_launcher_falls_back_without_error(launchers):
+    """Acceptance 8. A bare AppImage registers nothing."""
+    provider = _emulator_provider("Cemu", "wiiu",
+                                  executable="/home/x/Cemu.AppImage")
+    assert provider.launcher_path() is None
+    assert provider.nav_icon_values(), "the row must still have candidates"
+    assert provider.nav_icon == "disc", "and a drawn glyph behind them"
+    assert all(not Path(v).is_absolute() for v in provider.nav_icon_values())
+
+
+def test_the_lookup_survives_an_unreadable_launcher_directory(
+        launchers, monkeypatch):
+    """Acceptance 8, the hostile variant."""
+    import os
+    from kairo import paths
+
+    system, local = launchers
+    blocked = system.parent / "blocked"
+    (blocked / "applications").mkdir(parents=True)
+    monkeypatch.setattr(paths, "system_application_dirs",
+                        lambda: [blocked / "applications", system, local])
+    os.chmod(blocked, 0o000)
+    try:
+        assert _emulator_provider("PCSX2", "ps2").nav_icon_values()[0] == "PCSX2"
+    finally:
+        os.chmod(blocked, 0o755)
+
+
+def test_no_second_icon_writing_path_was_introduced(launchers):
+    """Acceptance 10. Exactly two writers, and the lookup only reads."""
+    import inspect
+    from kairo.providers import writers
+    from kairo.providers.base import LauncherWriter
+    from kairo.desktop import lookup
+
+    concrete = {name for name, obj in vars(writers).items()
+                if inspect.isclass(obj) and issubclass(obj, LauncherWriter)
+                and obj is not LauncherWriter}
+    assert concrete == {"GeneratedEntryWriter", "OverrideWriter"}, concrete
+
+    source = Path(lookup.__file__).read_text()
+    for forbidden in ("open(", "write_text", "atomic_write", "unlink",
+                      "mkdir", "replace("):
+        assert forbidden not in source, (
+            f"the icon lookup must only read; found {forbidden!r}")

@@ -17,6 +17,7 @@ import shlex
 from pathlib import Path
 
 from kairo import systems as systems_mod
+from kairo.desktop import lookup
 
 from kairo import emulators as emu
 from kairo import paths
@@ -100,9 +101,29 @@ class EmulatorProvider(AppProvider):
         # Kept for anything still reading the old single-name attribute.
         self.nav_icon_name = (self.nav_icon_names[0]
                               if self.nav_icon_names else "")
+        # Launcher identity, resolved from the catalogue rather than from the
+        # configured name, which the user can rename at any time.
+        self.launcher_ids = systems_mod.desktop_ids_for(emulator.name, systems)
         # And when nothing at all is installed, a glyph that says what the
         # games came on rather than one generic chip for every emulator.
         self.nav_icon = systems_mod.medium_for(systems)
+
+    def launcher_path(self):
+        """The .desktop this emulator actually launches from, or None."""
+        return lookup.launcher_entry(self.launcher_ids)
+
+    def nav_icon_values(self) -> tuple[str, ...]:
+        """Icon candidates as they stand right now, best first.
+
+        The launcher's effective Icon= leads, so customising the emulator
+        through the Applications provider is reflected here without anything
+        being copied between them: both read the same file, through the same
+        precedence the desktop menu uses. The catalogue names stay behind it
+        as the answer for a launcher that does not exist.
+        """
+        live = lookup.effective_icon(self.launcher_ids)
+        return tuple(dict.fromkeys(
+            name for name in (live, *self.nav_icon_names) if name))
 
     def available(self) -> bool:
         """Configured badly is still configured: the section stays visible.

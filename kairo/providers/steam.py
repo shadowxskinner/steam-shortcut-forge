@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 from kairo import paths
+from kairo.desktop import lookup
 from kairo.desktop import entry as de
 from kairo.desktop.lookup import resolve_icon
 from kairo.models import AppEntry, ArtQuery, make_key
@@ -200,6 +201,17 @@ class SteamProvider(AppProvider):
     order = 0
     #: Resolved through the icon theme; falls back to the drawn glyph.
     nav_icon_name = "steam"
+    #: Steam's launcher, native and Flatpak. Identity, not display name.
+    launcher_ids = ("steam.desktop", f"{FLATPAK_STEAM_ID}.desktop")
+
+    def launcher_path(self):
+        return lookup.launcher_entry(self.launcher_ids)
+
+    def nav_icon_values(self) -> tuple[str, ...]:
+        """Steam's effective launcher icon first, its theme name behind it."""
+        live = lookup.effective_icon(self.launcher_ids)
+        return tuple(dict.fromkeys(
+            name for name in (live, self.nav_icon_name) if name))
 
     # SteamGridDB first: it matches on the actual Steam app ID, so it is the
     # only source that can be certain it found the right game. Themes and

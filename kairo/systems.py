@@ -409,3 +409,25 @@ def medium_for(systems: tuple[str, ...]) -> str:
     found = {system.medium for system_id in systems
              if (system := by_id(system_id)) is not None}
     return found.pop() if len(found) == 1 else "chip"
+
+
+def desktop_ids(system: System) -> tuple[str, ...]:
+    """Launcher basenames that could belong to this system's emulator.
+
+    Identity, not display name: a Flatpak id and a package's own basename are
+    both stable, while the name in a saved emulator config is whatever the
+    user typed and goes stale the moment they rename it.
+    """
+    names = [f"{app_id}.desktop" for app_id in system.flatpaks]
+    names += [f"{command}.desktop" for command in system.commands]
+    return tuple(dict.fromkeys(names))
+
+
+def desktop_ids_for(emulator_name: str,
+                    systems: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Every launcher basename worth checking for a configured emulator."""
+    names: list[str] = []
+    for system in CATALOGUE:
+        if system.emulator == emulator_name or system.id in systems:
+            names.extend(desktop_ids(system))
+    return tuple(dict.fromkeys(names))
