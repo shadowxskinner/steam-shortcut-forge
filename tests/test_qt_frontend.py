@@ -3445,3 +3445,173 @@ def test_no_pane_ever_shows_a_horizontal_scrollbar(qt_core):
         window.close()
         from kairo.qt import work
         work.drain()
+
+
+# ---------------------------------------------------------------------------
+# The one-time title reveal.
+
+def _reveal(text, width=200):
+    from kairo.qt.widgets import RevealLabel
+
+    label = RevealLabel()
+    label.resize(width, 30)
+    label.show()
+    label.setText(text)
+    return label
+
+
+def test_a_title_that_fits_never_moves(qt_core):
+    """Motion is for a problem this title does not have."""
+    label = _reveal("Short", width=400)
+    try:
+        assert not label.is_truncated()
+        assert not label.is_animating(), "a title that fits started animating"
+        assert label.toolTip() == ""
+        assert label._offset == 0.0
+    finally:
+        label.close()
+
+
+def test_a_truncated_title_reveals_itself_once_and_stops(qt_core):
+    """One pass out and back, not a loop."""
+    label = _reveal("Call of Duty: Black Ops Cold War Ultimate Edition", 160)
+    try:
+        assert label.is_truncated()
+        assert label.is_animating()
+        assert label.toolTip().startswith("Call of Duty")
+
+        overflow = label._overflow()
+        # Hold, then pan out, then hold, then return - driven directly so the
+        # test does not depend on a wall clock.
+        for _ in range(int(label.START_PAUSE_MS / label.TICK_MS) + 2):
+            label._tick()
+        assert label._phase == "out", "it never left the beginning"
+
+        seen = []
+        for _ in range(4000):
+            label._tick()
+            seen.append(label._offset)
+            if not label.is_animating():
+                break
+        assert not label.is_animating(), "the reveal never ended"
+        assert max(seen) >= overflow - 1, \
+            "it stopped before the end of the title was readable"
+        assert label._offset == 0.0, "it did not return to the beginning"
+        assert label._phase == "idle"
+    finally:
+        label.close()
+
+
+def test_the_reveal_moves_at_a_readable_speed(qt_core):
+    """25-35 logical points a second; fast enough not to wait, slow to read."""
+    from kairo.qt.widgets import RevealLabel
+
+    assert 25.0 <= RevealLabel.SPEED <= 35.0
+    assert RevealLabel.START_PAUSE_MS >= 800
+    per_tick = RevealLabel.SPEED * (RevealLabel.TICK_MS / 1000.0)
+    label = _reveal("A title comfortably wider than the room it has", 120)
+    try:
+        for _ in range(int(label.START_PAUSE_MS / label.TICK_MS) + 2):
+            label._tick()
+        before = label._offset
+        label._tick()
+        assert abs((label._offset - before) - per_tick) < 0.51
+    finally:
+        label.close()
+
+
+def test_growing_the_window_cancels_the_reveal_immediately(qt_core):
+    label = _reveal("A title comfortably wider than the room it has", 120)
+    try:
+        assert label.is_animating()
+        label.resize(1200, 30)
+        qt_core.processEvents()
+        assert not label.is_truncated()
+        assert not label.is_animating(), "it kept animating once it fitted"
+        assert label._offset == 0.0, "it did not reset to the beginning"
+        assert label.toolTip() == ""
+    finally:
+        label.close()
+
+
+def test_hiding_or_replacing_a_title_stops_its_timer(qt_core):
+    """A pane switched away from must not keep a timer running."""
+    label = _reveal("A title comfortably wider than the room it has", 120)
+    try:
+        assert label.is_animating()
+        label.hide()
+        assert not label.is_animating(), "hidden and still ticking"
+
+        label.show()
+        label.setText("Another title also much too wide for this label")
+        assert label.is_animating()
+        label.setText("Short")
+        assert not label.is_animating(), "a shorter title left the timer on"
+        assert label._offset == 0.0
+    finally:
+        label.close()
+
+
+def test_closing_mid_reveal_leaves_nothing_behind(qt_core):
+    """No callback into a destroyed widget, and no Qt warning."""
+    import gc
+
+    label = _reveal("A title comfortably wider than the room it has", 120)
+    assert label.is_animating()
+    label.close()
+    label.deleteLater()
+    del label
+    gc.collect()
+    for _ in range(6):
+        qt_core.processEvents()
+
+
+def test_reduced_motion_gets_ellipsis_and_a_tooltip_instead(qt_core, monkeypatch):
+    """Movement is a convenience; for some readers it is the opposite."""
+    from kairo.qt import theme as Q
+
+    monkeypatch.setenv("KAIRO_NO_ANIMATION", "1")
+    assert not Q.animations_enabled()
+
+    label = _reveal("A title comfortably wider than the room it has", 120)
+    try:
+        assert label.is_truncated(), "precondition: it does not fit"
+        assert not label.is_animating(), "reduced motion still animated"
+        assert label.toolTip().startswith("A title"), \
+            "with no movement the tooltip is the only way to read it"
+    finally:
+        label.close()
+
+
+def test_the_title_never_takes_focus_or_swallows_scrolling(qt_core):
+    from PySide6.QtCore import Qt as QtNs
+
+    label = _reveal("A title comfortably wider than the room it has", 120)
+    try:
+        assert label.focusPolicy() == QtNs.NoFocus
+        assert not hasattr(type(label), "wheelEvent") or \
+            type(label).wheelEvent is type(label).__mro__[1].wheelEvent, \
+            "the title must not consume wheel events"
+    finally:
+        label.close()
+
+
+def test_a_provider_switch_does_not_accumulate_timers(qt_core):
+    """Each pane owns one, parented, so it dies with the widget."""
+    from kairo.qt.widgets import RevealLabel
+
+    source = (QT_DIR / "widgets.py").read_text()
+    block = source.split("class RevealLabel")[1]
+    assert "QTimer(self)" in block, "an unparented timer outlives its widget"
+    assert "def hideEvent" in block and "_reset()" in block
+
+    labels = [_reveal("A title comfortably wider than the room it has", 120)
+              for _ in range(5)]
+    try:
+        assert all(label.is_animating() for label in labels)
+        for label in labels:
+            label.hide()
+        assert not any(label.is_animating() for label in labels)
+    finally:
+        for label in labels:
+            label.close()

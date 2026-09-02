@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import (QColor, QFontMetrics, QImage, QPainter, QPen,
+from PySide6.QtCore import (QPointF, QRectF, QSize, Qt, QTimer,
+                            Signal)
+from PySide6.QtGui import (QColor, QFontMetrics, QImage, QLinearGradient,
+                           QPainter, QPen,
                            QPixmap, QPolygonF)
 from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QSizePolicy,
                                QPushButton, QVBoxLayout, QWidget)
@@ -683,3 +685,187 @@ class ArtworkTile(QFrame):
 
     def mousePressEvent(self, event):
         self.picked.emit(self.art)
+
+
+class RevealLabel(QWidget):
+    """A heading that shows the rest of itself once, then stops.
+
+    A title too long for its header has to be readable somehow. A permanent
+    marquee is the obvious answer and the wrong one: something moving forever
+    in the corner of the eye is an attention cost paid on every screen, for a
+    problem that only needs solving once. This pans slowly to the end, pauses,
+    comes back, and then stays still until something actually changes - a new
+    selection, a resize that newly truncates, or the pointer deliberately
+    entering it.
+
+    Fitting is by QFontMetrics against the width the widget was actually
+    given, never a character count or a breakpoint guess.
+    """
+
+    #: Long enough to read the beginning before anything moves.
+    START_PAUSE_MS = 1000
+    #: Long enough to read the end before it returns.
+    END_PAUSE_MS = 900
+    #: Logical points per second. Fast enough not to be a wait, slow enough
+    #: to read while it happens.
+    SPEED = 30.0
+    TICK_MS = 16
+    #: The fade that hides the cut edge while anything is off-screen.
+    FADE = 24
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._text = ""
+        self._offset = 0.0
+        self._phase = "idle"
+        self._waited = 0
+        # Never a tab stop and never a scroll target: this is a label that
+        # happens to move, not a control.
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self._timer = QTimer(self)
+        self._timer.setInterval(self.TICK_MS)
+        self._timer.timeout.connect(self._tick)
+
+    # -- text --------------------------------------------------------------
+
+    def setText(self, text: str) -> None:
+        text = text or ""
+        changed = text != self._text
+        self._text = text
+        self.setToolTip(text if self._overflow() > 0 else "")
+        if changed:
+            self._reset()
+            self._maybe_start()
+        self.update()
+
+    def text(self) -> str:
+        return self._text
+
+    def _overflow(self) -> float:
+        metrics = QFontMetrics(self.font())
+        return max(0.0, metrics.horizontalAdvance(self._text) - self.width())
+
+    def is_truncated(self) -> bool:
+        return self._overflow() > 0
+
+    def is_animating(self) -> bool:
+        return self._timer.isActive()
+
+    # -- the one reveal ----------------------------------------------------
+
+    def _reset(self) -> None:
+        self._timer.stop()
+        self._offset = 0.0
+        self._phase = "idle"
+        self._waited = 0
+
+    def _maybe_start(self) -> None:
+        if not self._text or not self.isVisible():
+            return
+        if self._overflow() <= 0:
+            self._reset()
+            self.update()
+            return
+        if not Q.animations_enabled():
+            # Ellipsis and a tooltip say the same thing without moving.
+            return
+        self._phase = "holding"
+        self._waited = 0
+        self._timer.start()
+
+    def _tick(self) -> None:
+        overflow = self._overflow()
+        if overflow <= 0:
+            # The window grew mid-reveal; there is nothing left to show.
+            self._reset()
+            self.update()
+            return
+        step = self.SPEED * (self.TICK_MS / 1000.0)
+        if self._phase == "holding":
+            self._waited += self.TICK_MS
+            if self._waited >= self.START_PAUSE_MS:
+                self._phase = "out"
+        elif self._phase == "out":
+            self._offset = min(overflow, self._offset + step)
+            if self._offset >= overflow:
+                self._phase = "resting"
+                self._waited = 0
+        elif self._phase == "resting":
+            self._waited += self.TICK_MS
+            if self._waited >= self.END_PAUSE_MS:
+                self._phase = "back"
+        elif self._phase == "back":
+            self._offset = max(0.0, self._offset - step)
+            if self._offset <= 0:
+                # One reveal. Nothing replays until something changes.
+                self._reset()
+        self.update()
+
+    # -- events ------------------------------------------------------------
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        if self._phase == "idle":
+            self._maybe_start()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.setToolTip(self._text if self._overflow() > 0 else "")
+        if self._overflow() <= 0:
+            self._reset()
+        elif self._phase == "idle":
+            self._maybe_start()
+        self.update()
+
+    def hideEvent(self, event):
+        # A pane switched away from must not keep a timer running.
+        self._reset()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._maybe_start()
+
+    def sizeHint(self):
+        metrics = QFontMetrics(self.font())
+        return QSize(0, metrics.height())
+
+    def minimumSizeHint(self):
+        return QSize(0, QFontMetrics(self.font()).height())
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+        metrics = QFontMetrics(self.font())
+        painter.setFont(self.font())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        rect = self.rect()
+        overflow = self._overflow()
+        if overflow <= 0 or not self._timer.isActive():
+            shown = (self._text if overflow <= 0
+                     else metrics.elidedText(self._text, Qt.ElideRight,
+                                             rect.width()))
+            painter.drawText(rect, Qt.AlignLeft | Qt.AlignVCenter, shown)
+            painter.end()
+            return
+        painter.drawText(rect.adjusted(int(-self._offset), 0, 0, 0),
+                         Qt.AlignLeft | Qt.AlignVCenter, self._text)
+        # Soften whichever edge currently has text running past it.
+        painter.setCompositionMode(QPainter.CompositionMode_DestinationIn)
+        if self._offset > 0.5:
+            painter.fillRect(QRectF(rect.left(), rect.top(), self.FADE,
+                                    rect.height()),
+                             self._edge(rect.left(), rect.left() + self.FADE))
+        if self._offset < overflow - 0.5:
+            painter.fillRect(QRectF(rect.right() - self.FADE, rect.top(),
+                                    self.FADE, rect.height()),
+                             self._edge(rect.right(), rect.right() - self.FADE))
+        painter.end()
+
+    @staticmethod
+    def _edge(transparent_at: float, opaque_at: float) -> QLinearGradient:
+        gradient = QLinearGradient(transparent_at, 0, opaque_at, 0)
+        gradient.setColorAt(0.0, QColor(0, 0, 0, 0))
+        gradient.setColorAt(1.0, QColor(0, 0, 0, 255))
+        return gradient

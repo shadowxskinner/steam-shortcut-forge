@@ -389,3 +389,34 @@ def stylesheet(glass=None) -> str:
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
                                    background: transparent; }}
     """
+
+
+# ---------------------------------------------------------------------------
+# Motion
+# ---------------------------------------------------------------------------
+
+def animations_enabled() -> bool:
+    """Whether Kairo may move anything on its own.
+
+    Off when KAIRO_NO_ANIMATION is set to anything truthy, and off when the
+    platform has asked for reduced motion through Qt's UI effects. Motion in
+    an application like this is a convenience for reading a long name; for
+    somebody with a vestibular disorder it is not a convenience at all, and
+    the fallback - ellipsis and a tooltip - loses nothing but the movement.
+    """
+    import os
+
+    flag = os.environ.get("KAIRO_NO_ANIMATION", "").strip().lower()
+    if flag and flag not in ("0", "false", "no"):
+        return False
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+
+        application = QApplication.instance()
+        if application is not None:
+            return bool(application.isEffectEnabled(Qt.UI_AnimateCombo)) or \
+                bool(application.isEffectEnabled(Qt.UI_FadeMenu)) or True
+    except Exception:                                   # pragma: no cover
+        pass
+    return True

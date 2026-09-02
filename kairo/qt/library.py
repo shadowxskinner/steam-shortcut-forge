@@ -20,7 +20,8 @@ from kairo.artwork.local import SOURCE_ID as LOCAL_SOURCE_ID
 from kairo.qt import images
 from kairo.qt import theme as Q
 from kairo.qt import work
-from kairo.qt.widgets import ArtworkTile, EntryRow, IconWell, Pills
+from kairo.qt.widgets import (ArtworkTile, EntryRow, IconWell, Pills,
+                              RevealLabel)
 from kairo.tasks import ActivityTokens
 from kairo.ui import theme as T
 
@@ -236,7 +237,10 @@ class LibraryPane(QWidget):
         names = QVBoxLayout()
         names.setContentsMargins(0, 0, 0, 0)
         names.setSpacing(2)
-        self.title = QLabel("")
+        # Not a QLabel: a selected title longer than the header has to be
+        # readable, and eliding it is only half an answer. RevealLabel shows
+        # the rest once, slowly, and then stops.
+        self.title = RevealLabel()
         self.title.setObjectName("title")
         self.subtitle = QLabel("")
         self.subtitle.setObjectName("subtitle")
@@ -588,15 +592,20 @@ class LibraryPane(QWidget):
 
     def _elide_heading(self) -> None:
         title, subtitle = getattr(self, "_heading", ("", ""))
-        for label, text in ((self.title, title), (self.subtitle, subtitle)):
-            room = max(0, label.width())
-            if not room:
-                label.setText(text)
-                continue
-            metrics = QFontMetrics(label.font())
-            label.setText(metrics.elidedText(text, Qt.ElideRight, room))
-            label.setToolTip(text if metrics.horizontalAdvance(text) > room
-                             else "")
+        # The title owns its own fitting: it needs the whole string to be
+        # able to reveal the rest of it, and it decides for itself whether
+        # there is anything to reveal.
+        self.title.setText(title)
+
+        room = max(0, self.subtitle.width())
+        if not room:
+            self.subtitle.setText(subtitle)
+            return
+        metrics = QFontMetrics(self.subtitle.font())
+        self.subtitle.setText(
+            metrics.elidedText(subtitle, Qt.ElideRight, room))
+        self.subtitle.setToolTip(
+            subtitle if metrics.horizontalAdvance(subtitle) > room else "")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
