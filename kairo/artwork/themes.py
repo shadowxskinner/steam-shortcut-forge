@@ -23,6 +23,24 @@ DEFAULT_LIMIT = 200
 _REVERSE_MATCH_FLOOR = 4
 
 
+def _identifier_like(term: str) -> bool:
+    """Whether reverse matching makes any sense for this query.
+
+    Reverse matching exists so "kwalletmanager5" finds "kwalletmanager": the
+    query is an identifier and the icon is a shorter form of it. Run against
+    a prose title it does the opposite - it promotes any short generic icon
+    whose *name* happens to appear inside the *title*. "Call of Duty: Modern
+    Warfare 2 (2009) - multiplayer" pulls in icons named call, play, layer,
+    mode, fare, multi, player and duty, none of which have anything to do
+    with the game, which is where the stray warning icons in the grid came
+    from.
+
+    An identifier has no spaces. That is the whole distinction, and it is
+    the one the original comment was really describing.
+    """
+    return bool(term) and not any(character.isspace() for character in term)
+
+
 class IconThemeSource(ArtworkSource):
     id = SOURCE_ID
     label = "Icon themes"
@@ -95,10 +113,12 @@ class IconThemeSource(ArtworkSource):
         per_theme: dict[str, list[Artwork]] = {}
         for theme in ThemeIndex.theme_names():
             icons = ThemeIndex.app_icons(theme)
+            reverse = _identifier_like(needle)
             hits = [self._tile(theme, name, icons[name])
                     for name in sorted(icons)
                     if needle in name.lower()
-                    or (len(name) >= _REVERSE_MATCH_FLOOR and name.lower() in needle)]
+                    or (reverse and len(name) >= _REVERSE_MATCH_FLOOR
+                        and name.lower() in needle)]
             if hits:
                 per_theme[theme] = hits
 
@@ -161,7 +181,8 @@ class IconThemeSource(ArtworkSource):
         for theme in ThemeIndex.theme_names():
             for name in ThemeIndex.app_icons(theme):
                 low = name.lower()
-                if needle in low or (len(low) >= _REVERSE_MATCH_FLOOR
+                if needle in low or (_identifier_like(needle)
+                                     and len(low) >= _REVERSE_MATCH_FLOOR
                                      and low in needle):
                     return True
         return False

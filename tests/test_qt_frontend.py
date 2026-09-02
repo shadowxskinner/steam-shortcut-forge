@@ -874,7 +874,8 @@ def test_artwork_is_decoded_before_it_reaches_the_gui_thread():
     pump = source.split("def _stream_previews")[1].split("\n    def ")[0]
     fill = source.split("def _fill_tile")[1].split("\n    def ")[0]
     assert "images.prepare(" in pump
-    assert "min_edge=MIN_USABLE_EDGE" in pump
+    assert "min_edge=usable_edge(ratio)" in pump, \
+        "the quality floor must be the one that follows the screen ratio"
     assert "is_usable_preview" not in fill
     assert "images.load" not in fill
 
@@ -3615,3 +3616,70 @@ def test_a_provider_switch_does_not_accumulate_timers(qt_core):
     finally:
         for label in labels:
             label.close()
+
+
+def test_the_artwork_quality_floor_follows_the_screen(qt_core):
+    """A 1x floor let 2x tiles be filled by enlarged 128px sources.
+
+    The tile is decoded at logical size times the ratio, so on a 2x display
+    it is 208 physical pixels. Accepting a 128px source there and scaling it
+    up 1.6x is the soft artwork in the grid — not a bad file, a floor that
+    never learned about the screen.
+    """
+    from kairo.qt import theme as Q
+    from kairo.qt.library import MIN_USABLE_EDGE, usable_edge
+
+    assert usable_edge(1.0) == MIN_USABLE_EDGE
+    for ratio in (1.25, 2.0, 3.0):
+        target = int(round((Q.TILE - 12) * ratio))
+        assert usable_edge(ratio) >= target, (
+            f"at {ratio}x a source smaller than {target}px would be enlarged")
+    assert usable_edge(3.0) > usable_edge(2.0) > usable_edge(1.0)
+
+    source = (QT_DIR / "library.py").read_text()
+    for block in ("_stream_previews", "_prepare_retained_tiles"):
+        body = source.split(f"def {block}")[1].split("\n    def ")[0]
+        if "min_edge" in body:
+            assert "usable_edge(ratio)" in body, \
+                f"{block} still uses the flat 1x floor"
+
+
+def test_action_buttons_are_never_squeezed_below_their_labels(qt_core):
+    """A QPushButton clips its centred text; it does not elide it."""
+    from PySide6.QtGui import QFontMetrics
+
+    from kairo.qt.shell import KairoWindow
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        pane = None
+        for width in (900, 998, 1039, 1120, 1320, 1420):
+            window.resize(width, 1000)
+            qt_core.processEvents()
+            pane = next((p for p in window.panes.values()
+                         if hasattr(p, "set_layout_mode")), None)
+            assert pane is not None
+            pane._restore_full_label = "Reset artwork"
+            pane._remove_full_label = "Remove shortcut"
+            pane.remove_btn.setVisible(True)
+            pane.set_layout_mode(pane._layout_mode)
+            qt_core.processEvents()
+            for name in ("browse_btn", "restore_btn", "remove_btn",
+                         "apply_btn"):
+                button = getattr(pane, name)
+                if not button.isVisible():
+                    continue
+                needed = QFontMetrics(button.font()).horizontalAdvance(
+                    button.text())
+                assert button.width() >= needed, (
+                    f"at {width}px {name} is {button.width()} wide for "
+                    f"{needed}px of text: {button.text()!r}")
+        widgets = (QT_DIR / "library.py").read_text()
+        actions = widgets.split("def _build_actions")[1].split("\n    def ")[0]
+        assert "QSizePolicy.Minimum" in actions, \
+            "the layout may still compress a button below its size hint"
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()

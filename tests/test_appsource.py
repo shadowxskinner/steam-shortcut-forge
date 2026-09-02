@@ -378,3 +378,53 @@ def test_an_unowned_entry_is_labelled_by_the_fallback_not_by_luck(tmp_path):
     assert result[str(known)] == appsource.ARCH
     assert result[str(unowned)] == appsource.LOCAL
     assert len(result) == 2, "an entry disappeared instead of degrading"
+
+
+# -- icon-theme matching -----------------------------------------------------
+
+def test_a_prose_title_does_not_pull_in_generic_theme_icons():
+    """Reverse matching is for identifiers, not for game names.
+
+    It exists so "kwalletmanager5" finds "kwalletmanager". Run against a
+    title it promotes any short generic icon whose name happens to appear
+    inside that title, which is how a warning icon ended up offered as
+    artwork for Call of Duty.
+    """
+    from kairo.artwork.themes import _identifier_like
+
+    title = "call of duty: modern warfare 2 (2009) - multiplayer"
+    assert not _identifier_like(title)
+    for generic in ("call", "play", "layer", "mode", "multi", "player", "duty"):
+        assert generic in title, "precondition: these really are substrings"
+
+    for identifier in ("kwalletmanager5", "org.kde.dolphin", "firefox"):
+        assert _identifier_like(identifier), \
+            "an identifier must still find its shorter form"
+
+
+def test_reverse_matching_still_finds_the_shorter_identifier(tmp_path,
+                                                             monkeypatch):
+    """The behaviour the reverse direction was added for must survive."""
+    from kairo.artwork import themes
+    from kairo.themeindex import ThemeIndex
+
+    icons = {"kwalletmanager": str(tmp_path / "kwalletmanager.png")}
+    monkeypatch.setattr(ThemeIndex, "theme_names", classmethod(lambda cls: ["T"]))
+    monkeypatch.setattr(ThemeIndex, "app_icons",
+                        classmethod(lambda cls, theme: icons))
+    monkeypatch.setattr(ThemeIndex, "lookup",
+                        classmethod(lambda cls, name, category="apps": []))
+
+    from kairo.models import ArtQuery
+
+    source = themes.IconThemeSource()
+
+    def find(text):
+        return source.find(ArtQuery(entry=None, text=text))
+
+    assert [art.name for art in find("kwalletmanager5")] == ["kwalletmanager"], \
+        "the identifier case the reverse direction exists for stopped working"
+
+    # ...and the same index must not answer a prose title with a stray icon.
+    assert find("call of duty: modern warfare 2 (2009) - multiplayer") == [], \
+        "a generic theme icon was promoted by a fragment of a game title"

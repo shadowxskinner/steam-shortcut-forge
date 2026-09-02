@@ -61,6 +61,22 @@ ROW_PAGE = 120
 MIN_USABLE_EDGE = 128
 
 
+def usable_edge(ratio: float) -> int:
+    """The smallest source worth drawing into a tile at this screen ratio.
+
+    A flat 128 is a 1x number, and it was still being applied while the tile
+    itself was decoded at logical size times the ratio. On a 2x display the
+    tile is 208 physical pixels, so a 128px source was accepted and then
+    enlarged 1.6x; at 3x it was enlarged 2.4x. That is the soft, mushy
+    artwork in the grid - not a bad source file, a floor that never learned
+    about the screen.
+
+    Never upscale: require at least as many real pixels as will be drawn.
+    """
+    target = int(round((Q.TILE - 12) * max(1.0, float(ratio))))
+    return max(MIN_USABLE_EDGE, target)
+
+
 def query_for(source, base, typed: str, seeded: str):
     """What to ask one source, given what is in the search box. None to skip.
 
@@ -380,6 +396,11 @@ class LibraryPane(QWidget):
         for button in (self.browse_btn, self.restore_btn, self.remove_btn,
                        self.apply_btn):
             button.setFixedHeight(Q.H_BUTTON)
+            # A QHBoxLayout will squeeze a button below its own size hint
+            # before it gives up any stretch, and a QPushButton clips its
+            # centred label rather than eliding it - so a wider font turns
+            # "Local file..." into "cal fil". The stretch yields first now.
+            button.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
         self.browse_btn.clicked.connect(lambda _c: self._browse())
         self.restore_btn.clicked.connect(lambda _c: self._restore())
         self.remove_btn.clicked.connect(lambda _c: self._remove())
@@ -1281,7 +1302,7 @@ class LibraryPane(QWidget):
                 try:
                     raw = source.preview(art)
                     data = images.prepare(Q.TILE - 12, data=raw,
-                                          min_edge=MIN_USABLE_EDGE,
+                                          min_edge=usable_edge(ratio),
                                           ratio=ratio)
                 except Exception:
                     data = None         # say so, rather than leaving a blank
@@ -1371,7 +1392,7 @@ class LibraryPane(QWidget):
                 if token.cancelled or paint_token.cancelled:
                     return []
                 image = images.prepare(Q.TILE - 12, data=raw,
-                                       min_edge=MIN_USABLE_EDGE,
+                                       min_edge=usable_edge(ratio),
                                        ratio=ratio)
                 batch.append((index, image, raw))
             return batch
