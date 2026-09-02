@@ -341,6 +341,7 @@ def stylesheet(glass=None) -> str:
                                color: {C_TEXT}; font-weight: {WT_MEDIUM}; }}
 
     /* ---------- buttons: one family, three volumes ---------- */
+    QPushButton[tight="true"]   {{ padding: 0px 8px; }}
     QPushButton#secondary       {{ background: {rgba(C_CARD, g.card * 0.8)};
                                    border: none; border-radius: {R_CONTROL}px;
                                    padding: 0px 16px; min-height: {H_BUTTON}px;

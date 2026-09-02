@@ -462,19 +462,73 @@ class LibraryPane(QWidget):
                 return verb
         return label
 
-    def _refresh_action_labels(self) -> None:
-        compact = self._layout_mode != "wide"
-        self.browse_btn.setText("Local file…" if compact
-                                else "Browse local file…")
-        self.browse_btn.setToolTip("Browse local file…" if compact else "")
+    def _action_buttons(self):
+        return (self.browse_btn, self.restore_btn, self.remove_btn,
+                self.apply_btn)
+
+    def _actions_fit(self) -> bool:
+        """Whether the four buttons fit the row they are actually in.
+
+        Measured, because the answer depends on the font this machine
+        resolved from FONT_STACK and not on the one this was written with.
+        Every button's size hint is its text plus its stylesheet padding with
+        no slack at all, so a wider font pushes the total past the row - and
+        a QPushButton clips its centred label rather than eliding it, which
+        is how "Local file..." renders as "cal fil".
+        """
+        row = self._actions_layout
+        margins = row.contentsMargins()
+        # The card the buttons actually sit in, not the workspace around it:
+        # the card has its own padding, and measuring the outer width says
+        # there is room that the buttons will never be given.
+        holder = self.apply_btn.parentWidget()
+        outer = holder.width() if holder is not None else self._workspace.width()
+        if outer <= 0:
+            outer = self._workspace.width()
+        available = outer - margins.left() - margins.right()
+        visible = [b for b in self._action_buttons() if not b.isHidden()]
+        needed = sum(b.sizeHint().width() for b in visible)
+        needed += max(0, row.spacing()) * max(0, len(visible) - 1)
+        return needed <= available
+
+    def _set_action_texts(self, tier: int) -> None:
         restore = self._restore_full_label
         remove = self._remove_full_label
-        self.restore_btn.setText(
-            self._short_action_label(restore) if compact else restore)
-        self.remove_btn.setText(
-            self._short_action_label(remove) if compact else remove)
-        self.restore_btn.setToolTip(restore if compact else "")
-        self.remove_btn.setToolTip(remove if compact else "")
+        if tier == 0:
+            self.browse_btn.setText("Browse local file…")
+            self.restore_btn.setText(restore)
+            self.remove_btn.setText(remove)
+        elif tier == 1:
+            self.browse_btn.setText("Local file…")
+            self.restore_btn.setText(self._short_action_label(restore))
+            self.remove_btn.setText(self._short_action_label(remove))
+        else:
+            self.browse_btn.setText("File…")
+            self.restore_btn.setText(self._short_action_label(restore))
+            self.remove_btn.setText(self._short_action_label(remove))
+        # The writer's own wording is always readable, whichever tier is on
+        # screen. Shortening is presentation; the verb is the writer's.
+        self.browse_btn.setToolTip("" if tier == 0 else "Browse local file…")
+        self.restore_btn.setToolTip("" if tier == 0 else restore)
+        self.remove_btn.setToolTip("" if tier == 0 else remove)
+
+    def _refresh_action_labels(self) -> None:
+        start = 0 if self._layout_mode == "wide" else 1
+        for button in self._action_buttons():
+            if button.property("tight"):
+                button.setProperty("tight", False)
+                button.style().unpolish(button)
+                button.style().polish(button)
+        for tier in range(start, 3):
+            self._set_action_texts(tier)
+            if self._actions_fit():
+                return
+        # Still over. Give back the stylesheet's generous side padding rather
+        # than let the layout chop the words in half.
+        for button in self._action_buttons():
+            button.setProperty("tight", True)
+            button.style().unpolish(button)
+            button.style().polish(button)
 
     @staticmethod
     def _divider() -> QFrame:

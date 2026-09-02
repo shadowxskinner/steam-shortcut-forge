@@ -2681,7 +2681,7 @@ def test_compact_library_labels_are_short_without_changing_their_actions():
     """Short labels are presentation; callbacks and writer verbs stay put."""
     source = (QT_DIR / "library.py").read_text()
     mode = source.split("def set_layout_mode")[1].split("\n    def ")[0]
-    labels = source.split("def _refresh_action_labels")[1].split("\n    def ")[0]
+    labels = source.split("def _set_action_texts")[1].split("\n    def ")[0]
     actions = source.split("def _update_actions")[1].split("\n    def ")[0]
 
     assert "Local file" in labels
@@ -3644,42 +3644,74 @@ def test_the_artwork_quality_floor_follows_the_screen(qt_core):
                 f"{block} still uses the flat 1x floor"
 
 
-def test_action_buttons_are_never_squeezed_below_their_labels(qt_core):
-    """A QPushButton clips its centred text; it does not elide it."""
+def test_action_buttons_hold_their_labels_at_any_font(qt_core):
+    """A QPushButton clips its centred text; it does not elide it.
+
+    Every size hint is text plus stylesheet padding with no slack, so a font
+    wider than the one this was written against pushes the total past the row
+    and the layout compresses them - which is how "Local file..." renders as
+    "cal fil". The padding is applied by the style sheet at paint time and
+    does not appear in contentsRect(), so comparing the button width against
+    the bare text width sees nothing wrong. That mistake is why this shipped.
+    """
     from PySide6.QtGui import QFontMetrics
 
+    from kairo.qt import theme as Q
     from kairo.qt.shell import KairoWindow
 
-    window = KairoWindow(translucent=False, want_blur=False)
+    base = Q.stylesheet(Q.PRESETS["solid"])
+    offenders = []
     try:
-        window.show()
-        pane = None
-        for width in (900, 998, 1039, 1120, 1320, 1420):
-            window.resize(width, 1000)
-            qt_core.processEvents()
-            pane = next((p for p in window.panes.values()
-                         if hasattr(p, "set_layout_mode")), None)
-            assert pane is not None
-            pane._restore_full_label = "Reset artwork"
-            pane._remove_full_label = "Remove shortcut"
-            pane.remove_btn.setVisible(True)
-            pane.set_layout_mode(pane._layout_mode)
-            qt_core.processEvents()
-            for name in ("browse_btn", "restore_btn", "remove_btn",
-                         "apply_btn"):
-                button = getattr(pane, name)
-                if not button.isVisible():
-                    continue
-                needed = QFontMetrics(button.font()).horizontalAdvance(
-                    button.text())
-                assert button.width() >= needed, (
-                    f"at {width}px {name} is {button.width()} wide for "
-                    f"{needed}px of text: {button.text()!r}")
-        widgets = (QT_DIR / "library.py").read_text()
-        actions = widgets.split("def _build_actions")[1].split("\n    def ")[0]
-        assert "QSizePolicy.Minimum" in actions, \
-            "the layout may still compress a button below its size hint"
+        for bump in (0, 2, 4, 8):
+            qt_core.setStyleSheet(
+                base.replace(f"font-size: {Q.FS_BUTTON}px",
+                             f"font-size: {Q.FS_BUTTON + bump}px"))
+            window = KairoWindow(translucent=False, want_blur=False)
+            window.show()
+            try:
+                for width in (900, 1052, 1319, 1420):
+                    window.resize(width, 1000)
+                    for _ in range(6):
+                        qt_core.processEvents()
+                    pane = next((p for p in window.panes.values()
+                                 if hasattr(p, "set_layout_mode")), None)
+                    assert pane is not None
+                    pane._restore_full_label = "Reset artwork"
+                    pane._remove_full_label = "Remove shortcut"
+                    pane.remove_btn.setVisible(True)
+                    for _ in range(2):
+                        pane._refresh_action_labels()
+                        for _ in range(4):
+                            qt_core.processEvents()
+                    for button in pane._action_buttons():
+                        if button.isHidden():
+                            continue
+                        padding = 16 if button.property("tight") else (
+                            44 if button.objectName() == "primary" else 32)
+                        needed = QFontMetrics(button.font()).horizontalAdvance(
+                            button.text()) + padding
+                        if button.width() < needed:
+                            offenders.append(
+                                (Q.FS_BUTTON + bump, width, button.text(),
+                                 button.width(), needed))
+            finally:
+                window.close()
+                from kairo.qt import work
+                work.drain()
     finally:
-        window.close()
-        from kairo.qt import work
-        work.drain()
+        qt_core.setStyleSheet(base)
+    assert not offenders, offenders[:4]
+
+
+def test_the_action_row_measures_the_card_it_is_actually_in(qt_core):
+    """Measuring the workspace claims room the buttons never receive."""
+    source = (QT_DIR / "library.py").read_text()
+    fit = source.split("def _actions_fit")[1].split("\n    def ")[0]
+    assert "parentWidget()" in fit, \
+        "the fit check is measuring something wider than the buttons' card"
+    assert "sizeHint().width()" in fit
+
+    labels = source.split("def _refresh_action_labels")[1].split("\n    def ")[0]
+    assert "_actions_fit()" in labels, "labels are chosen without measuring"
+    assert "tight" in labels, "there is no fallback when no tier fits"
+
