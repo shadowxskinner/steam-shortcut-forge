@@ -22,10 +22,63 @@ try:
 except ImportError:                                     # pragma: no cover
     QSvgRenderer = None
 
+#: An entry cap alone is not a memory bound. The same icon at 1x, 2x and 3x
+#: is one, four and nine times the pixels, so 256 entries is anywhere between
+#: a few megabytes and fifty depending on which screens the window has
+#: visited — and after a monitor change both ratios are live at once.
+#: Measured: 256 mixed-ratio tile images cost ~49 MB. The count still caps
+#: pathological churn; the byte budget is what actually holds the ceiling.
 CACHE_LIMIT = 256
+IMAGE_CACHE_BYTES = 24 * 1024 * 1024
+PIXMAP_CACHE_BYTES = 16 * 1024 * 1024
+
 _CACHE: "OrderedDict[tuple, QPixmap]" = OrderedDict()
 _IMAGE_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _IMAGE_CACHE_LOCK = threading.RLock()
+
+
+def _cost(item) -> int:
+    """Decoded pixel cost, not the size of the file it came from.
+
+    A 4 KB PNG that decodes to 232x232 occupies 215 KB, and it is the decoded
+    form that both caches hold. Depth is read from the object rather than
+    assumed: an 8-bit icon and an ARGB32 one differ fourfold.
+    """
+    try:
+        width = item.width()
+        height = item.height()
+        depth = item.depth() or 32
+    except Exception:                                   # pragma: no cover
+        return 0
+    return max(0, width) * max(0, height) * max(1, depth // 8)
+
+
+def _trim(cache, budget: int, *, keep) -> None:
+    """Evict oldest-first until the cache fits, never touching ``keep``.
+
+    ``keep`` is the entry the caller has just produced and is about to paint.
+    Evicting that would mean decoding it again immediately, which is how a
+    cache becomes a treadmill: every monitor transition would refetch and
+    re-decode everything it had just prepared.
+    """
+    while len(cache) > CACHE_LIMIT:
+        oldest = next(iter(cache))
+        if oldest == keep:
+            break
+        cache.pop(oldest)
+    total = sum(_cost(value) for value in cache.values())
+    while total > budget and len(cache) > 1:
+        oldest = next(iter(cache))
+        if oldest == keep:
+            break
+        total -= _cost(cache.pop(oldest))
+
+
+def cache_bytes() -> tuple[int, int]:
+    """Decoded bytes held by the image and pixmap caches."""
+    with _IMAGE_CACHE_LOCK:
+        images_total = sum(_cost(value) for value in _IMAGE_CACHE.values())
+    return images_total, sum(_cost(value) for value in _CACHE.values())
 
 
 def clear_cache() -> None:
@@ -208,8 +261,7 @@ def prepare(size: int, *, path=None, data: bytes | None = None,
         with _IMAGE_CACHE_LOCK:
             _IMAGE_CACHE[prepared_key] = image
             _IMAGE_CACHE.move_to_end(prepared_key)
-            while len(_IMAGE_CACHE) > CACHE_LIMIT:
-                _IMAGE_CACHE.popitem(last=False)
+            _trim(_IMAGE_CACHE, IMAGE_CACHE_BYTES, keep=prepared_key)
     return image
 
 
@@ -242,6 +294,5 @@ def load(size: int, *, path=None, data: bytes | None = None,
 
     if key is not None:
         _CACHE[key] = pixmap
-        while len(_CACHE) > CACHE_LIMIT:
-            _CACHE.popitem(last=False)
+        _trim(_CACHE, PIXMAP_CACHE_BYTES, keep=key)
     return pixmap

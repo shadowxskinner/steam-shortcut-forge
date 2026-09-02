@@ -109,6 +109,10 @@ class LibraryPane(QWidget):
         self._paint_ratio = 0.0
         self._paint_token = None
         self._layout_mode = "wide"
+        # The selection is a catalogue fact; ``selected`` is only the
+        # row currently drawing it. A page that happens not to include
+        # the entry must not be able to forget which entry it is.
+        self._selected_key = None
         self._restore_full_label = ""
         self._remove_full_label = ""
 
@@ -411,6 +415,10 @@ class LibraryPane(QWidget):
         self._elide_heading()
         if self.tiles:
             self._reflow_tiles()
+        else:
+            # Nothing to re-seat, but the next resize still compares against
+            # this number and must not be measuring the previous mode.
+            self._last_columns = self._columns()
 
     @staticmethod
     def _short_action_label(label: str) -> str:
@@ -583,11 +591,16 @@ class LibraryPane(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._elide_heading()
-        if hasattr(self, "grid") and self.tiles:
+        if hasattr(self, "grid"):
             columns = self._columns()
             if columns != getattr(self, "_last_columns", None):
+                # Recorded whether or not there is anything to reflow. Only
+                # tracking it when tiles exist leaves the count describing
+                # whatever geometry the grid last happened to be populated
+                # at, so the first resize after a search skips its reflow.
                 self._last_columns = columns
-                self._reflow_tiles()
+                if self.tiles:
+                    self._reflow_tiles()
 
     def _customizable(self) -> bool:
         """Steam and emulators have an application of their own; games do not."""
@@ -702,7 +715,8 @@ class LibraryPane(QWidget):
 
     def refilter(self, auto_select: bool = False) -> None:
         entries = self.visible_entries()
-        previous = self.selected.entry.key if self.selected else None
+        previous = (self.selected.entry.key if self.selected
+                    else self._selected_key)
         self._filtered = entries
         self._shown = min(len(entries), max(ROW_PAGE, self._shown_floor()))
         self._bind_rows(entries[:self._shown])
@@ -722,6 +736,14 @@ class LibraryPane(QWidget):
                 self._empty_workspace()
         self.changed.emit()
 
+    def _catalogue_has(self, key: str) -> bool:
+        """Whether any entry with this key still exists to be selected."""
+        for pool in (self._filtered, self.entries):
+            for entry in pool:
+                if entry.key == key:
+                    return True
+        return False
+
     def _shown_floor(self) -> int:
         """Keep at least a viewport's worth, however short the viewport is."""
         try:
@@ -733,9 +755,10 @@ class LibraryPane(QWidget):
     def _bind_rows(self, entries) -> None:
         """Materialise rows now; decode their icons on one pool worker."""
         token = self.tokens.start(f"{ACTIVITY_ROWS}:{self.provider.id}")
-        selected_key = (self.selected.entry.key
-                        if self.selected is not None
-                        and self.selected.entry is not None else None)
+        selected_key = self._selected_key
+        if selected_key is None and self.selected is not None \
+                and self.selected.entry is not None:
+            selected_key = self.selected.entry.key
         restored = None
         while len(self.rows) < len(entries):
             row = EntryRow(self.grid_holder)
@@ -759,6 +782,13 @@ class LibraryPane(QWidget):
             row.setVisible(False)
         if selected_key is not None:
             self.selected = restored
+            if restored is None and not self._catalogue_has(selected_key):
+                # Genuinely gone — filtered away entirely, or removed by a
+                # rescan. Only then is the selection itself over. Being off
+                # the current page is not the same thing, and treating it as
+                # such silently dropped the selection on every DPR refresh
+                # that happened while the entry sat below the fold.
+                self._selected_key = None
         if pending:
             self._stream_row_icons(pending, token)
 
@@ -808,7 +838,60 @@ class LibraryPane(QWidget):
                 row = self.rows[index]
                 accepted = row.show_prepared_icon(image, key, generation)
                 if accepted and self.selected is row:
-                    self.current_well.show_image(image, "—")
+                    # Not `image`: that was prepared for a WELL_ROW row and is
+                    # 32 logical points, while this well is WELL_TITLE and
+                    # renders at 52. Reusing it shrank the title icon to 38%
+                    # of its area every time a page filled.
+                    self._refresh_current_well(key)
+
+    def _refresh_current_well(self, key: str) -> None:
+        """Re-render the title icon at this well's size, off the GUI thread.
+
+        The row's image is the wrong size and the well's own ``show_path``
+        would decode on the GUI thread, so neither is usable here. One job per
+        accepted batch, and only for the row that is actually selected.
+        """
+        row = self.selected
+        if row is None or row.entry is None or row.entry.key != key:
+            return
+        path = row.entry.current_icon
+        if not path:
+            self.current_well.show_placeholder("—")
+            return
+        size = Q.WELL_TITLE - 12
+        ratio = self.devicePixelRatioF()
+
+        def render():
+            return images.prepare(size, path=path, ratio=ratio)
+
+        def arrived(image):
+            current = self.selected
+            if (current is not None and current.entry is not None
+                    and current.entry.key == key):
+                self.current_well.show_image(image, "—")
+
+        work.submit(render, on_done=arrived, on_failed=lambda _message: None)
+
+    def _show_proposal(self, raw, art) -> None:
+        """Draw the proposed artwork at the compare well's size.
+
+        The bytes are already in hand — this never re-enters a source — but
+        they still have to be prepared for *this* well rather than borrowed
+        from the tile, and prepared off the GUI thread like everything else.
+        """
+        if raw is None:
+            return
+        size = Q.WELL_COMPARE - 12
+        ratio = self.devicePixelRatioF()
+
+        def render():
+            return images.prepare(size, data=raw, ratio=ratio)
+
+        def arrived(image):
+            if self.proposed is art:
+                self.proposed_well.show_image(image)
+
+        work.submit(render, on_done=arrived, on_failed=lambda _message: None)
 
     def _grow_if_near_bottom(self, value: int) -> None:
         """Add the next page as the end of the built rows comes into view."""
@@ -835,6 +918,7 @@ class LibraryPane(QWidget):
             self.selected.set_selected(False)
         row.set_selected(True)
         self.selected = row
+        self._selected_key = row.entry.key if row.entry is not None else None
 
         entry = row.entry
         # Elided to the room actually available, not to a fixed
@@ -1143,7 +1227,11 @@ class LibraryPane(QWidget):
                 continue
             tile.set_image(data, data=raw)
             if (tile is self.chosen_tile and self.proposed is tile.art):
-                self.proposed_well.show_image(data)
+                # `data` was prepared for a TILE and is 104 logical points;
+                # this well is WELL_COMPARE and renders at 52, with a fixed
+                # 64px frame that centre-cropped the difference. Rebuild from
+                # the bytes we already hold, at this well's own size.
+                self._show_proposal(raw, tile.art)
         for tile in doomed:
             self._drop_tile(tile, reflow=False)
         if doomed:
@@ -1197,8 +1285,15 @@ class LibraryPane(QWidget):
             self._reflow_tiles()
 
     def _reflow_tiles(self) -> None:
-        """Re-seat the survivors so the grid has no gaps."""
+        """Re-seat the survivors so the grid has no gaps.
+
+        This is the one place that acts on the column count, so it is the one
+        place that records it. Reflowing from set_layout_mode without writing
+        the count down left resizeEvent comparing against the geometry of the
+        previous mode and skipping the next real reflow.
+        """
         columns = self._columns()
+        self._last_columns = columns
         for position, tile in enumerate(self.tiles):
             self.grid.removeWidget(tile)
             self.grid.addWidget(tile, position // columns, position % columns)
@@ -1283,7 +1378,7 @@ class LibraryPane(QWidget):
         # thread on top of it.
         retained = getattr(self.chosen_tile, "preview_data", None)
         if retained is not None:
-            self.proposed_well.show_data(retained)
+            self._show_proposal(retained, art)
             return
 
         source = self.ctx.sources.get(art.source_id)
@@ -1295,6 +1390,6 @@ class LibraryPane(QWidget):
 
         def arrived(data):
             if self.proposed is art:
-                self.proposed_well.show_data(data)
+                self._show_proposal(data, art)
 
         work.submit(fetch, on_done=arrived, on_failed=lambda _m: None)

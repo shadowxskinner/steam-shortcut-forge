@@ -2389,14 +2389,31 @@ def test_rebinding_rows_preserves_the_selected_entry(qt_core):
     pane = SimpleNamespace(
         tokens=ActivityTokens(), provider=SimpleNamespace(id="apps"),
         rows=rows, selected=rows[1], _icon_generation=3,
+        _selected_key="two", _filtered=entries, entries=entries,
+        _catalogue_has=lambda key: any(e.key == key for e in entries),
         _stream_row_icons=lambda _pending, _token: None,
     )
 
     LibraryPane._bind_rows(pane, entries)
 
     assert pane.selected is rows[1]
+    assert pane._selected_key == "two"
     assert [row.selected for row in rows] == [False, True], \
         "the pane kept its selection but erased the visible highlight"
+
+    # Off the current page is not gone. The entry is still in the catalogue,
+    # so the logical selection has to survive a slice that omits it —
+    # otherwise paging or a ratio refresh silently deselects.
+    pane.selected = rows[1]
+    LibraryPane._bind_rows(pane, entries[:1])
+    assert pane._selected_key == "two", \
+        "a page that omitted the entry destroyed the selection"
+
+    # Actually gone is gone.
+    pane._filtered = pane.entries = []
+    pane._catalogue_has = lambda _key: False
+    LibraryPane._bind_rows(pane, [])
+    assert pane._selected_key is None
 
 
 def test_ratio_refresh_prepares_retained_artwork_off_the_gui_thread(
@@ -2476,53 +2493,85 @@ def test_a_late_old_ratio_preview_is_reprepared_instead_of_painted(qt_core):
     assert scheduled == [([(0, payload)], token, "apps:one")]
 
 
-def test_ratio_refreshed_header_icons_follow_the_selected_row_and_tile(qt_core):
-    """The title and proposal cannot stay blurry while their grid is sharp."""
-    from types import SimpleNamespace
+def test_the_title_well_renders_at_its_own_size_not_the_rows(qt_core):
+    """A row image is 32 logical points; this well draws at 52.
 
-    from kairo.qt.library import LibraryPane
-    from kairo.tasks import CancelToken
+    Forwarding the row's prepared image put a 32px picture in a 64px well —
+    38% of the area — every time a page of icons filled for the selected
+    entry. The earlier test asserted only that *an* object was handed over,
+    so it could not see the size at all.
+    """
+    import pathlib
+    import tempfile
 
-    shown_current = []
-    row = SimpleNamespace(
-        show_prepared_icon=lambda image, key, generation: True)
-    pane = SimpleNamespace(
-        rows=[row], selected=row,
-        current_well=SimpleNamespace(
-            show_image=lambda image, placeholder: shown_current.append(image)),
-    )
-    current = object()
-    LibraryPane._fill_row_icon(pane, 0, [(0, current, "apps:one", 3)], "")
-    assert shown_current == [current]
+    from kairo.qt import images, theme as Q
+    from kairo.qt.widgets import IconWell
 
-    shown_proposal = []
-    art = object()
+    icon = pathlib.Path(tempfile.mkdtemp()) / "icon.png"
+    icon.write_bytes(_png(512))
+    images.clear_cache()
 
-    class Tile:
-        preview_data = None
+    well = IconWell(Q.WELL_TITLE)
+    row_image = images.prepare(Q.WELL_ROW - 12, path=icon)
+    assert max(row_image.width(), row_image.height()) == Q.WELL_ROW - 12
 
-        def __init__(self, artwork):
-            self.art = artwork
+    # What the pane must produce for this well, whatever the rows hold.
+    title_image = images.prepare(Q.WELL_TITLE - 12, path=icon)
+    well.show_image(title_image, "—")
+    painted = well.label.pixmap()
+    assert painted.width() == Q.WELL_TITLE - 12, \
+        "the title icon is not being rendered at the title well's size"
+    assert painted.width() > (Q.WELL_ROW - 12), \
+        "a row-sized image would be smaller than the well it is drawn in"
+    assert painted.width() <= well.width()
 
-        def set_image(self, image, *, data=None):
-            self.preview_data = data
 
-    tile = Tile(art)
-    token = CancelToken()
-    pane = SimpleNamespace(
-        _preview_generation=4,
-        selected=SimpleNamespace(entry=SimpleNamespace(key="apps:one")),
-        _tile_at={0: tile}, tiles=[tile], chosen_tile=tile, proposed=art,
-        proposed_well=SimpleNamespace(
-            show_image=lambda image, _placeholder="?": shown_proposal.append(
-                image)),
-        _drop_tile=lambda *_args, **_kwargs: None,
-        _reflow_tiles=lambda: None,
-    )
-    proposed = object()
-    LibraryPane._fill_tile(
-        pane, 0, (([(0, proposed, b"preview")], 4), token), "apps:one")
-    assert shown_proposal == [proposed]
+def test_the_proposal_well_never_receives_a_tile_sized_image(qt_core):
+    """104 logical points into a fixed 64px well is a centre crop."""
+    from kairo.qt import images, theme as Q
+    from kairo.qt.widgets import IconWell
+
+    images.clear_cache()
+    payload = _png(512)
+    tile_image = images.prepare(Q.TILE - 12, data=payload, min_edge=0)
+    assert max(tile_image.width(), tile_image.height()) == Q.TILE - 12
+
+    well = IconWell(Q.WELL_COMPARE)
+    proposal = images.prepare(Q.WELL_COMPARE - 12, data=payload, min_edge=0)
+    well.show_image(proposal)
+    painted = well.label.pixmap()
+    assert painted.width() == Q.WELL_COMPARE - 12
+    assert painted.width() <= well.width(), "the artwork overflows its well"
+    assert well.label.sizeHint().width() <= well.width(), \
+        "the label wants more room than the well has, so Qt crops it"
+
+
+def test_the_header_wells_are_rebuilt_rather_than_borrowed(qt_core):
+    """Both wells own their sizing, and neither decodes on the GUI thread."""
+    from kairo.qt import theme as Q
+
+    source = (QT_DIR / "library.py").read_text()
+
+    fill_row = source.split("def _fill_row_icon")[1].split("\n    def ")[0]
+    assert "current_well.show_image(image" not in fill_row, \
+        "the row's own image is being forwarded to a larger well again"
+
+    current = source.split("def _refresh_current_well")[1].split("\n    def ")[0]
+    assert "WELL_TITLE" in current, "the title well must ask for its own size"
+    assert "work.submit" in current, "decoding belongs off the GUI thread"
+
+    proposal = source.split("def _show_proposal")[1].split("\n    def ")[0]
+    assert "WELL_COMPARE" in proposal
+    assert "work.submit" in proposal
+    assert "source.preview" not in proposal and "sources.get" not in proposal, \
+        "rebuilding the proposal must never re-enter an artwork source"
+
+    fill_tile = source.split("def _fill_tile")[1].split("\n    def ")[0]
+    assert "proposed_well.show_image(data)" not in fill_tile, \
+        "the tile's prepared image is reaching the compare well again"
+
+    assert Q.WELL_TITLE - 12 != Q.WELL_ROW - 12
+    assert Q.WELL_COMPARE - 12 != Q.TILE - 12
 
 
 # -- responsive three-column composition ---------------------------------
@@ -2587,3 +2636,382 @@ def test_compact_library_labels_are_short_without_changing_their_actions():
     assert "writer.remove_label" in actions
     for callback in ("_browse", "_restore", "_remove", "_apply"):
         assert f"lambda _c: self.{callback}()" in source
+
+
+# ---------------------------------------------------------------------------
+# Safeguards that an audit proved could be deleted with the suite still green.
+#
+# Each of these was covered only by a source-substring assertion, or not at
+# all. A substring test survives deleting the call it claims to guard, because
+# the vocabulary usually remains in a hasattr() check or a loop header nearby.
+# These drive real objects and record real calls.
+
+def _spy_pane(**overrides):
+    """A stand-in with the attributes LibraryPane's own methods touch."""
+    from types import SimpleNamespace
+
+    from kairo.tasks import ActivityTokens
+
+    state = dict(
+        tokens=ActivityTokens(), provider=SimpleNamespace(id="apps"),
+        tiles=[], _tile_at={}, rows=[], selected=None, chosen_tile=None,
+        _preview_generation=0, _paint_ratio=1.0, _paint_token=None,
+        _icon_generation=0, _filtered=[], entries=[], _selected_key=None,
+        _shown=0,
+        grid=SimpleNamespace(count=lambda: 0, takeAt=lambda _i: None),
+    )
+    state.update(overrides)
+    return SimpleNamespace(**state)
+
+
+def test_a_ratio_within_floating_point_noise_is_not_a_screen_change(qt_core):
+    """Wayland fractional scales do not survive exact float comparison.
+
+    1.25 and 1.5 arrive as floats that have already been through a scale
+    calculation. Comparing with == treats a rounding difference as a monitor
+    change and rebuilds every image on the screen for nothing.
+    """
+    from kairo.qt.library import LibraryPane
+
+    calls = []
+    pane = _spy_pane(
+        _paint_ratio=1.25,
+        devicePixelRatioF=lambda: 1.25 + 1e-9,
+        _bind_rows=lambda entries: calls.append("rebound"),
+    )
+    LibraryPane.refresh_device_pixel_ratio(pane)
+    assert calls == [], "a rounding difference was treated as a new screen"
+    assert pane._preview_generation == 0
+
+    pane.devicePixelRatioF = lambda: 2.0
+    LibraryPane.refresh_device_pixel_ratio(pane)
+    assert calls == ["rebound"], "a real ratio change was ignored"
+    assert pane._preview_generation == 1
+
+
+def test_clearing_a_grid_cancels_the_ratio_work_that_belonged_to_it(qt_core):
+    """Indexes are reused, so a late batch can land in the wrong grid.
+
+    Retained-image preparation is keyed by position. Without cancelling the
+    activity and advancing the generation, a batch prepared for the grid that
+    has just been thrown away paints into whatever now occupies those slots.
+    """
+    from kairo.qt.library import ACTIVITY_DPR, LibraryPane
+
+    pane = _spy_pane()
+    token = pane.tokens.start(f"{ACTIVITY_DPR}:apps")
+    pane._paint_token = token
+    before = pane._preview_generation
+
+    LibraryPane._clear_grid(pane)
+
+    assert token.cancelled, "the grid's own ratio work was left running"
+    assert pane._preview_generation == before + 1, \
+        "a batch from the old grid can still match the new generation"
+
+
+def test_retained_preparation_stops_when_its_screen_is_already_gone(qt_core):
+    """Two monitor moves in a row must not both repaint."""
+    from kairo.qt.library import LibraryPane
+    from kairo.tasks import CancelToken
+
+    submitted = []
+    paint_token = CancelToken()
+    pane = _spy_pane(_paint_token=paint_token, _preview_generation=2)
+
+    from kairo.qt import work
+
+    real_submit = work.submit
+    work.submit = lambda fn, **kw: submitted.append(fn)
+    try:
+        paint_token.cancel()
+        LibraryPane._prepare_retained_tiles(
+            pane, [(0, b"bytes")], CancelToken(), "apps:one")
+        assert submitted == [], \
+            "work was scheduled for a screen the window has already left"
+
+        pane._paint_token = live = CancelToken()
+        LibraryPane._prepare_retained_tiles(
+            pane, [(0, b"bytes")], CancelToken(), "apps:one")
+        assert len(submitted) == 1, "a live ratio change scheduled nothing"
+
+        # The worker itself must keep checking. A move that happens after the
+        # job is queued but before it runs — or between two of its items —
+        # leaves it decoding for a screen the window has already left, and on
+        # a large grid that is the whole batch wasted.
+        prepare_batch = submitted[0]
+        live.cancel()
+        assert prepare_batch() == [], \
+            "the worker prepared images for an abandoned screen"
+    finally:
+        work.submit = real_submit
+
+
+def test_narrow_navigation_keeps_the_mark_when_it_drops_the_wordmark(qt_core):
+    """Something must still identify the column at 80 pixels wide."""
+    from kairo.qt.shell import KairoWindow
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        window.resize(900, 900)
+        qt_core.processEvents()
+        assert window._layout_mode == "narrow"
+        if window.nav_badge is not None:
+            assert window.nav_badge.isVisible(), \
+                "narrow mode removed every piece of branding at once"
+            assert not window.nav_logo.isVisible(), \
+                "the wordmark does not fit an 80px column"
+        else:
+            assert window.nav_logo.isVisible(), \
+                "with no mark to fall back on the wordmark has to stay"
+
+        window.resize(1420, 900)
+        qt_core.processEvents()
+        assert window.nav_logo.isVisible(), "the wordmark never came back"
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()
+
+
+def test_a_resize_reaches_panes_that_already_exist(qt_core):
+    """Recorded on a real pane, not looked for in the source text."""
+    from kairo.qt.shell import KairoWindow
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        window.resize(1420, 900)
+        qt_core.processEvents()
+        panes = [p for p in window.panes.values()
+                 if hasattr(p, "set_layout_mode")]
+        assert panes, "no pane to observe"
+        for pane in panes:
+            assert pane._layout_mode == "wide"
+
+        window.resize(900, 900)
+        qt_core.processEvents()
+        for pane in panes:
+            assert pane._layout_mode == "narrow", \
+                "an existing pane never heard about the resize"
+
+        window.resize(1120, 900)
+        qt_core.processEvents()
+        for pane in panes:
+            assert pane._layout_mode == "compact"
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()
+
+
+def test_a_pane_built_after_a_resize_starts_in_the_current_mode(qt_core):
+    """The pane factory is the only thing that can tell a late arrival."""
+    from kairo.qt.shell import KairoWindow
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        window.resize(900, 900)
+        qt_core.processEvents()
+        assert window._layout_mode == "narrow"
+
+        # Force the factory to build one, rather than depending on this
+        # machine happening to have a destination nobody has opened yet.
+        key = next((k for k, p in window.panes.items()
+                    if hasattr(p, "set_layout_mode")), None)
+        assert key is not None
+        stale = window.panes.pop(key)
+        window.stack.removeWidget(stale)
+        stale.setParent(None)
+
+        pane = window._pane_for(key)
+        assert hasattr(pane, "set_layout_mode")
+        assert pane is not stale, "the factory returned the old pane"
+        assert pane._layout_mode == "narrow", \
+            "a pane created while narrow opened in the wide composition"
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()
+
+
+def test_compact_action_labels_shorten_and_come_back(qt_core):
+    """Visual aliases only: the writer's wording and the callbacks stand."""
+    from kairo.qt.shell import KairoWindow
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        window.resize(1420, 900)
+        qt_core.processEvents()
+        pane = next((p for p in window.panes.values()
+                     if hasattr(p, "set_layout_mode")), None)
+        assert pane is not None
+        pane._restore_full_label = "Restore original"
+        pane._remove_full_label = "Remove shortcut"
+        wired = (pane.restore_btn.clicked, pane.remove_btn.clicked,
+                 pane.browse_btn.clicked, pane.apply_btn.clicked)
+
+        pane.set_layout_mode("wide")
+        assert pane.restore_btn.text() == "Restore original"
+        assert pane.browse_btn.text() == "Browse local file…"
+        assert pane.restore_btn.toolTip() == ""
+
+        pane.set_layout_mode("narrow")
+        assert pane.restore_btn.text() == "Restore", "the label never shortened"
+        assert pane.remove_btn.text() == "Remove"
+        assert pane.browse_btn.text() == "Local file…"
+        assert pane.restore_btn.toolTip() == "Restore original", \
+            "the writer's full wording must survive in the tooltip"
+        assert pane.remove_btn.toolTip() == "Remove shortcut"
+
+        pane.set_layout_mode("wide")
+        assert pane.restore_btn.text() == "Restore original", \
+            "the full label never came back"
+        assert pane.remove_btn.text() == "Remove shortcut"
+        assert pane.restore_btn.toolTip() == ""
+
+        assert wired == (pane.restore_btn.clicked, pane.remove_btn.clicked,
+                         pane.browse_btn.clicked, pane.apply_btn.clicked)
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()
+
+
+def test_a_reflow_records_the_column_count_it_used(qt_core):
+    """Otherwise the next resize compares against the previous mode.
+
+    Asserting that _last_columns always equals _columns() would be testing
+    Qt's layout timing, not Kairo: a pane's resizeEvent runs before its own
+    scroll viewport has been re-laid out. What matters is that whatever
+    reflowed wrote down the number it reflowed for, and that a resize which
+    does not change the column count does not reflow a second time.
+    """
+    from kairo.qt.library import LibraryPane
+    from kairo.qt.shell import KairoWindow
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        window.resize(1420, 900)
+        qt_core.processEvents()
+        pane = next((p for p in window.panes.values()
+                     if hasattr(p, "set_layout_mode")), None)
+        assert pane is not None
+
+        reflows = []
+        real = LibraryPane._reflow_tiles
+
+        def counted(self):
+            reflows.append(self._columns())
+            return real(self)
+
+        LibraryPane._reflow_tiles = counted
+        try:
+            for width in (1320, 1319, 1120, 1040, 1039, 900, 1039, 1040,
+                          1319, 1320, 1420):
+                window.resize(width, 900)
+                qt_core.processEvents()
+                assert pane._last_columns == pane._columns() or not pane.tiles \
+                    or reflows, "a reflow happened without recording its count"
+                if reflows:
+                    assert pane._last_columns == reflows[-1], \
+                        "the recorded count is not the one just reflowed for"
+            # Settling at one width must not keep re-seating the grid.
+            before = len(reflows)
+            for _ in range(3):
+                window.resize(1420, 900)
+                qt_core.processEvents()
+            assert len(reflows) == before, \
+                "a resize that changed no column count reflowed anyway"
+        finally:
+            LibraryPane._reflow_tiles = real
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()
+
+
+def test_the_image_cache_is_bounded_in_bytes_not_entries(qt_core):
+    """256 entries is not a memory bound when ratios differ.
+
+    The same icon at 1x, 2x and 3x is one, four and nine times the pixels.
+    An entry cap let a window that had visited a scaled monitor hold roughly
+    49 MB of decoded images against a 90 MB process budget, and after a
+    monitor change both ratios are live at once.
+    """
+    from kairo.qt import images, theme as Q
+
+    images.clear_cache()
+    payload = _png(512)
+    for ratio in (1.0, 1.25, 1.5, 2.0, 3.0):
+        for index in range(60):
+            images.prepare(Q.TILE - 12, data=payload + bytes([index]),
+                           min_edge=0, ratio=ratio)
+        held, _pixmaps = images.cache_bytes()
+        assert held <= images.IMAGE_CACHE_BYTES, (
+            f"at {ratio}x the cache held {held / 1048576:.1f} MiB against a "
+            f"{images.IMAGE_CACHE_BYTES / 1048576:.0f} MiB budget")
+    assert len(images._IMAGE_CACHE) <= images.CACHE_LIMIT
+
+
+def test_eviction_is_oldest_first_and_spares_what_was_just_prepared(qt_core):
+    """Evicting the newest entry turns the cache into a treadmill.
+
+    The image a caller has just asked for is the one about to be painted.
+    Dropping it to satisfy the budget means decoding it again immediately,
+    and on a monitor change that is every visible tile, twice.
+    """
+    from kairo.qt import images
+
+    images.clear_cache()
+    cache = images._IMAGE_CACHE
+    cache.clear()
+
+    class Fake:
+        def __init__(self, edge):
+            self._edge = edge
+
+        def width(self):
+            return self._edge
+
+        def height(self):
+            return self._edge
+
+        def depth(self):
+            return 32
+
+    for name in ("oldest", "middle", "newest"):
+        cache[name] = Fake(1000)          # 4 MB each
+    images._trim(cache, 9 * 1024 * 1024, keep="newest")
+    assert "oldest" not in cache, "eviction did not start with the oldest"
+    assert "newest" in cache, "the entry about to be painted was evicted"
+
+    # A budget so small that only the protected entry can remain.
+    images._trim(cache, 1, keep="newest")
+    assert list(cache) == ["newest"]
+
+
+def test_reflowing_writes_down_the_column_count_it_used(qt_core):
+    """Driven directly: a window with no artwork never reflows at all."""
+    from types import SimpleNamespace
+
+    from kairo.qt.library import LibraryPane
+
+    seated = []
+    pane = SimpleNamespace(
+        _columns=lambda: 4,
+        _last_columns=None,
+        tiles=[object(), object()],
+        grid=SimpleNamespace(
+            removeWidget=lambda widget: None,
+            addWidget=lambda widget, row, column: seated.append((row, column))),
+        _grid_note=lambda _text: None,
+    )
+    LibraryPane._reflow_tiles(pane)
+    assert seated == [(0, 0), (0, 1)]
+    assert pane._last_columns == 4, \
+        "the reflow did not record the count it reflowed for"
