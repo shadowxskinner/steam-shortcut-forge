@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout,
                                QLabel, QLineEdit, QMessageBox, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
-from kairo import actions
+from kairo import actions, appsource
 from kairo.artwork.local import SOURCE_ID as LOCAL_SOURCE_ID
 
 from kairo.qt import images
@@ -31,6 +31,7 @@ ACTIVITY_APPLY = "apply"
 ACTIVITY_SCAN = "scan"
 ACTIVITY_ROWS = "rows"
 ACTIVITY_DPR = "dpr"
+ACTIVITY_SOURCES = "sources"
 
 #: Prepared images are handed over in groups rather than one at a time. One
 #: signal per icon made a page of rows fill in a visible trickle — 120
@@ -113,6 +114,11 @@ class LibraryPane(QWidget):
         # row currently drawing it. A page that happens not to include
         # the entry must not be able to forget which entry it is.
         self._selected_key = None
+        # Read-only provenance metadata: which installation source each entry
+        # came from. Never part of a key, a filename or a ledger identity.
+        self._source_of: dict[str, str] = {}
+        self._source_filter = appsource.ALL
+        self._source_counts = {}
         self._restore_full_label = ""
         self._remove_full_label = ""
 
@@ -163,6 +169,21 @@ class LibraryPane(QWidget):
         self.filters = Pills(list(FILTERS))
         self.filters.changed.connect(lambda _label: self.refilter())
         layout.addWidget(self.filters, 0, Qt.AlignLeft)
+
+        # One destination, not five. Applications is a single list with a
+        # quiet selector over it; splitting the sidebar per packaging format
+        # would make the shape of the machine the shape of the navigation.
+        # Named apart from sources(): that is the artwork-source ordering
+        # this pane already has, and shadowing it with a widget silently
+        # broke the merged artwork grid.
+        self.origin_pills = Pills([])
+        self.origin_pills.changed.connect(self._choose_source)
+        self.origin_pills.setVisible(False)
+        layout.addWidget(self.origin_pills, 0, Qt.AlignLeft)
+        if self._classifies_sources():
+            # Built once, with every bucket present from the start. Pills that
+            # appear as a scan finishes move the list under the pointer.
+            self._refresh_origin_pills()
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -685,6 +706,10 @@ class LibraryPane(QWidget):
             if token.cancelled:
                 return
             self.entries = entries
+            if self._classifies_sources():
+                self._classify_sources(
+                    entries,
+                    self.tokens.start(f"{ACTIVITY_SOURCES}:{provider.id}"))
             # A rescan may replace bytes at the same icon path. Search and
             # filter changes keep the generation, so stable rows retain their
             # already painted image; a real scan deliberately refreshes it.
@@ -701,10 +726,77 @@ class LibraryPane(QWidget):
 
         work.submit(run, on_done=scanned, on_failed=scan_failed)
 
+    def _classifies_sources(self) -> bool:
+        """Only the desktop-entry provider has an installation source."""
+        return bool(getattr(self.provider, "classifies_sources", False))
+
+    def source_of(self, entry) -> str:
+        """The bucket an entry belongs to; Local until proven otherwise."""
+        return self._source_of.get(entry.key, appsource.LOCAL)
+
+    def _refresh_origin_pills(self) -> None:
+        tally = self._source_counts
+        labels = [appsource.label_for(bucket, tally)
+                  for bucket, _name in appsource.LABELS]
+        self._source_labels = dict(zip(labels,
+                                       [b for b, _n in appsource.LABELS]))
+        chosen = next((label for label, bucket in self._source_labels.items()
+                       if bucket == self._source_filter), labels[0])
+        self.origin_pills.set_values(labels)
+        self.origin_pills.set_value(chosen, notify=False)
+        self.origin_pills.setVisible(True)
+
+    def _choose_source(self, label: str) -> None:
+        bucket = getattr(self, "_source_labels", {}).get(label, appsource.ALL)
+        if bucket == self._source_filter:
+            return
+        self._source_filter = bucket
+        # The query and the selection are the person's, not the filter's.
+        # refilter() restores the selected entry by key when it survives, and
+        # empties the inspector deliberately when it does not.
+        self.refilter()
+
+    def _classify_sources(self, entries, token) -> None:
+        """Work out provenance once per scan, off the GUI thread.
+
+        Batched inside appsource: one package query for the whole list rather
+        than one per row, so this costs the same whether the pane is repainted
+        once or a hundred times.
+        """
+        wanted = [(entry.key, entry.payload.get("source", ""))
+                  for entry in entries if entry.payload.get("source")]
+        if not wanted:
+            self._source_of = {}
+            self._source_counts = appsource.counts([])
+            self._refresh_origin_pills()
+            return
+
+        def run():
+            mapping = appsource.classify([path for _key, path in wanted])
+            return {key: mapping.get(path, appsource.LOCAL)
+                    for key, path in wanted}
+
+        def arrived(mapping):
+            # A rescan or a provider switch during classification makes this
+            # answer describe a list that is no longer on screen.
+            if token.cancelled or not self.tokens.is_current(
+                    f"{ACTIVITY_SOURCES}:{self.provider.id}", token):
+                return
+            self._source_of = mapping
+            self._source_counts = appsource.counts(mapping.values())
+            self._refresh_origin_pills()
+            if self._source_filter != appsource.ALL:
+                self.refilter()
+
+        work.submit(run, on_done=arrived, on_failed=lambda _message: None)
+
     def visible_entries(self):
         term = self.search.text().strip().lower()
         mode = FILTERS.get(self.filters.value(), "all")
         entries = self.entries
+        if self._source_filter != appsource.ALL and self._classifies_sources():
+            entries = [e for e in entries
+                       if self.source_of(e) == self._source_filter]
         if term:
             entries = [e for e in entries if term in e.name.lower()]
         if mode == "with":

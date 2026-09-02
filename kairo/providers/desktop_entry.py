@@ -106,6 +106,11 @@ def fallback_query_for(entry: AppEntry) -> str:
 # ---------------------------------------------------------------------------
 
 class DesktopEntryProvider(AppProvider):
+    #: Read-only provenance metadata. Entries carry the path of
+    #: the .desktop file that produced them, which is what makes
+    #: package ownership answerable without a second scan.
+    classifies_sources = True
+
     id = PROVIDER_ID
     label = "Applications"
     noun = "apps"
