@@ -229,7 +229,6 @@ class KairoWindow(QMainWindow):
             item = next(i for i in self.items if i.key == key)
             pane = LibraryPane(item.provider, self.ctx)
             pane.rescan_requested.connect(self.rescan)
-            pane.customize_launcher.connect(self.open_launcher_in_applications)
             # A write in one pane changes what Changes has to show.
             pane.changed.connect(self._refresh_changes)
             # An apply or reset in Applications can be a change to Steam's or

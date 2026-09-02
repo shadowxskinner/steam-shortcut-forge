@@ -14,7 +14,7 @@ import threading
 from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import QBuffer, QByteArray, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QRectF, Qt
 from PySide6.QtGui import QImage, QImageReader, QPixmap
 
 try:
@@ -93,6 +93,15 @@ def _looks_svg(data: bytes) -> bool:
 
 
 def _render_svg_image(data: bytes, size: int):
+    """Render an SVG into a square box without distorting it.
+
+    ``QSvgRenderer.render(painter)`` fills whatever rectangle it is given,
+    so handing it a square stretched every icon whose viewBox is not square
+    — and a great many theme icons are not. The raster path has always kept
+    aspect through KeepAspectRatio; this one silently did not, which is a
+    difference nothing about the two code paths explains and nobody would
+    expect. Fit to the smaller ratio and centre what is left.
+    """
     if QSvgRenderer is None:
         return None
     from PySide6.QtGui import QPainter
@@ -103,7 +112,17 @@ def _render_svg_image(data: bytes, size: int):
     image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
     image.fill(Qt.transparent)
     painter = QPainter(image)
-    renderer.render(painter)
+    native = renderer.defaultSize()
+    if native.width() > 0 and native.height() > 0:
+        scale = min(size / native.width(), size / native.height())
+        width = native.width() * scale
+        height = native.height() * scale
+        renderer.render(painter, QRectF((size - width) / 2.0,
+                                        (size - height) / 2.0,
+                                        width, height))
+    else:
+        # No intrinsic size to preserve; filling the box is all there is.
+        renderer.render(painter)
     painter.end()
     return image
 

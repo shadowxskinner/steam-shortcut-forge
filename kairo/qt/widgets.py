@@ -13,7 +13,7 @@ import math
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (QColor, QFontMetrics, QImage, QPainter, QPen,
                            QPixmap, QPolygonF)
-from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QSizePolicy,
                                QPushButton, QVBoxLayout, QWidget)
 
 from kairo.qt import images
@@ -517,8 +517,18 @@ class EntryRow(QFrame):
         # appid, a .desktop basename or a system label depending on the
         # provider — an identifier the reader did not ask for in two cases
         # out of three, and a row is easier to scan without it.
+        # The name must be able to become narrow. A label whose size hint is
+        # its full text gives the row a minimum width, which gives the scroll
+        # area's holder a minimum width, which the viewport then cannot
+        # shrink below: at 900px the list column is 280 and the rows were
+        # still 319, with a real 91px horizontal scroll range and the icons
+        # cut against the left edge. Ignored means "take what you are given";
+        # the text is fitted to that in _elide_name.
         self.name = QLabel("", self)
         self.name.setObjectName("rowName")
+        self.name.setMinimumWidth(0)
+        self.name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._full_name = ""
         layout.addWidget(self.name, 1)
 
         self.dot = QLabel("", self)
@@ -540,7 +550,8 @@ class EntryRow(QFrame):
             self._icon_ready = False
         self._icon_identity = identity
         self.entry = entry
-        self.name.setText(T.ellipsize(entry.name, Q.LIST_NAME_CHARS))
+        self._full_name = entry.name or ""
+        self._elide_name()
         self.dot.setText("●" if entry.customized else "")
         # A ring inside a rounded square reads as a broken image. The
         # initial reads as a placeholder, the way a contacts list does.
@@ -569,6 +580,39 @@ class EntryRow(QFrame):
         # Delivered: this row no longer needs to be queued by a later page.
         self._icon_ready = True
         return True
+
+    def _elide_name(self) -> None:
+        """Fit the name to the room the row actually has.
+
+        Measured, not counted. A fixed character budget is a guess about
+        width that is wrong at every mode but the one it was chosen for, and
+        it is what made the label demand more room than the column had.
+        """
+        text = self._full_name
+        # Derived from the row's own width, not the label's. resizeEvent
+        # runs before the child layout has been applied, so asking the label
+        # how wide it is here answers with the width it had a mode ago - the
+        # same trap that left the artwork column count describing the
+        # previous geometry.
+        layout = self.layout()
+        margins = layout.contentsMargins()
+        used = (margins.left() + margins.right()
+                + self.well.width()
+                + max(0, self.dot.sizeHint().width())
+                + max(0, layout.spacing()) * 2)
+        room = max(0, self.width() - used)
+        if not room:
+            self.name.setText(text)
+            self.name.setToolTip("")
+            return
+        metrics = QFontMetrics(self.name.font())
+        self.name.setText(metrics.elidedText(text, Qt.ElideRight, room))
+        self.name.setToolTip(
+            text if metrics.horizontalAdvance(text) > room else "")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._elide_name()
 
     def set_selected(self, selected: bool) -> None:
         self._selected = selected

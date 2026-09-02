@@ -1803,15 +1803,68 @@ def test_the_shell_refreshes_logos_on_change_and_rescan():
             "sidebar and drops the selection")
 
 
-def test_the_customize_action_is_only_a_deep_link():
+def test_the_header_has_no_launcher_button_left_behind(qt_core):
+    """It competed with the title for exactly the room the title needed.
+
+    Three abbreviations of one deep link - "Customize Steam icon...",
+    "Launcher icon...", "Launcher..." - sat between the name and Rescan, so
+    the longest titles were elided to make space for a button that only
+    jumped to a row under Applications. The row is still reachable; the
+    header is not where you reach it from.
+    """
+    from kairo.qt.shell import KairoWindow
+
     source = (QT_DIR / "library.py").read_text()
-    block = source.split("self.customize_btn = QPushButton")[1].split(
-        "for button in")[0]
-    assert "customize_launcher.emit" in block
+    for gone in ("customize_btn", "customize_launcher", "_customize_label",
+                 "Launcher icon", "Launcher\u2026", "Customize Steam",
+                 "Customize emulator"):
+        assert gone not in source, f"{gone} survives in the pane"
+    assert "customize_launcher" not in (QT_DIR / "shell.py").read_text()
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        window.resize(1420, 900)
+        qt_core.processEvents()
+        pane = next((p for p in window.panes.values()
+                     if hasattr(p, "set_layout_mode")), None)
+        assert pane is not None
+        assert not hasattr(pane, "customize_btn")
+
+        header = pane._header_layout
+        widgets = [header.itemAt(i).widget() for i in range(header.count())]
+        # No blank spacer where the button used to be: every remaining slot
+        # is either a real widget or the stretch that feeds the title.
+        buttons = [w for w in widgets if w is not None
+                   and w.metaObject().className() == "QPushButton"]
+        assert len(buttons) == 1, "the header should hold Rescan and nothing else"
+        assert buttons[0] is pane.rescan_btn
+        assert pane.rescan_btn.isVisible()
+        header_widget = pane.rescan_btn.parentWidget()
+        right = pane.rescan_btn.geometry().x() + pane.rescan_btn.width()
+        assert right <= header_widget.width(), \
+            (f"Rescan ends at {right} in a {header_widget.width()}px header")
+        assert pane.rescan_btn.geometry().x() > pane.title.geometry().x(), \
+            "Rescan must sit to the right of the title"
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()
+
+
+def test_the_deep_link_to_a_launcher_entry_still_exists(qt_core):
+    """Removing the button must not remove the way in.
+
+    Launcher icons stay editable through the entry under Applications, which
+    is where they always were - reveal_launcher is the mechanism and it is
+    still write-free.
+    """
+    source = (QT_DIR / "library.py").read_text()
+    reveal = source.split("def reveal_launcher")[1].split("\n    def ")[0]
     for forbidden in ("apply_icon", "restore_entry", "remove_entry",
-                      "QFileDialog"):
-        assert forbidden not in block, (
-            f"the deep link must not {forbidden}; Applications owns that")
+                      "QFileDialog", "actions."):
+        assert forbidden not in reveal, \
+            f"revealing a row must not {forbidden}; Applications owns that"
 
     shell = (QT_DIR / "shell.py").read_text()
     handler = shell.split("def open_launcher_in_applications")[1].split(
@@ -2631,7 +2684,6 @@ def test_compact_library_labels_are_short_without_changing_their_actions():
     actions = source.split("def _update_actions")[1].split("\n    def ")[0]
 
     assert "Local file" in labels
-    assert "Launcher icon" in mode
     assert "writer.restore_label" in actions
     assert "writer.remove_label" in actions
     for callback in ("_browse", "_restore", "_remove", "_apply"):
@@ -3015,3 +3067,381 @@ def test_reflowing_writes_down_the_column_count_it_used(qt_core):
     assert seated == [(0, 0), (0, 1)]
     assert pane._last_columns == 4, \
         "the reflow did not record the count it reflowed for"
+
+
+# ---------------------------------------------------------------------------
+# Artwork grid geometry, measured rather than reasoned about.
+
+def _live_tiles(tiles):
+    """Those still alive. A deleted QWidget raises rather than answering.
+
+    _clear_grid unparents and deleteLater()s, and a scan callback landing
+    during processEvents can do that underneath a measurement — after which
+    even parentWidget() is a RuntimeError from Shiboken, not None.
+    """
+    alive = []
+    for tile in tiles:
+        try:
+            if tile.parentWidget() is not None:
+                alive.append(tile)
+        except RuntimeError:
+            continue
+    return alive
+
+
+def _fill_grid(pane, count=36):
+    from kairo.qt.widgets import ArtworkTile
+
+    class Art:
+        label = "SteamGridDB"
+        name = "x"
+        kind = "logo"
+        official = True
+        dimensions = "512x512"
+        source_id = "s"
+
+    # Quiesce first: a scan landing mid-measurement replaces the grid, and
+    # then even parentWidget() on the old tiles is a Shiboken RuntimeError.
+    pane.tokens.cancel_all()
+    from kairo.qt import work as _work
+    _work.drain()
+    pane._clear_grid()
+    pane.tiles = []
+    pane._tile_at = {}
+    for index in range(count):
+        tile = ArtworkTile(Art())
+        pane.tiles.append(tile)
+        pane._tile_at[index] = tile
+    pane._reflow_tiles()
+    # A copy: _clear_grid empties pane.tiles in place, so a scan callback
+    # landing during processEvents would empty the caller's list too.
+    return list(pane.tiles)
+
+
+def test_only_whole_artwork_columns_are_ever_shown(qt_core):
+    """The right-hand column was cut off at 34 widths between 900 and 1499.
+
+    _columns() divided the raw viewport by (tile + spacing), which asks for
+    one gap more than n columns need and ignores the grid's own left and
+    right margins entirely. Wherever the viewport landed just above a
+    multiple of the pitch, that bought a column there was no room for and
+    the last one ran 1-10px past the edge.
+    """
+    from kairo.qt.shell import KairoWindow
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        offenders = []
+        for width in range(900, 1500, 7):
+            window.resize(width, 1000)
+            qt_core.processEvents()
+            pane = next((p for p in window.panes.values()
+                         if hasattr(p, "set_layout_mode")), None)
+            assert pane is not None
+            tiles = _fill_grid(pane)
+            qt_core.processEvents()
+            viewport = pane.grid_scroll.viewport().width()
+            live = _live_tiles(tiles)
+            if not live:
+                continue
+            last = max(t.geometry().x() + t.geometry().width() for t in live)
+            if last > viewport:
+                offenders.append((width, viewport, last, last - viewport))
+        assert not offenders, (
+            f"{len(offenders)} widths clip the last column, e.g. {offenders[:3]}")
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()
+
+
+def test_the_column_count_accounts_for_margins_and_gaps(qt_core):
+    """Arithmetic, stated directly, so a regression names its own cause."""
+    from types import SimpleNamespace
+
+    from kairo.qt.library import LibraryPane
+    from kairo.qt.widgets import ArtworkTile
+    from PySide6.QtCore import QMargins
+
+    def pane_with(viewport, margin=14, spacing=4):
+        return SimpleNamespace(
+            grid=SimpleNamespace(
+                contentsMargins=lambda: QMargins(margin, 0, margin, 0),
+                horizontalSpacing=lambda: spacing),
+            grid_scroll=SimpleNamespace(
+                viewport=lambda: SimpleNamespace(width=lambda: viewport)))
+
+    tile = ArtworkTile.WIDTH
+    for viewport in range(300, 1200):
+        columns = LibraryPane._columns(pane_with(viewport))
+        needed = columns * tile + (columns - 1) * 4 + 28
+        assert columns >= 1
+        assert needed <= viewport or columns == 1, (
+            f"{columns} columns need {needed}px of a {viewport}px viewport")
+        # And it must not be needlessly mean: one more column must not fit.
+        more = (columns + 1) * tile + columns * 4 + 28
+        assert more > viewport, (
+            f"{columns + 1} columns would have fitted in {viewport}px")
+
+
+def test_a_scrollbar_appearing_recounts_the_columns(qt_core):
+    """The viewport narrows under a grid that was already seated."""
+    source = (QT_DIR / "library.py").read_text()
+    assert "def _follow_grid_scrollbar" in source
+    block = source.split("def _follow_grid_scrollbar")[1].split("\n    def ")[0]
+    assert "_columns()" in block and "_reflow_tiles" in block
+
+    from kairo.qt.shell import KairoWindow
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        window.resize(1140, 700)
+        qt_core.processEvents()
+        pane = next((p for p in window.panes.values()
+                     if hasattr(p, "set_layout_mode")), None)
+        tiles = _fill_grid(pane, 60)
+        qt_core.processEvents()
+        pane._follow_grid_scrollbar()
+        qt_core.processEvents()
+        viewport = pane.grid_scroll.viewport().width()
+        live = _live_tiles(tiles)
+        assert live, "the grid emptied before it could be measured"
+        last = max(t.geometry().x() + t.geometry().width() for t in live)
+        assert last <= viewport, (
+            f"with a scrollbar the last tile ends at {last} in {viewport}px")
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()
+
+
+def test_a_seeded_query_opens_at_its_beginning(qt_core):
+    """setText leaves the cursor at the end and the field scrolls to it.
+
+    A long title opened showing "ed network configuration" - the tail of
+    "advanced network configuration" - because the cursor sat at position 30
+    and a QLineEdit scrolls to keep the cursor visible.
+    """
+    from PySide6.QtCore import Qt as QtNs
+
+    from kairo.qt.shell import KairoWindow
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        window.resize(900, 900)
+        qt_core.processEvents()
+        pane = next((p for p in window.panes.values()
+                     if hasattr(p, "set_layout_mode")), None)
+        assert pane is not None
+
+        pane.query.setFocus(QtNs.OtherFocusReason)
+        pane.query.clearFocus()
+        blocked = pane.query.blockSignals(True)
+        pane.query.setText("advanced network configuration")
+        pane.query.blockSignals(blocked)
+        assert pane.query.cursorPosition() == len(pane.query.text()), \
+            "precondition: a bare setText parks the cursor at the end"
+
+        pane._seeded = "advanced network configuration"
+        blocked = pane.query.blockSignals(True)
+        pane.query.setText(pane._seeded)
+        if not pane.query.hasFocus():
+            pane.query.setCursorPosition(0)
+            pane.query.deselect()
+        pane.query.blockSignals(blocked)
+        pane._update_query_tooltip()
+
+        assert pane.query.cursorPosition() == 0, \
+            "the field still opens scrolled to its tail"
+        assert not pane.query.hasSelectedText()
+        assert pane.query.toolTip().startswith("advanced network"), \
+            "a query too wide for the field must be readable somewhere"
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()
+
+
+def test_seeding_never_takes_the_cursor_from_someone_typing(qt_core):
+    """Repositioning mid-edit is worse than the tail."""
+    source = (QT_DIR / "library.py").read_text()
+    seed = source.split("def _seed_query")[1].split("\n    def ")[0]
+    assert "hasFocus()" in seed, "the reset is unconditional"
+    assert seed.index("hasFocus()") < seed.index("setCursorPosition(0)")
+
+
+# ---------------------------------------------------------------------------
+# List rows must follow the viewport, not the longest name in them.
+
+def test_rows_never_grow_wider_than_the_list_viewport(qt_core):
+    """A row that cannot shrink drags a horizontal scrollbar behind it.
+
+    The name was ellipsised to a fixed character budget, so the label's size
+    hint was its longest name whatever the window was doing. That became the
+    row's minimum, then the holder's, and the scroll area could not shrink
+    below it: at 900px the list column is 280 and the rows were still 319,
+    with a real 91px horizontal range and the icons cut against the edge.
+    """
+    from kairo.qt.shell import KairoWindow
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        offenders = []
+        for width in (900, 1038, 1039, 1040, 1041, 1318, 1319, 1320, 1321,
+                      1420, 900, 1420):
+            window.resize(width, 1000)
+            for _ in range(4):
+                qt_core.processEvents()
+            pane = next((p for p in window.panes.values()
+                         if hasattr(p, "set_layout_mode")), None)
+            assert pane is not None
+            viewport = pane.scroll.viewport().width()
+            horizontal = pane.scroll.horizontalScrollBar().maximum()
+            if horizontal:
+                offenders.append((width, f"horizontal range {horizontal}"))
+            for row in [r for r in pane.rows if r.isVisible()][:5]:
+                geometry = row.geometry()
+                well = row.well.geometry()
+                if geometry.width() > viewport:
+                    offenders.append(
+                        (width, f"row {geometry.width()} > viewport {viewport}"))
+                if well.x() < 0 or well.x() + well.width() > viewport:
+                    offenders.append((width, f"icon at {well.x()}"))
+                if geometry.x() + geometry.width() > viewport:
+                    offenders.append((width, "row right edge past viewport"))
+        assert not offenders, offenders[:4]
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()
+
+
+def test_a_row_name_is_fitted_by_measurement_not_by_counting(qt_core):
+    """A character budget is a guess about width, wrong at every other mode."""
+    from PySide6.QtGui import QFontMetrics
+
+    from kairo.qt.widgets import EntryRow
+
+    widgets = (QT_DIR / "widgets.py").read_text()
+    row_source = widgets.split("class EntryRow")[1]
+    assert "LIST_NAME_CHARS" not in row_source, \
+        "the row is still sizing its name by character count"
+    assert "setMinimumWidth(0)" in row_source
+    assert "QSizePolicy.Ignored" in row_source
+
+    row = EntryRow()
+    # Shown, because Qt defers resize events for hidden widgets: a bare
+    # resize() on one that has never been shown delivers nothing, and the
+    # refit would look broken when it is only unobserved.
+    row.show()
+    row.resize(300, 64)
+    row.layout().activate()
+    qt_core.processEvents()
+    long_name = "Advanced Network Configuration And Then Some More Words"
+    row.bind(SimpleEntry(long_name), defer_icon=True)
+    metrics = QFontMetrics(row.name.font())
+    assert metrics.horizontalAdvance(row.name.text()) <= row.width()
+    assert row.name.toolTip() == long_name, "the full name must stay readable"
+
+    # Widening must re-fit without anyone asking it to: the row is resized by
+    # its layout, not by the code that bound it, so refitting only on bind
+    # leaves every name frozen at the width it first appeared in.
+    row.resize(900, 64)
+    row.layout().activate()
+    qt_core.processEvents()
+    assert row.name.text() == long_name, \
+        "the name never re-fitted when the row grew"
+    assert row.name.toolTip() == ""
+
+    row.resize(240, 64)
+    row.layout().activate()
+    qt_core.processEvents()
+    assert row.name.text() != long_name, "it never re-fitted when the row shrank"
+    assert metrics.horizontalAdvance(row.name.text()) <= row.width()
+
+
+class SimpleEntry:
+    def __init__(self, name):
+        self.key = "desktop:x"
+        self.name = name
+        self.subtitle = ""
+        self.current_icon = None
+        self.customized = False
+        self.payload = {}
+
+
+def test_an_svg_icon_keeps_its_shape(qt_core):
+    """render(painter) fills whatever rectangle it is handed.
+
+    The raster path has always kept aspect through KeepAspectRatio; the SVG
+    path silently did not, so every theme icon with a non-square viewBox was
+    stretched to a square. Nothing about the two paths explains the
+    difference and nobody reading either would expect it.
+    """
+    from PySide6.QtGui import QColor
+
+    from kairo.qt import images
+
+    def drawn(image):
+        points = [(x, y)
+                  for y in range(image.height())
+                  for x in range(image.width())
+                  if QColor(image.pixelColor(x, y)).alpha() > 40]
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def svg(view_box, body):
+        return (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="'
+                + view_box + b'">' + body + b'</svg>')
+
+    cases = (
+        (b"0 0 200 100", b'<rect x="0" y="0" width="200" height="100" '
+                         b'fill="red"/>', 2.0),
+        (b"0 0 100 200", b'<rect x="0" y="0" width="100" height="200" '
+                         b'fill="red"/>', 0.5),
+        (b"0 0 100 100", b'<rect x="0" y="0" width="100" height="100" '
+                         b'fill="red"/>', 1.0),
+    )
+    for view_box, body, aspect in cases:
+        images.clear_cache()
+        image = images.prepare(64, data=svg(view_box, body))
+        left, top, right, bottom = drawn(image)
+        width = right - left + 1
+        height = bottom - top + 1
+        assert abs(width / height - aspect) < 0.06, (
+            f"a {aspect}:1 icon was drawn at {width}x{height}")
+        assert width <= 64 and height <= 64, "the icon overflows its box"
+        assert abs(left - (64 - width) // 2) <= 1, "not centred horizontally"
+        assert abs(top - (64 - height) // 2) <= 1, "not centred vertically"
+
+
+def test_no_pane_ever_shows_a_horizontal_scrollbar(qt_core):
+    """Neither list nor artwork may scroll sideways at any width."""
+    from kairo.qt.shell import KairoWindow
+
+    window = KairoWindow(translucent=False, want_blur=False)
+    try:
+        window.show()
+        offenders = []
+        for width in (900, 1039, 1040, 1319, 1320, 1420):
+            window.resize(width, 1000)
+            for _ in range(4):
+                qt_core.processEvents()
+            for pane in window.panes.values():
+                for name in ("scroll", "grid_scroll"):
+                    area = getattr(pane, name, None)
+                    if area is None:
+                        continue
+                    bar = area.horizontalScrollBar()
+                    if bar.maximum() or bar.value():
+                        offenders.append((width, name, bar.maximum()))
+        assert not offenders, offenders[:4]
+    finally:
+        window.close()
+        from kairo.qt import work
+        work.drain()

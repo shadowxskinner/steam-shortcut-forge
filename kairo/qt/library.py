@@ -33,6 +33,11 @@ ACTIVITY_ROWS = "rows"
 ACTIVITY_DPR = "dpr"
 ACTIVITY_SOURCES = "sources"
 
+#: The resting tooltip on the artwork query. Replaced by the query
+#: itself when the text is wider than the field.
+QUERY_HINT = ("Type a different title and press Enter to search "
+              "every source")
+
 #: Prepared images are handed over in groups rather than one at a time. One
 #: signal per icon made a page of rows fill in a visible trickle — 120
 #: separate paints over 86ms, which reads as the window assembling itself in
@@ -84,8 +89,6 @@ class LibraryPane(QWidget):
     changed = Signal()
     status = Signal(str)
     rescan_requested = Signal()
-    #: Carries the launcher basename this provider's application lives in.
-    customize_launcher = Signal(str)
 
     def __init__(self, provider, context, parent=None):
         super().__init__(parent)
@@ -127,6 +130,11 @@ class LibraryPane(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self._build_list())
         layout.addWidget(self._build_workspace(), 1)
+
+        # A scrollbar appearing after the tiles are seated narrows the
+        # viewport they were measured against.
+        bar = self.grid_scroll.verticalScrollBar()
+        bar.rangeChanged.connect(lambda _lo, _hi: self._follow_grid_scrollbar())
 
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -254,25 +262,16 @@ class LibraryPane(QWidget):
         # clicked carries a checked flag; a zero-argument Signal cannot take it.
         self.rescan_btn.clicked.connect(
             lambda _checked: self.rescan_requested.emit())
-        # A deep link, not a second icon editor. Applications stays the one
-        # place artwork is chosen; this only carries you to the right row,
-        # which is otherwise one entry among several hundred with nothing
-        # pointing at it.
-        self.customize_btn = QPushButton(self._customize_label())
-        self.customize_btn.setObjectName("secondary")
-        launcher = self._launcher_id()
-        self.customize_btn.setVisible(bool(self._customizable()))
-        self.customize_btn.setEnabled(bool(launcher))
-        if self._customizable() and not launcher:
-            self.customize_btn.setToolTip(
-                f"{self.provider.label} has no launcher entry Kairo can "
-                "customise, so the sidebar is using its drawn glyph.")
-        self.customize_btn.clicked.connect(
-            lambda _checked: self.customize_launcher.emit(self._launcher_id()))
-
-        for button in (self.customize_btn, self.rescan_btn):
-            button.setFixedHeight(Q.H_BUTTON)
-            head.addWidget(button, 0, Qt.AlignVCenter)
+        # The header carries the selected icon, its title and Rescan. The
+        # deep link to a provider's own launcher entry used to sit here as a
+        # third button, in three different abbreviations depending on the
+        # window width, competing with the title for the room the title
+        # needed. Editing a launcher icon was never a second editor - it only
+        # jumped to that entry under Applications, which is where the entry
+        # already is. reveal_launcher() is still the mechanism; nothing in
+        # the header duplicates it.
+        self.rescan_btn.setFixedHeight(Q.H_BUTTON)
+        head.addWidget(self.rescan_btn, 0, Qt.AlignVCenter)
         layout.addWidget(header)
 
         # -- the inspector -------------------------------------------------
@@ -337,7 +336,7 @@ class LibraryPane(QWidget):
         self.query = QLineEdit()
         self.query.setPlaceholderText("Search artwork…")
         self.query.setToolTip(
-            "Type a different title and press Enter to search every source")
+            QUERY_HINT)
         self.query.setFixedWidth(Q.W_QUERY)
         self.query.setClearButtonEnabled(True)
         self.query.returnPressed.connect(self._load_artwork)
@@ -422,16 +421,6 @@ class LibraryPane(QWidget):
             "narrow": Q.W_QUERY_NARROW,
         }
         self.query.setFixedWidth(query_width[mode])
-        full_customize = self._customize_label()
-        customize = {
-            "wide": full_customize,
-            "compact": "Launcher icon…",
-            "narrow": "Launcher…",
-        }
-        self.customize_btn.setText(customize[mode])
-        if self.customize_btn.isEnabled():
-            self.customize_btn.setToolTip(
-                "" if mode == "wide" else full_customize)
         self._refresh_action_labels()
         self._elide_heading()
         if self.tiles:
@@ -626,12 +615,6 @@ class LibraryPane(QWidget):
     def _customizable(self) -> bool:
         """Steam and emulators have an application of their own; games do not."""
         return hasattr(self.provider, "launcher_ids")
-
-    def _customize_label(self) -> str:
-        if not self._customizable():
-            return ""
-        which = "Steam" if self.provider.id == "steam" else "emulator"
-        return f"Customize {which} icon…"
 
     def _launcher_id(self) -> str:
         """The basename of this provider's own launcher, or ""."""
@@ -1075,6 +1058,15 @@ class LibraryPane(QWidget):
         return sorted(available, key=rank)
 
 
+    def _update_query_tooltip(self) -> None:
+        """Show the whole query when the field is too narrow to hold it."""
+        text = self.query.text()
+        metrics = QFontMetrics(self.query.font())
+        room = max(0, self.query.width() - 12)
+        self.query.setToolTip(
+            text if text and metrics.horizontalAdvance(text) > room
+            else QUERY_HINT)
+
     def _seed_query(self) -> None:
         """One search box, over every source rather than some of them.
 
@@ -1092,7 +1084,16 @@ class LibraryPane(QWidget):
         self.query.setVisible(True)
         blocked = self.query.blockSignals(True)
         self.query.setText(self._seeded)
+        # setText leaves the cursor at the end, and a QLineEdit scrolls to
+        # keep the cursor visible - so a query longer than the field opened
+        # showing its tail: "ed network configuration". Only reposition when
+        # the box is not being typed in; taking the cursor away from someone
+        # mid-edit is worse than the tail.
+        if not self.query.hasFocus():
+            self.query.setCursorPosition(0)
+            self.query.deselect()
         self.query.blockSignals(blocked)
+        self._update_query_tooltip()
 
     def _query_cleared(self, text: str) -> None:
         if not text.strip() and self._seeded:
@@ -1204,8 +1205,25 @@ class LibraryPane(QWidget):
         work.submit(search, on_done=arrived, on_failed=failed)
 
     def _columns(self) -> int:
-        return max(1, self.grid_scroll.viewport().width()
-                   // (ArtworkTile.WIDTH + T.S1))
+        """How many whole tiles fit across the artwork viewport.
+
+        Two things were missing and both clip the right-hand column. The
+        grid carries its own left and right contents margins, which are not
+        available to tiles; and n columns need n-1 gaps, not n, so dividing
+        by (tile + spacing) asks for one gap too many and then spends it on
+        an extra column. Measured across 900-1499px, 34 window widths put
+        the last column 1-10px past the viewport edge - every one of them a
+        width where the viewport was just over a multiple of the pitch.
+
+        Logical pixels throughout: device pixel ratio decides how an image is
+        decoded, never how many of them fit on a row.
+        """
+        margins = self.grid.contentsMargins()
+        spacing = max(0, self.grid.horizontalSpacing())
+        usable = (self.grid_scroll.viewport().width()
+                  - margins.left() - margins.right())
+        pitch = ArtworkTile.WIDTH + spacing
+        return max(1, (usable + spacing) // pitch)
 
     def _build_tiles(self, results, origins=None) -> None:
         self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
@@ -1374,6 +1392,18 @@ class LibraryPane(QWidget):
         tile.setParent(None)
         tile.deleteLater()
         if reflow:
+            self._reflow_tiles()
+
+    def _follow_grid_scrollbar(self) -> None:
+        """A scrollbar appearing narrows the viewport under a seated grid.
+
+        Tiles are laid out, the grid becomes taller than the viewport, Qt
+        adds a vertical scrollbar, and the width every column was measured
+        against silently shrinks. Nothing else recomputes at that moment.
+        """
+        if not self.tiles:
+            return
+        if self._columns() != getattr(self, "_last_columns", None):
             self._reflow_tiles()
 
     def _reflow_tiles(self) -> None:
