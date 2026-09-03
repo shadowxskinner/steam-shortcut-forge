@@ -266,7 +266,7 @@ class EmulatorDialog(QDialog):
             layout.addLayout(line)
 
         heading = QLabel("ROM FOLDERS")
-        heading.setObjectName("micro")
+        heading.setObjectName("cardHead")
         layout.addWidget(heading)
 
         columns = QLabel("One row per system. Dolphin wants one for GameCube "
@@ -376,7 +376,7 @@ class EmulatorsCard(QFrame):
         layout.setSpacing(T.S3)
 
         heading = QLabel("Emulators")
-        heading.setObjectName("pane")
+        heading.setObjectName("cardHead")
         note = QLabel("Point Kairo at an emulator and its ROM folders, and "
                       "each game becomes a launcher shortcut you can give "
                       "artwork to. One emulator can cover several systems.")

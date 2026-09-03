@@ -14,8 +14,8 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMainWindow,
-                               QStackedWidget, QVBoxLayout,
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
+                               QMainWindow, QStackedWidget, QVBoxLayout,
                                QWidget)
 
 from kairo import APP_NAME, adoption, navmodel as nav
@@ -181,8 +181,16 @@ class KairoWindow(QMainWindow):
         header_layout.addStretch(1)
         layout.addWidget(header)
 
+        # Providers grow from the top; Changes and Settings anchor to the
+        # bottom edge behind a hairline instead of trailing the provider list
+        # with an unbroken void beneath them. The stretch becomes one
+        # deliberate gap between two anchored groups rather than a leftover
+        # space with nothing on either side of it.
+        primary = [item for item in self.items if item.group != nav.GROUP_MANAGEMENT]
+        management = [item for item in self.items if item.group == nav.GROUP_MANAGEMENT]
+
         current_group = None
-        for item in self.items:
+        for item in primary:
             if item.group != current_group:
                 current_group = item.group
                 heading = QLabel(item.group.upper())
@@ -195,6 +203,23 @@ class KairoWindow(QMainWindow):
             self.buttons[item.key] = button
 
         layout.addStretch(1)
+
+        if management:
+            # As faint as the column's own edge, not a card's hairline - the
+            # gap should read as the column's empty space settling, not as a
+            # line dividing it into two boxes.
+            divider = QFrame()
+            divider.setObjectName("navDivider")
+            divider.setFixedHeight(1)
+            layout.addWidget(divider)
+            layout.addSpacing(Q.GAP_WIDE)
+            for item in management:
+                button = NavButton(item.key, item.label, nav.icon_for(item), column)
+                button.clicked.connect(
+                    lambda _checked, key=item.key: self._select(key))
+                layout.addWidget(button)
+                self.buttons[item.key] = button
+
         return column
 
     # -- navigation --------------------------------------------------------

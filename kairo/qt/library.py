@@ -22,7 +22,7 @@ from kairo.artwork.local import SOURCE_ID as LOCAL_SOURCE_ID
 from kairo.qt import images
 from kairo.qt import theme as Q
 from kairo.qt import work
-from kairo.qt.widgets import ArtworkTile, EntryRow, IconWell, Pills
+from kairo.qt.widgets import ArtworkTile, EmptyState, EntryRow, IconWell, Pills
 from kairo.tasks import ActivityTokens
 from kairo.ui import theme as T
 
@@ -83,6 +83,9 @@ class LibraryPane(QWidget):
         self._search_timer.setSingleShot(True)
         self._search_timer.timeout.connect(lambda: self.refilter())
 
+        # The grid otherwise starts with nothing in it at all until the scan
+        # callback lands - a blank card rather than a state.
+        self._grid_note(f"Loading your {self.provider.noun}…", kind="loading")
         self.rescan()
 
     # -- middle column -----------------------------------------------------
@@ -234,8 +237,8 @@ class LibraryPane(QWidget):
         row = QHBoxLayout()
         row.setContentsMargins(Q.PAD_CARD, Q.GAP, Q.PAD_CARD, Q.GAP)
         row.setSpacing(Q.GAP)
-        heading = QLabel("ARTWORK")
-        heading.setObjectName("micro")
+        heading = QLabel("Artwork")
+        heading.setObjectName("cardHead")
         row.addWidget(heading, 0, Qt.AlignVCenter)
         row.addSpacing(T.S1)
         self.source_pills = Pills([])
@@ -556,6 +559,7 @@ class LibraryPane(QWidget):
             self.title.setText("No matches")
             note = (f"Nothing here matches “{term}”." if term
                     else "Nothing matches the current filter.")
+            kind = "search"
         else:
             self.title.setText(f"No {self.provider.noun} found")
             # A provider that knows why it is empty should say so. An
@@ -574,10 +578,11 @@ class LibraryPane(QWidget):
             else:
                 note = (f"Kairo found no {self.provider.noun} for "
                         f"{self.provider.label} on this machine.")
+            kind = "empty"
         self.subtitle.setText("")
         self.current_well.show_placeholder("—")
         self._clear_grid()
-        self._grid_note(note)
+        self._grid_note(note, kind=kind)
 
     # -- sources -----------------------------------------------------------
 
@@ -672,19 +677,19 @@ class LibraryPane(QWidget):
         self._tile_at.clear()
         self.chosen_tile = None
 
-    def _grid_note(self, text: str) -> None:
+    def _grid_note(self, title: str, detail: str = "", kind: str = "empty") -> None:
         """Centred, because the browser is the largest region on screen.
 
         Left in the top corner of an otherwise empty rectangle, a status line
-        reads as something that failed to load rather than as a state. The
-        grid's own alignment wins over a per-item one, so it is set here and
-        put back when tiles arrive.
+        reads as something that failed to load rather than as a state. A
+        small composition - icon, message, optional detail - sized to a
+        fraction of the card reads as a state instead. The grid's own
+        alignment wins over a per-item one, so it is set here and put back
+        when tiles arrive.
         """
-        label = QLabel(text)
-        label.setObjectName("empty")
-        label.setAlignment(Qt.AlignCenter)
+        state = EmptyState(kind, title, detail, self.grid_holder)
         self.grid.setAlignment(Qt.AlignCenter)
-        self.grid.addWidget(label, 0, 0)
+        self.grid.addWidget(state, 0, 0)
 
     def _load_artwork(self) -> None:
         self._clear_grid()
@@ -693,18 +698,20 @@ class LibraryPane(QWidget):
         entry = self.selected.entry
         source = self.source()
         if source is None:
-            self._grid_note("No online source has artwork for this one.")
+            self._grid_note("No online source has artwork for this one.",
+                            kind="warn")
             return
 
         query = self.provider.artwork_query(entry)
         if source.needs_query:
             text = self.query.text().strip()
             if not text:
-                self._grid_note(f"Type a term to search {source.label}.")
+                self._grid_note(f"Type a term to search {source.label}.",
+                                kind="search")
                 return
             query = query.with_text(text)
 
-        self._grid_note(f"Looking for artwork in {source.label}…")
+        self._grid_note(f"Looking for artwork in {source.label}…", kind="loading")
         token = self.tokens.start(ACTIVITY_ARTWORK)
         key = entry.key
 
@@ -719,7 +726,8 @@ class LibraryPane(QWidget):
             self._clear_grid()
             if not results:
                 self._probe_cache[(key, source.id)] = False
-                self._grid_note(f"{source.label} has nothing for {entry.name}.")
+                self._grid_note(f"{source.label} has nothing for {entry.name}.",
+                                kind="empty")
                 self._refresh_sources()
                 return
             self._probe_cache[(key, source.id)] = True
@@ -733,7 +741,7 @@ class LibraryPane(QWidget):
             # once has not told us it has nothing.
             if not token.cancelled:
                 self._clear_grid()
-                self._grid_note(f"Could not load artwork: {message}")
+                self._grid_note("Could not load artwork", message, kind="warn")
 
         work.submit(search, on_done=arrived, on_failed=failed)
 
@@ -815,7 +823,7 @@ class LibraryPane(QWidget):
             self.grid.removeWidget(tile)
             self.grid.addWidget(tile, position // columns, position % columns)
         if not self.tiles:
-            self._grid_note("nothing here is large enough to use")
+            self._grid_note("Nothing here is large enough to use", kind="empty")
 
     # -- proposing ---------------------------------------------------------
 

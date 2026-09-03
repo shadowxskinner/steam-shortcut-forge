@@ -78,6 +78,46 @@ def nav_pixmap(kind: str, colour: str, size: int = 20) -> QPixmap:
     return pixmap
 
 
+# ---------------------------------------------------------------------------
+# State icons, drawn
+# ---------------------------------------------------------------------------
+
+def state_pixmap(kind: str, colour: str, size: int = 28) -> QPixmap:
+    """A small monochrome pictogram for an empty or transitional state.
+
+    Same drawing style as the navigation glyphs above - thin strokes, no
+    fill, no colour beyond the caller's - so a blank grid reads as part of
+    the interface rather than as an inserted illustration.
+    """
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    pen = QPen(QColor(colour))
+    pen.setWidthF(1.4)
+    painter.setPen(pen)
+
+    if kind == "search":
+        span = int(size * 0.62)
+        painter.drawEllipse(2, 2, span, span)
+        painter.drawLine(2 + int(span * 0.82), 2 + int(span * 0.82),
+                         size - 2, size - 2)
+    elif kind == "warn":
+        top, bottom = 3, size - 4
+        painter.drawLine(size // 2, top, 3, bottom)
+        painter.drawLine(size // 2, top, size - 3, bottom)
+        painter.drawLine(3, bottom, size - 3, bottom)
+        painter.drawLine(size // 2, top + 6, size // 2, bottom - 7)
+        painter.setBrush(QColor(colour))
+        painter.drawEllipse(size // 2 - 1, bottom - 4, 2, 2)
+    elif kind == "loading":
+        painter.drawArc(3, 3, size - 6, size - 6, 40 * 16, 260 * 16)
+    else:                                    # "empty": an unfilled tile
+        painter.drawRoundedRect(4, 4, size - 8, size - 8, 3, 3)
+    painter.end()
+    return pixmap
+
+
 class NavButton(QPushButton):
     """One destination.
 
@@ -341,3 +381,44 @@ class ArtworkTile(QFrame):
 
     def mousePressEvent(self, event):
         self.picked.emit(self.art)
+
+
+# ---------------------------------------------------------------------------
+# Empty and transitional states
+# ---------------------------------------------------------------------------
+
+class EmptyState(QWidget):
+    """A small, centred composition for an otherwise blank surface.
+
+    One line of text alone in a large card reads as something that failed to
+    load; a quiet pictogram above a primary message, with an optional
+    smaller supporting line, reads as a state instead. Sized to a fraction
+    of the surface it sits in rather than filling it. Fully transparent - it
+    never needs ``WA_StyledBackground``, only its host card does.
+    """
+
+    def __init__(self, kind: str, title: str, detail: str = "", parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(T.S2)
+
+        icon = QLabel(self)
+        icon.setPixmap(state_pixmap(kind, T.C_TEXT3, 28))
+        icon.setAlignment(Qt.AlignCenter)
+        layout.addWidget(icon)
+
+        heading = QLabel(title, self)
+        heading.setObjectName("empty")
+        heading.setAlignment(Qt.AlignCenter)
+        heading.setWordWrap(True)
+        heading.setMaximumWidth(320)
+        layout.addWidget(heading)
+
+        if detail:
+            sub = QLabel(detail, self)
+            sub.setObjectName("emptyDetail")
+            sub.setAlignment(Qt.AlignCenter)
+            sub.setWordWrap(True)
+            sub.setMaximumWidth(320)
+            layout.addWidget(sub)

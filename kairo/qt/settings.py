@@ -64,7 +64,7 @@ class SettingsPane(QWidget):
                                        Q.PAD_CARD, Q.PAD_CARD)
         card_layout.setSpacing(T.S3)
         heading = QLabel("SteamGridDB API key")
-        heading.setObjectName("pane")
+        heading.setObjectName("cardHead")
         note = QLabel("Optional. Only needed for Steam game artwork — icon "
                       "themes, Iconify and your own files work without it.")
         note.setObjectName("meta")
@@ -104,8 +104,8 @@ class SettingsPane(QWidget):
         places_layout.setContentsMargins(Q.PAD_CARD, Q.PAD_CARD,
                                          Q.PAD_CARD, Q.PAD_CARD)
         places_layout.setSpacing(T.S2)
-        section = QLabel("WHERE THINGS LIVE")
-        section.setObjectName("micro")
+        section = QLabel("Where things live")
+        section.setObjectName("cardHead")
         places_layout.addWidget(section)
         for label, value in (("Settings", paths.config_file()),
                              ("Cache (safe to delete)", paths.cache_dir()),

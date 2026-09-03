@@ -132,6 +132,9 @@ FS_LOGO = 14
 FS_LOGO_MARK = 19            # 回路, set larger than the wordmark beside it
 FS_TITLE = 28
 FS_PANE = 15
+FS_CARD_HEAD = 14            # a card's own heading: below a pane title,
+                              # above its body - carried by weight and colour
+                              # more than by size. See qt/theme.py stylesheet.
 FS_ROW = 13
 FS_ROW_META = 11
 FS_BODY = 13
@@ -214,6 +217,11 @@ def stylesheet(glass=None) -> str:
     QFrame#well       {{ background: {rgba(T.C_CARD, g.card)};
                          border-radius: {R_WELL}px; }}
     QFrame#divider    {{ background: {hair}; border: none; max-height: 1px; }}
+    /* The nav's own break before Changes and Settings - the same faint
+       weight as the column's own right-hand edge, not the stronger hairline
+       a card uses to separate content it holds. It should read as the
+       column's empty space settling, not as a line drawn across it. */
+    QFrame#navDivider {{ background: {edge}; border: none; max-height: 1px; }}
 
     /* ---------- type ---------- */
     QLabel            {{ background: transparent; color: {T.C_TEXT2}; }}
@@ -228,6 +236,11 @@ def stylesheet(glass=None) -> str:
                          font-weight: {WT_SEMI}; letter-spacing: -0.4px; }}
     QLabel#pane       {{ color: {T.C_TEXT}; font-size: {FS_PANE}px;
                          font-weight: {WT_SEMI}; letter-spacing: -0.1px; }}
+    /* A card's own heading - "Emulators", "Artwork", "Where things live".
+       One size below a pane title and one weight above body text, so a card
+       reads as its own small hierarchy rather than a block of even grey. */
+    QLabel#cardHead   {{ color: {T.C_TEXT}; font-size: {FS_CARD_HEAD}px;
+                         font-weight: {WT_SEMI}; letter-spacing: -0.05px; }}
     QLabel#meta       {{ color: {T.C_TEXT3}; font-size: {FS_META}px; }}
     QLabel#subtitle   {{ color: {rgba(T.C_TEXT2, 0.62)};
                          font-size: {FS_BODY}px; }}
@@ -247,7 +260,10 @@ def stylesheet(glass=None) -> str:
                          font-size: {FS_PANE}px; font-weight: {WT_MEDIUM}; }}
     QLabel#dot        {{ color: {rgba(T.C_SUCCESS, 0.55)};
                          font-size: {FS_MICRO}px; }}
-    QLabel#empty      {{ color: {T.C_TEXT3}; font-size: {FS_BODY}px; }}
+    /* An empty state's primary line - a step brighter than #meta so it can
+       carry a message on its own, in a card with nothing else in it. */
+    QLabel#empty      {{ color: {T.C_TEXT2}; font-size: {FS_BODY}px; }}
+    QLabel#emptyDetail{{ color: {rgba(T.C_TEXT3, 0.8)}; font-size: {FS_META}px; }}
     QLabel#status     {{ color: {T.C_TEXT3}; font-size: {FS_META}px; }}
 
     /* ---------- navigation ---------- */
