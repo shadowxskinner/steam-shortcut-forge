@@ -38,6 +38,7 @@ kairo = "kairo.qt.__main__:main"
 # toolkit-free and their tests run with no GUI library installed at all.
 tk = ["customtkinter>=6.0.0", "cairosvg"]
 qt = ["PySide6>=6.6"]
+test = ["pytest>=8"]
 
 [project.urls]
 Homepage = "https://github.com/shadowxskinner/kairo"

@@ -20,4 +20,5 @@ Kairo is a Linux desktop application that discovers Steam games, registered desk
 
 ## Verification Safety
 
-- Tests use an isolated HOME and must never read or write the developer's real configuration, icon store, or applications directory.
+- Tests should use isolated HOME/XDG state where applicable and must never write to the developer's real configuration, icon store, or applications directory.
+- Some system-detection tests remain environment-sensitive because they can observe real installed desktop applications.

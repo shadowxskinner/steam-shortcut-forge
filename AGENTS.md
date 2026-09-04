@@ -1,68 +1,46 @@
-# Shared Agent Protocol
+# Kairo Agent Guide
 
-## Evidence
+## Evidence and scope
 
-- Prefer direct executed behavior for runtime claims.
-- Use relevant tests, source code, Git history, and verified context as supporting evidence appropriate to the claim.
-- A stale or unexecuted test is not proof that current behavior works.
-- Never claim reproduced, tested, fixed, working, supported, broken, or safe unless evidence supports that exact statement.
-- Use labels when useful: REPRODUCED, VERIFIED FROM TEST, VERIFIED FROM CODE, INFERRED FROM CODE, USER REPORTED.
-- Attribute another agent's evidence, for example: `REPRODUCED (by local Codex): ...`. Never present another agent's run as your own.
-- Do not infer capability, success, failure, ownership, compatibility, or correctness from the presence or absence of an artifact alone. Verify behavior directly and distinguish observation from inference.
+- The human request and acceptance criteria define what **SHOULD** happen; executed behavior and source evidence define what **DOES** happen.
+- Distinguish verified facts, inference, and user reports. A test, config, or file is not proof that current behavior works unless the relevant behavior is executed.
+- Attribute another agent's evidence; never present another agent's run as your own.
+- Inspect affected code and authoritative documentation before editing. Keep changes scoped and avoid unrelated refactors.
+- If a material requirement remains ambiguous, ask the human instead of inventing behavior.
+- Report exact verification performed, what was not verified, and every changed file.
 
-## SHOULD and DOES
+## Project map
 
-- The current human task and acceptance criteria define what SHOULD happen.
-- Executed behavior and source evidence define what DOES happen.
-- Do not blur SHOULD and DOES. If a material requirement is ambiguous, ask the human instead of inventing behavior.
+- `README.md` — product overview, supported install paths, architecture summary, and current development commands.
+- `kairo/__main__.py` and `kairo/ui/` — default CustomTkinter entry point and frontend.
+- `kairo/qt/__main__.py` and `kairo/qt/` — Qt entry point and frontend; see `docs/runbooks/qt-development.md`.
+- `kairo/providers/` and `kairo/artwork/` — application discovery and artwork sources.
+- `kairo/actions.py`, `adoption.py`, `ledger.py`, `migration.py`, `matching.py`, and `paths.py` — launcher-changing core and migration boundaries.
+- `tests/` — pytest suite; use isolated HOME/XDG fixtures where applicable and account for documented environment-sensitive detection tests.
+- `pyproject.toml` — Python packaging and dependencies. `PKGBUILD` and `.SRCINFO` — Arch packaging.
+- `release.sh` — release/publish automation, not a routine verification command.
+- `.ai/context.md` — concise durable safety and compatibility constraints; read it before project claims or changes.
+- `docs/system-icons-spec.md` — detailed system-application design. `docs/archive/` contains historical records, not current instructions.
 
-## Roles
+## Durable safety constraints
 
-- **IMPLEMENTER:** May edit only within the requested scope and must not silently change roles.
-- **IMPLEMENTER:** Uses a task branch for meaningful changes and does not work directly on `main`.
-- **IMPLEMENTER:** Performs relevant verification and reports exact changed files plus what was and was not tested.
-- **REVIEWER:** Starts read-only and does not silently repair findings.
-- **REVIEWER:** Reports evidence-based issues, distinguishes blocking from non-blocking, and suppresses style noise unless requested.
-- **HUMAN:** Resolves unclear requirements and evidence-based disputes the agents cannot close.
+- Launcher changes stay user-level; never edit system or vendor desktop files.
+- Authority to overwrite, restore, or delete comes from ownership markers in the live launcher, not filenames or history alone.
+- Preserve legacy ownership compatibility and downgrade paths; ambiguous, foreign, malformed, or unreadable entries remain untouched.
+- Resetting artwork and deleting a generated launcher are separate operations.
+- Tests should use isolated HOME/XDG state where applicable. Some system-detection tests remain environment-sensitive because they can observe real installed desktop applications.
+- Tests must never write to the developer's real config, icons, or application entries.
 
-## Review severity
+## Workflow and verification
 
-- **BLOCKING:** A concrete correctness defect, security issue, data-loss risk, requirement violation, or meaningful regression.
-- A blocking finding states location, triggering condition, expected behavior, actual behavior, and evidence.
-- **NON-BLOCKING:** A concrete maintainability or testability issue.
-- **STYLE:** Suppress unless explicitly requested.
+- Use a task branch for meaningful changes. Do not force-push or rewrite shared history; stage intended paths deliberately, and leave merging to the human.
+- Run relevant focused tests, then the documented full suite when a change can affect shared behavior.
+- Never invoke `release.sh` without explicit release authorization: it commits, pushes, tags, updates checksums, and publishes repository state.
+- A contradiction between implementation and `.ai/context.md` is BLOCKING and must be resolved in the same change.
 
-## Scope discipline
+## Review and secrets
 
-- Do not broaden a task merely because adjacent improvements are visible.
-- Report useful unrelated findings separately; do not silently turn a focused change into a multi-component refactor.
-
-## Git safety
-
-- Use one branch per meaningful task; do not work directly on `main`.
-- Do not force-push or rewrite shared history.
-- Stage intended paths deliberately and prefer small, coherent commits.
-- The human controls merge.
-- Do not create worktrees by default; use them only when real concurrent work justifies them.
-
-## Shared durable context
-
-- Read `.ai/context.md` before making project claims.
-- It contains only stable, verified project facts: no secrets, transient Git/task state, or agent chatter.
-- Keep it small.
-- If a code change makes it false, update it in the same change. A contradiction between code and durable context is BLOCKING.
-
-## Handoffs
-
-- Do not create a permanent handoff file in Phase 1.
-- Pass work with four fields: TASK + ACCEPTANCE; SUMMARY; VERIFICATION; RISK / REVIEW FOCUS.
-
-## Disagreement
-
-- A reviewer reports evidence; an implementer may reject a finding with equal or stronger evidence.
-- If evidence does not resolve the dispute, ask the human and stop looping. Propose `decisions.md` later only if durable decisions accumulate.
-
-## Secrets
-
-- Never commit API keys, bot tokens, auth tokens, credentials, private keys, or secret environment contents.
-- Never paste secrets into shared context, handoffs, or review reports.
+- Reviewers start read-only and do not silently repair findings. Report evidence-based issues and suppress style-only noise unless requested.
+- A BLOCKING finding is a concrete correctness defect, security issue, data-loss risk, requirement violation, or meaningful regression. State its location, trigger, expected behavior, actual behavior, and evidence.
+- A NON-BLOCKING finding is a concrete maintainability or testability issue.
+- Never commit or report API keys, tokens, credentials, private keys, or secret environment contents.

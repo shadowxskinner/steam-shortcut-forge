@@ -107,7 +107,7 @@ Upgrading from `steam-shortcut-forge` replaces it automatically.
 git clone https://github.com/shadowxskinner/kairo.git
 cd kairo
 python -m venv .venv && source .venv/bin/activate
-pip install -e .
+pip install -e ".[tk]"
 kairo
 ```
 
@@ -156,9 +156,22 @@ is an added file rather than a rewrite:
 A dedicated Flatpak or AppImage provider would add richer metadata, not new
 coverage — both are already found by `DesktopEntryProvider`.
 
+## Development and verification
+
+Create an isolated environment and install the core package, Qt dependency used
+by the headless Qt tests, and the test tools:
+
 ```bash
-python -m pytest      # tests run against a fixture HOME, never your desktop
+python -m venv .venv
+.venv/bin/python -m pip install -e ".[qt,test]"
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -m pytest
 ```
+
+Tests should use isolated HOME/XDG state where applicable and must never write to
+your real config, icons, or launcher entries. Some system-detection tests remain
+environment-sensitive because they can observe real installed desktop
+applications. For Qt development, use the setup and verification commands
+in [`docs/runbooks/qt-development.md`](docs/runbooks/qt-development.md).
 
 ## License
 

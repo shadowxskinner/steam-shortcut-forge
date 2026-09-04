@@ -1,4 +1,9 @@
-# Kairo — Qt shell milestone
+# Kairo — Qt shell milestone (historical)
+
+> This is a preserved implementation record, not current setup or verification
+> guidance. Paths, fixed test counts, comparisons, and open questions below
+> describe that milestone. Use the root README and
+> `docs/runbooks/qt-development.md` for current commands.
 
 A second frontend over the unchanged backend. The CustomTkinter shell still
 runs and is still the default; this one exists to be looked at side by side.
