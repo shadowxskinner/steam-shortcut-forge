@@ -45,3 +45,10 @@
 - A BLOCKING finding is a concrete correctness defect, security issue, data-loss risk, requirement violation, or meaningful regression. State its location, trigger, expected behavior, actual behavior, and evidence.
 - A NON-BLOCKING finding is a concrete maintainability or testability issue.
 - Never commit or report API keys, tokens, credentials, private keys, or secret environment contents.
+
+## Commits and pushing
+
+- Commit freely, without asking. Small, coherent commits on a branch are the
+  rollback path, and creating one is not a decision that needs approval.
+- **Never push without explicit permission, every time.** Pushing is publishing.
+  Approval for one push is not approval for the next.
