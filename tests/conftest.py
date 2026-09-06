@@ -158,8 +158,7 @@ def qt_app():
     import os
     from PySide6.QtWidgets import QApplication
 
-    if not os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("DISPLAY"):
-        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     return QApplication.instance() or QApplication([])
 
 
