@@ -94,6 +94,9 @@ def test_a_conventional_rom_folder_is_found(monkeypatch, tmp_path):
     roms.mkdir(parents=True)
     (roms / "Some Game.rvz").write_bytes(b"")
     monkeypatch.setattr(systems, "ROM_ROOTS", (str(tmp_path / "Emulation/roms"),))
+    # A real Dolphin.ini may name a live ROM collection first. This case is
+    # about the conventional folder, so isolate the emulator-config source.
+    monkeypatch.setattr(systems, "from_emulator_config", lambda _system: [])
     assert systems.find_roms(systems.by_id("gamecube")) == str(roms)
 
 
@@ -101,6 +104,9 @@ def test_an_empty_folder_is_not_offered(monkeypatch, tmp_path):
     """A directory that exists but holds no games is not a find."""
     (tmp_path / "Emulation" / "roms" / "gc").mkdir(parents=True)
     monkeypatch.setattr(systems, "ROM_ROOTS", (str(tmp_path / "Emulation/roms"),))
+    # A real Dolphin.ini may name a live ROM collection first. This case is
+    # about the conventional folder, so isolate the emulator-config source.
+    monkeypatch.setattr(systems, "from_emulator_config", lambda _system: [])
     assert systems.find_roms(systems.by_id("gamecube")) == ""
 
 
