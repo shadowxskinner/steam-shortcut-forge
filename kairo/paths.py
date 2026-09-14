@@ -78,6 +78,16 @@ def icon_store() -> Path:
     return data_dir() / "icons"
 
 
+def hero_store() -> Path:
+    """Where landscape heroes are copied so ``X-KairoHero`` stays local.
+
+    Gamebar reads the absolute path later. A URL or a file in Pictures would
+    die the day the network or the folder did; a private copy keeps the
+    launcher self-contained, the same way ``icon_store`` does for ``Icon=``.
+    """
+    return data_dir() / "heroes"
+
+
 def applications_dir() -> Path:
     """The only directory Kairo ever writes launcher entries into."""
     return data_home() / "applications"

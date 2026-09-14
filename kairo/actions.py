@@ -118,6 +118,52 @@ def fetch_and_apply(
                       refresh=refresh, save_ledger=save_ledger)
 
 
+def apply_hero(entry: AppEntry, provider, hero_src: Path, *,
+               refresh: bool = True) -> Path:
+    """Apply landscape hero artwork. Does not record an icon change."""
+    stored = provider.writer().apply_hero(entry, hero_src)
+    if refresh:
+        database.refresh()
+    return stored
+
+
+def fetch_and_apply_hero(
+    entry: AppEntry,
+    provider,
+    source,
+    art: Artwork,
+    *,
+    token: CancelToken | None = None,
+    refresh: bool = True,
+) -> Path:
+    """Download a hero and write ``X-KairoHero``. Cancellation is checked between."""
+    if token is not None:
+        token.check()
+    from kairo import paths
+    stem = paths.icon_stem(entry.provider_id, entry.local_id, art.id)
+    hero_path = source.fetch(art, paths.hero_store(), stem)
+    if token is not None:
+        try:
+            token.check()
+        except BaseException:
+            from kairo.housekeeping import is_referenced_hero
+            if not is_referenced_hero(hero_path):
+                hero_path.unlink(missing_ok=True)
+            raise
+    return apply_hero(entry, provider, hero_path, refresh=refresh)
+
+
+def remove_hero(entry: AppEntry, provider, *, refresh: bool = True) -> None:
+    """Remove only the hero. The launcher and its icon stay."""
+    writer = provider.writer()
+    allowed, reason = writer.can_remove_hero(entry)
+    if not allowed:
+        raise ValueError(reason)
+    writer.remove_hero(entry)
+    if refresh:
+        database.refresh()
+
+
 # ---------------------------------------------------------------------------
 # Restore
 # ---------------------------------------------------------------------------

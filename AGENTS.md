@@ -15,7 +15,7 @@
 - `README-QT.md` — Qt frontend runbook (shipping UI, launch flags, verification).
 - `kairo/qt/__main__.py` and `kairo/qt/` — Qt entry point and frontend.
 - `kairo/__main__.py` and `kairo/ui/` — legacy CustomTkinter entry point and frontend; Qt does not import it.
-- `kairo/providers/` and `kairo/artwork/` — application discovery and artwork sources.
+- `kairo/providers/` and `kairo/artwork/` — application discovery and artwork sources. Landscape heroes live beside icons in SteamGridDB and are stored under `paths.hero_store()`.
 - `kairo/actions.py`, `adoption.py`, `ledger.py`, `migration.py`, `matching.py`, and `paths.py` — launcher-changing core and migration boundaries.
 - `tests/` — pytest suite; use isolated HOME/XDG fixtures where applicable and account for documented environment-sensitive detection tests.
 - `pyproject.toml` — Python packaging and dependencies. `PKGBUILD` and `.SRCINFO` — Arch packaging.

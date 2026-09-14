@@ -9,6 +9,8 @@ from kairo.models import AppEntry, ArtQuery
 
 #: Formats a launcher will actually render.
 VALID_ICON_EXTS = {".ico", ".png", ".svg", ".xpm"}
+#: Landscape heroes are stored as downloaded; Gamebar reads the file itself.
+VALID_HERO_EXTS = {".ico", ".png", ".svg", ".xpm", ".jpg", ".jpeg", ".webp"}
 
 
 class LauncherWriter(ABC):
@@ -45,6 +47,17 @@ class LauncherWriter(ABC):
 
     def remove(self, entry: AppEntry) -> None:
         raise NotImplementedError
+
+    def apply_hero(self, entry: AppEntry, hero_src: Path) -> Path:
+        """Store a landscape hero and write ``X-KairoHero``. Returns the path."""
+        raise NotImplementedError
+
+    def remove_hero(self, entry: AppEntry) -> None:
+        """Drop ``X-KairoHero`` and an unreferenced Kairo-owned hero file."""
+        raise NotImplementedError
+
+    def can_remove_hero(self, entry: AppEntry) -> tuple[bool, str]:
+        return False, "There is no hero artwork to remove."
 
     @abstractmethod
     def target(self, entry: AppEntry) -> Path:

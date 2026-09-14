@@ -92,8 +92,8 @@ def _looks_svg(data: bytes) -> bool:
     return head.startswith((b"<svg", b"<?xml"))
 
 
-def _render_svg_image(data: bytes, size: int):
-    """Render an SVG into a square box without distorting it.
+def _render_svg_image(data: bytes, width: int, height: int | None = None):
+    """Render an SVG into a box without distorting it.
 
     ``QSvgRenderer.render(painter)`` fills whatever rectangle it is given,
     so handing it a square stretched every icon whose viewBox is not square
@@ -106,20 +106,21 @@ def _render_svg_image(data: bytes, size: int):
         return None
     from PySide6.QtGui import QPainter
 
+    box_h = width if height is None else height
     renderer = QSvgRenderer(data)
     if not renderer.isValid():
         return None
-    image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+    image = QImage(width, box_h, QImage.Format_ARGB32_Premultiplied)
     image.fill(Qt.transparent)
     painter = QPainter(image)
     native = renderer.defaultSize()
     if native.width() > 0 and native.height() > 0:
-        scale = min(size / native.width(), size / native.height())
-        width = native.width() * scale
-        height = native.height() * scale
-        renderer.render(painter, QRectF((size - width) / 2.0,
-                                        (size - height) / 2.0,
-                                        width, height))
+        scale = min(width / native.width(), box_h / native.height())
+        fitted_w = native.width() * scale
+        fitted_h = native.height() * scale
+        renderer.render(painter, QRectF((width - fitted_w) / 2.0,
+                                        (box_h - fitted_h) / 2.0,
+                                        fitted_w, fitted_h))
     else:
         # No intrinsic size to preserve; filling the box is all there is.
         renderer.render(painter)
@@ -211,7 +212,7 @@ def _key(size: int, path, data):
 
 
 def prepare(size: int, *, path=None, data: bytes | None = None,
-            min_edge: int = 0, ratio: float = 1.0):
+            min_edge: int = 0, ratio: float = 1.0, height: int | None = None):
     """Decode and fit an image as a worker-safe :class:`QImage`.
 
     ``size`` is logical points and ``ratio`` the device pixel ratio of the
@@ -229,11 +230,15 @@ def prepare(size: int, *, path=None, data: bytes | None = None,
     The ratio belongs in the key. Without it the first screen to ask for an
     icon answers for every other one, which is the ordinary case on a desk
     with a laptop panel and an external display, not a corner case.
+
+    ``height`` fits a landscape box instead of a square. Heroes are wide
+    banners; scaling them into a square tile is what made them look cropped.
     """
     scale = max(1.0, float(ratio))
-    pixels = int(round(size * scale))
-    key = _key(pixels, path, data)
-    prepared_key = (*key, min_edge, scale) if key is not None else None
+    pixels_w = int(round(size * scale))
+    pixels_h = int(round((size if height is None else height) * scale))
+    key = _key(pixels_w, path, data)
+    prepared_key = (*key, pixels_h, min_edge, scale) if key is not None else None
     if prepared_key is not None:
         with _IMAGE_CACHE_LOCK:
             cached = _IMAGE_CACHE.get(prepared_key)
@@ -251,7 +256,7 @@ def prepare(size: int, *, path=None, data: bytes | None = None,
             return None
 
         if _looks_svg(data):
-            image = _render_svg_image(data, pixels)
+            image = _render_svg_image(data, pixels_w, pixels_h)
         else:
             image = _image_from_data(data)
             # The floor is about the pixels that arrived in the file, so it
@@ -262,7 +267,7 @@ def prepare(size: int, *, path=None, data: bytes | None = None,
                 if min(image.width(), image.height()) < min_edge:
                     return None
             if image is not None and not image.isNull():
-                image = image.scaled(pixels, pixels, Qt.KeepAspectRatio,
+                image = image.scaled(pixels_w, pixels_h, Qt.KeepAspectRatio,
                                      Qt.SmoothTransformation)
     except Exception:
         return None
@@ -285,7 +290,7 @@ def prepare(size: int, *, path=None, data: bytes | None = None,
 
 
 def load(size: int, *, path=None, data: bytes | None = None,
-         ratio: float = 1.0):
+         ratio: float = 1.0, height: int | None = None):
     """A pixmap fitted to ``size`` logical points, or None.
 
     ``ratio`` is the device pixel ratio of the screen the pixmap is bound
@@ -295,16 +300,17 @@ def load(size: int, *, path=None, data: bytes | None = None,
     for that reason alone, with no blurry source file involved.
     """
     scale = max(1.0, float(ratio))
-    pixels = int(round(size * scale))
+    pixels_w = int(round(size * scale))
+    pixels_h = int(round((size if height is None else height) * scale))
 
-    key = _key(pixels, path, data)
+    key = _key(pixels_w, path, data)
     if key is not None:
-        key = (*key, scale)
+        key = (*key, pixels_h, scale)
     if key is not None and key in _CACHE:
         _CACHE.move_to_end(key)
         return _CACHE[key]
 
-    image = prepare(size, path=path, data=data, ratio=scale)
+    image = prepare(size, path=path, data=data, ratio=scale, height=height)
     pixmap = QPixmap.fromImage(image) if image is not None else None
 
     if pixmap is None or pixmap.isNull():

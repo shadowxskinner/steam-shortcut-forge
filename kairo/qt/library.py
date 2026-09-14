@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout,
 
 from kairo import actions, appsource
 from kairo.artwork.local import SOURCE_ID as LOCAL_SOURCE_ID
+from kairo.artwork.steamgriddb import SOURCE_ID as SGDB_SOURCE_ID
+from kairo.desktop import entry as de
 
 from kairo.qt import images
 from kairo.qt import theme as Q
@@ -74,6 +76,12 @@ def usable_edge(ratio: float) -> int:
     Never upscale: require at least as many real pixels as will be drawn.
     """
     target = int(round((Q.TILE - 12) * max(1.0, float(ratio))))
+    return max(MIN_USABLE_EDGE, target)
+
+
+def usable_hero_edge(ratio: float) -> int:
+    """Native-pixel floor for a landscape tile at this screen ratio."""
+    target = int(round((Q.HERO_TILE_H - 12) * max(1.0, float(ratio))))
     return max(MIN_USABLE_EDGE, target)
 
 
@@ -141,6 +149,8 @@ class LibraryPane(QWidget):
         self._source_counts = {}
         self._restore_full_label = ""
         self._remove_full_label = ""
+        self._artwork_kind = "icon"
+        self._actions_busy = False
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -350,6 +360,9 @@ class LibraryPane(QWidget):
         heading.setObjectName("micro")
         row.addWidget(heading, 0, Qt.AlignVCenter)
         row.addSpacing(T.S1)
+        self.kind_pills = Pills(["Icon", "Hero"])
+        self.kind_pills.changed.connect(self._set_artwork_kind)
+        row.addWidget(self.kind_pills, 0, Qt.AlignVCenter)
         row.addStretch(1)
         self._seeded = ""
         self._heading = ("", "")
@@ -393,8 +406,12 @@ class LibraryPane(QWidget):
         self.remove_btn.setObjectName("danger")
         self.apply_btn = QPushButton("Apply")
         self.apply_btn.setObjectName("primary")
+        self.remove_hero_btn = QPushButton("Remove Hero")
+        self.remove_hero_btn.setObjectName("secondary")
+        self.apply_hero_btn = QPushButton("Apply Hero")
+        self.apply_hero_btn.setObjectName("primary")
         for button in (self.browse_btn, self.restore_btn, self.remove_btn,
-                       self.apply_btn):
+                       self.apply_btn, self.remove_hero_btn, self.apply_hero_btn):
             button.setFixedHeight(Q.H_BUTTON)
             # A QHBoxLayout will squeeze a button below its own size hint
             # before it gives up any stretch, and a QPushButton clips its
@@ -405,13 +422,21 @@ class LibraryPane(QWidget):
         self.restore_btn.clicked.connect(lambda _c: self._restore())
         self.remove_btn.clicked.connect(lambda _c: self._remove())
         self.apply_btn.clicked.connect(lambda _c: self._apply())
+        self.remove_hero_btn.clicked.connect(lambda _c: self._remove_hero())
+        self.apply_hero_btn.clicked.connect(lambda _c: self._apply_hero())
         # Apply needs something to apply; the rest need a selected entry.
         self.apply_btn.setEnabled(False)
+        self.apply_hero_btn.setEnabled(False)
+        self.remove_hero_btn.setEnabled(False)
+        self.remove_hero_btn.hide()
+        self.apply_hero_btn.hide()
         row.addWidget(self.browse_btn)
         row.addWidget(self.restore_btn)
         row.addWidget(self.remove_btn)
+        row.addWidget(self.remove_hero_btn)
         row.addStretch(1)
         row.addWidget(self.apply_btn)
+        row.addWidget(self.apply_hero_btn)
         return row
 
     def set_layout_mode(self, mode: str) -> None:
@@ -464,7 +489,7 @@ class LibraryPane(QWidget):
 
     def _action_buttons(self):
         return (self.browse_btn, self.restore_btn, self.remove_btn,
-                self.apply_btn)
+                self.remove_hero_btn, self.apply_btn, self.apply_hero_btn)
 
     def _actions_fit(self) -> bool:
         """Whether the four buttons fit the row they are actually in.
@@ -498,19 +523,27 @@ class LibraryPane(QWidget):
             self.browse_btn.setText("Browse local file…")
             self.restore_btn.setText(restore)
             self.remove_btn.setText(remove)
+            self.apply_hero_btn.setText("Apply Hero")
+            self.remove_hero_btn.setText("Remove Hero")
         elif tier == 1:
             self.browse_btn.setText("Local file…")
             self.restore_btn.setText(self._short_action_label(restore))
             self.remove_btn.setText(self._short_action_label(remove))
+            self.apply_hero_btn.setText("Apply Hero")
+            self.remove_hero_btn.setText("Remove Hero")
         else:
             self.browse_btn.setText("File…")
             self.restore_btn.setText(self._short_action_label(restore))
             self.remove_btn.setText(self._short_action_label(remove))
+            self.apply_hero_btn.setText("Apply")
+            self.remove_hero_btn.setText("Remove")
         # The writer's own wording is always readable, whichever tier is on
         # screen. Shortening is presentation; the verb is the writer's.
         self.browse_btn.setToolTip("" if tier == 0 else "Browse local file…")
         self.restore_btn.setToolTip("" if tier == 0 else restore)
         self.remove_btn.setToolTip("" if tier == 0 else remove)
+        self.apply_hero_btn.setToolTip("" if tier < 2 else "Apply Hero")
+        self.remove_hero_btn.setToolTip("" if tier < 2 else "Remove Hero")
 
     def _refresh_action_labels(self) -> None:
         start = 0 if self._layout_mode == "wide" else 1
@@ -558,6 +591,65 @@ class LibraryPane(QWidget):
         if supports_remove:
             self._remove_full_label = writer.remove_label
         self._refresh_action_labels()
+        self._sync_kind_chrome()
+
+    def _hero_capable(self) -> bool:
+        source = self.ctx.sources.get(SGDB_SOURCE_ID)
+        return source is not None and source.supports(self.provider.id)
+
+    def _set_artwork_kind(self, label: str) -> None:
+        kind = "hero" if label == "Hero" else "icon"
+        if kind == self._artwork_kind:
+            return
+        self._artwork_kind = kind
+        self._fit_proposal_well()
+        self._sync_kind_chrome()
+        self._clear_proposal()
+        if self.selected is not None:
+            self._load_artwork()
+
+    def _fit_proposal_well(self) -> None:
+        if self._artwork_kind == "hero":
+            self.proposed_well.set_box(Q.HERO_WELL, Q.HERO_WELL_H)
+        else:
+            self.proposed_well.set_box(Q.WELL_COMPARE)
+
+    def _has_hero(self) -> bool:
+        if self.selected is None:
+            return False
+        try:
+            writer = self.provider.writer()
+            target = (writer.existing(self.selected.entry)
+                      if hasattr(writer, "existing")
+                      else writer.target(self.selected.entry))
+            if target is None or not target.is_file():
+                return False
+            value = de.read_entry_value(target, de.HERO_KEY)
+            return value.startswith("/") and "://" not in value
+        except Exception:
+            return False
+
+    def _sync_kind_chrome(self) -> None:
+        """Icon keeps today's actions; Hero swaps in its own pair."""
+        capable = self._hero_capable()
+        hero = self._artwork_kind == "hero" and capable
+        if not capable:
+            self._artwork_kind = "icon"
+            hero = False
+        self.kind_pills.setVisible(capable)
+        for button in (self.browse_btn, self.restore_btn, self.apply_btn):
+            button.setVisible(not hero)
+        try:
+            supports_remove = bool(self.provider.writer().supports_remove)
+        except Exception:
+            supports_remove = False
+        self.remove_btn.setVisible(not hero and supports_remove)
+        self.apply_hero_btn.setVisible(hero)
+        self.remove_hero_btn.setVisible(hero)
+        if not self._actions_busy:
+            self.apply_btn.setEnabled(not hero and self.proposed is not None)
+            self.apply_hero_btn.setEnabled(hero and self.proposed is not None)
+            self.remove_hero_btn.setEnabled(hero and self._has_hero())
 
     # -- writing -----------------------------------------------------------
     #
@@ -567,22 +659,22 @@ class LibraryPane(QWidget):
     # the writer does, and it raises with a reason when it is not.
 
     def _busy(self, busy: bool, verb: str = "") -> None:
-        for button in (self.browse_btn, self.restore_btn, self.remove_btn,
-                       self.apply_btn):
+        self._actions_busy = busy
+        for button in self._action_buttons():
             button.setEnabled(not busy)
+        if not busy:
+            self._sync_kind_chrome()
         if busy and verb:
             self.proposal.setText(f"{verb}…")
 
     def _finished(self, message: str) -> None:
         self._busy(False)
         self.proposal.setText(message)
-        self.apply_btn.setEnabled(self.proposed is not None)
         self.rescan()
         self.changed.emit()
 
     def _failed(self, message: str) -> None:
         self._busy(False)
-        self.apply_btn.setEnabled(self.proposed is not None)
         self.proposal.setText(message)
 
     def _apply(self) -> None:
@@ -657,6 +749,40 @@ class LibraryPane(QWidget):
             return
         art = source.artwork_for(Path(path))
         self._propose(art)
+
+    def _apply_hero(self) -> None:
+        if self.selected is None or self.proposed is None:
+            return
+        entry, art = self.selected.entry, self.proposed
+        source = self.ctx.sources.get(art.source_id)
+        if source is None:
+            self._failed("that artwork's source is no longer available")
+            return
+        token = self.tokens.start(ACTIVITY_APPLY)
+        self._busy(True, "Applying hero")
+
+        def run():
+            return actions.fetch_and_apply_hero(
+                entry, self.provider, source, art, token=token)
+
+        work.submit(run,
+                    on_done=lambda _path: self._finished(
+                        f"hero applied to {entry.name}"),
+                    on_failed=self._failed)
+
+    def _remove_hero(self) -> None:
+        if self.selected is None:
+            return
+        entry = self.selected.entry
+        self._busy(True, "Removing hero")
+
+        def run():
+            actions.remove_hero(entry, self.provider)
+
+        work.submit(run,
+                    on_done=lambda _r: self._finished(
+                        f"hero removed from {entry.name}"),
+                    on_failed=self._failed)
 
     # -- entries -----------------------------------------------------------
 
@@ -1040,11 +1166,14 @@ class LibraryPane(QWidget):
         """
         if raw is None:
             return
-        size = Q.WELL_COMPARE - 12
+        if getattr(self, "_artwork_kind", "icon") == "hero":
+            size, height = Q.HERO_WELL - 12, Q.HERO_WELL_H - 12
+        else:
+            size, height = Q.WELL_COMPARE - 12, None
         ratio = self.devicePixelRatioF()
 
         def render():
-            return images.prepare(size, data=raw, ratio=ratio)
+            return images.prepare(size, data=raw, height=height, ratio=ratio)
 
         def arrived(image):
             if self.proposed is art:
@@ -1224,6 +1353,9 @@ class LibraryPane(QWidget):
         if self.selected is None:
             return
         entry = self.selected.entry
+        if self._artwork_kind == "hero":
+            self._load_heroes(entry, token)
+            return
         sources = self.sources()
         if not sources:
             self._grid_note("No online source has artwork for this one.")
@@ -1288,6 +1420,61 @@ class LibraryPane(QWidget):
 
         work.submit(search, on_done=arrived, on_failed=failed)
 
+    def _load_heroes(self, entry, token) -> None:
+        source = self.ctx.sources.get(SGDB_SOURCE_ID)
+        if source is None or not source.supports(self.provider.id):
+            self._grid_note("Hero artwork is for Steam and emulator games.")
+            return
+        if not source.available(self.ctx.config):
+            self._grid_note(source.unavailable_reason(self.ctx.config))
+            return
+
+        base = self.provider.artwork_query(entry)
+        typed = self.query.text().strip()
+        self._grid_note("Looking for heroes…")
+        key = entry.key
+
+        def search():
+            query = query_for(source, base, typed, self._seeded)
+            if query is None:
+                return [], 0, 0
+            try:
+                found = [(art, source) for art in source.find_heroes(query)]
+                return found, 0, 1
+            except Exception:
+                return [], 1, 1
+
+        def arrived(outcome):
+            results, failures, asked = outcome
+            if token.cancelled or self.selected is None:
+                return
+            if self.selected.entry.key != key:
+                return
+            self._clear_grid()
+            if not results:
+                if asked and failures == asked:
+                    self._grid_note("Could not reach SteamGridDB.\n"
+                                    "Check your connection and try again.")
+                else:
+                    self._grid_note(f"No landscape heroes for {entry.name}.")
+                return
+            self._set_heading(self._heading[0],
+                              f"{len(results)} hero options")
+            arts = [art for art, _source in results]
+            self._build_tiles(arts, [src.label for _art, src in results],
+                              landscape=True)
+            # Best-ranked result is the automatic proposal. Writing it still
+            # waits for Apply Hero.
+            self._propose(arts[0])
+            self._stream_previews(results, token, key)
+
+        def failed(message):
+            if token.cancelled:
+                return
+            self._grid_note(str(message))
+
+        work.submit(search, on_done=arrived, on_failed=failed)
+
     def _columns(self) -> int:
         """How many whole tiles fit across the artwork viewport.
 
@@ -1306,10 +1493,15 @@ class LibraryPane(QWidget):
         spacing = max(0, self.grid.horizontalSpacing())
         usable = (self.grid_scroll.viewport().width()
                   - margins.left() - margins.right())
-        pitch = ArtworkTile.WIDTH + spacing
+        # `_columns` is unit-tested on a SimpleNamespace that has no methods,
+        # so the tile width is read from an attribute with an icon default.
+        tile_w = (ArtworkTile.HERO_WIDTH
+                  if getattr(self, "_artwork_kind", "icon") == "hero"
+                  else ArtworkTile.WIDTH)
+        pitch = tile_w + spacing
         return max(1, (usable + spacing) // pitch)
 
-    def _build_tiles(self, results, origins=None) -> None:
+    def _build_tiles(self, results, origins=None, *, landscape: bool = False) -> None:
         self.grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         columns = self._columns()
         # Previews arrive by their index in `results`, and tiles get dropped
@@ -1319,7 +1511,8 @@ class LibraryPane(QWidget):
         self._tile_at = {}
         for index, art in enumerate(results):
             origin = origins[index] if origins and index < len(origins) else ""
-            tile = ArtworkTile(art, self.grid_holder, origin=origin)
+            tile = ArtworkTile(art, self.grid_holder, origin=origin,
+                               landscape=landscape)
             tile.picked.connect(self._propose)
             self.grid.addWidget(tile, index // columns, index % columns)
             self.tiles.append(tile)
@@ -1336,6 +1529,7 @@ class LibraryPane(QWidget):
         self._streamer = streamer
         ratio = self.devicePixelRatioF()
         generation = self._preview_generation
+        landscape = self._artwork_kind == "hero"
 
         def pump():
             batch = []
@@ -1355,9 +1549,16 @@ class LibraryPane(QWidget):
                 raw = None
                 try:
                     raw = source.preview(art)
-                    data = images.prepare(Q.TILE - 12, data=raw,
-                                          min_edge=usable_edge(ratio),
-                                          ratio=ratio)
+                    if landscape:
+                        data = images.prepare(
+                            Q.HERO_TILE - 12, data=raw,
+                            height=Q.HERO_TILE_H - 12,
+                            min_edge=usable_hero_edge(ratio),
+                            ratio=ratio)
+                    else:
+                        data = images.prepare(Q.TILE - 12, data=raw,
+                                              min_edge=usable_edge(ratio),
+                                              ratio=ratio)
                 except Exception:
                     data = None         # say so, rather than leaving a blank
                     raw = None
@@ -1437,6 +1638,7 @@ class LibraryPane(QWidget):
         generation = self._preview_generation
         ratio = self._paint_ratio
         paint_token = self._paint_token
+        landscape = getattr(self, "_artwork_kind", "icon") == "hero"
         if not pending or paint_token is None or paint_token.cancelled:
             return
 
@@ -1445,9 +1647,16 @@ class LibraryPane(QWidget):
             for index, raw in pending:
                 if token.cancelled or paint_token.cancelled:
                     return []
-                image = images.prepare(Q.TILE - 12, data=raw,
-                                       min_edge=usable_edge(ratio),
-                                       ratio=ratio)
+                if landscape:
+                    image = images.prepare(
+                        Q.HERO_TILE - 12, data=raw,
+                        height=Q.HERO_TILE_H - 12,
+                        min_edge=usable_hero_edge(ratio),
+                        ratio=ratio)
+                else:
+                    image = images.prepare(Q.TILE - 12, data=raw,
+                                           min_edge=usable_edge(ratio),
+                                           ratio=ratio)
                 batch.append((index, image, raw))
             return batch
 
@@ -1563,6 +1772,9 @@ class LibraryPane(QWidget):
         # Nothing proposed, nothing to apply — including when the tile that
         # was chosen has just been dropped for being too small.
         self.apply_btn.setEnabled(False)
+        hero_btn = getattr(self, "apply_hero_btn", None)
+        if hero_btn is not None:
+            hero_btn.setEnabled(False)
 
     def _propose(self, art) -> None:
         if self.selected is None:
@@ -1576,7 +1788,11 @@ class LibraryPane(QWidget):
                 break
         label = art.label or art.name or "selected artwork"
         self.proposal.setText(f"{label}  ·  ready to apply")
-        self.apply_btn.setEnabled(True)
+        if self._artwork_kind == "hero":
+            if getattr(self, "apply_hero_btn", None) is not None:
+                self.apply_hero_btn.setEnabled(True)
+        else:
+            self.apply_btn.setEnabled(True)
 
         # The grid already downloaded, decoded and scaled this artwork to
         # draw the tile. Asking the source for it again was a second fetch of

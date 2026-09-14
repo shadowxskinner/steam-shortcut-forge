@@ -361,13 +361,15 @@ class NavButton(QPushButton):
 # ---------------------------------------------------------------------------
 
 class IconWell(QFrame):
-    """A fixed square showing artwork, or a placeholder when there is none."""
+    """A fixed box showing artwork, or a placeholder when there is none."""
 
-    def __init__(self, size: int = 48, parent=None):
+    def __init__(self, size: int = 48, parent=None, *, height: int | None = None):
         super().__init__(parent)
         self.setObjectName("well")
+        self._width = size
+        self._height = size if height is None else height
         self._size = size
-        self.setFixedSize(size, size)
+        self.setFixedSize(self._width, self._height)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.label = QLabel("", self)
@@ -375,12 +377,23 @@ class IconWell(QFrame):
         self.label.setObjectName("wellMark")
         layout.addWidget(self.label)
 
+    def set_box(self, width: int, height: int | None = None) -> None:
+        """Resize the well. Heroes are landscape; icons stay square."""
+        self._width = width
+        self._height = width if height is None else height
+        self._size = width
+        self.setFixedSize(self._width, self._height)
+
+    def _inner(self) -> tuple[int, int]:
+        return max(1, self._width - 12), max(1, self._height - 12)
+
     def show_placeholder(self, text: str = "○") -> None:
         self.label.setPixmap(QPixmap())
         self.label.setText(text)
 
     def show_path(self, path, placeholder: str = "○") -> None:
-        pixmap = (images.load(self._size - 12, path=path,
+        inner_w, inner_h = self._inner()
+        pixmap = (images.load(inner_w, path=path, height=inner_h,
                               ratio=self.devicePixelRatioF())
                   if path else None)
         if pixmap is None:
@@ -390,7 +403,8 @@ class IconWell(QFrame):
         self.label.setPixmap(pixmap)
 
     def show_data(self, data: bytes, *, ratio: float | None = None) -> None:
-        pixmap = images.load(self._size - 12, data=data,
+        inner_w, inner_h = self._inner()
+        pixmap = images.load(inner_w, data=data, height=inner_h,
                              ratio=(self.devicePixelRatioF()
                                     if ratio is None else ratio))
         if pixmap is None:
@@ -628,17 +642,21 @@ class EntryRow(QFrame):
 
 
 class ArtworkTile(QFrame):
-    """One candidate icon. Image first, almost no chrome."""
+    """One candidate icon or landscape hero. Image first, almost no chrome."""
 
     WIDTH = Q.TILE + 20
     HEIGHT = Q.TILE + 38
+    HERO_WIDTH = Q.HERO_TILE + 20
+    HERO_HEIGHT = Q.HERO_TILE_H + 38
 
     picked = Signal(object)
 
-    def __init__(self, art, parent=None, *, origin: str = ""):
+    def __init__(self, art, parent=None, *, origin: str = "",
+                 landscape: bool = False):
         super().__init__(parent)
         self.art = art
         self.origin = origin
+        self.landscape = landscape
         self._chosen = False
         # The bytes this tile was drawn from. Held so that choosing the tile
         # does not ask the artwork source for them a second time, and so a
@@ -646,13 +664,18 @@ class ArtworkTile(QFrame):
         self.preview_data: bytes | None = None
         self.setObjectName("tile")
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedSize(self.WIDTH, self.HEIGHT)
+        width = self.HERO_WIDTH if landscape else self.WIDTH
+        height = self.HERO_HEIGHT if landscape else self.HEIGHT
+        self.setFixedSize(width, height)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(T.S2, T.S2, T.S2, T.S1)
         layout.setSpacing(T.S2)
 
-        self.well = IconWell(Q.TILE, self)
+        if landscape:
+            self.well = IconWell(Q.HERO_TILE, self, height=Q.HERO_TILE_H)
+        else:
+            self.well = IconWell(Q.TILE, self)
         self.well.show_placeholder("")
         layout.addWidget(self.well, 0, Qt.AlignHCenter)
 
@@ -661,7 +684,7 @@ class ArtworkTile(QFrame):
         # tooltip: "HighContrast · Icon themes" does not fit a 136px tile and
         # was being clipped to "ighContrast · Icon the."
         style = art.label or ("official" if art.official else "")
-        noun = {"logo": "logo", "grid": "cover"}.get(art.kind, "")
+        noun = {"logo": "logo", "grid": "cover", "hero": "hero"}.get(art.kind, "")
         detail = " · ".join(p for p in (style, noun, art.dimensions) if p)
         self.caption = QLabel(self)
         self.caption.setObjectName("meta")
@@ -669,7 +692,7 @@ class ArtworkTile(QFrame):
         shown = origin or style or art.dimensions or " "
         metrics = QFontMetrics(self.caption.font())
         self.caption.setText(metrics.elidedText(shown, Qt.ElideRight,
-                                                self.WIDTH - T.S4))
+                                                width - T.S4))
         self.caption.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.caption)
 

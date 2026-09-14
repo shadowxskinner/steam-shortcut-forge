@@ -73,6 +73,39 @@ def _rank(art: Artwork):
     return (edge >= SHARP_MIN_EDGE, art.kind == "icon", edge, art.score)
 
 
+def _is_landscape(width: int, height: int) -> bool:
+    """Heroes are a wide banner. Square and portrait do not fit that slot.
+
+    Unknown dimensions are kept so the user can judge them in the browser,
+    the same way a grid of unknown size is still offered as an icon.
+    """
+    if not width or not height:
+        return True
+    return width > height
+
+
+def _rank_hero(art: Artwork):
+    """Sharp, high-resolution first; official/style and votes break ties.
+
+    Deterministic: equal candidates keep a stable order from style then id,
+    so the automatic proposal does not flicker between otherwise identical
+    assets when the same page is fetched again.
+    """
+    width = art.width or 0
+    height = art.height or 0
+    edge = min(width, height) if width and height else 0
+    area = width * height
+    return (
+        -(1 if edge >= SHARP_MIN_EDGE else 0),
+        -edge,
+        -area,
+        -(1 if art.official else 0),
+        -art.score,
+        (art.label or "").lower(),
+        art.id,
+    )
+
+
 class SteamGridDBSource(ArtworkSource):
     id = SOURCE_ID
     label = "SteamGridDB"
@@ -174,7 +207,7 @@ class SteamGridDBSource(ArtworkSource):
 
     def _assets(self, endpoint: str, game_id: int, kind: str,
                 query: str = "") -> list[Artwork]:
-        cache = paths.cache_dir() / f"{kind}s_{game_id}.json"
+        cache = paths.cache_dir() / f"{endpoint}_{game_id}.json"
         if cache.is_file():
             try:
                 if time.time() - cache.stat().st_mtime < LIST_CACHE_SECONDS:
@@ -252,6 +285,29 @@ class SteamGridDBSource(ArtworkSource):
         sharp = [a for a in assets if _sharp(a)]
         return sharp or assets
 
+    def find_heroes(self, query: ArtQuery) -> list[Artwork]:
+        """Landscape SteamGridDB heroes, ranked, never applied here.
+
+        ``/heroes/game/<id>`` with static and non-NSFW filters. Square and
+        portrait assets are dropped: a banner slot cannot use them. The first
+        result is the automatic proposal; writing it is the Apply Hero action.
+        A network failure is an empty list, never a write.
+        """
+        try:
+            game_id = self._resolve(query)
+        except net.NetworkError:
+            return []
+        if game_id is None:
+            return []
+        try:
+            assets = self._assets("heroes", game_id, "hero")
+        except net.NetworkError:
+            return []
+        assets = [a for a in assets if _is_landscape(a.width, a.height)]
+        assets.sort(key=_rank_hero)
+        sharp = [a for a in assets if _sharp(a)]
+        return sharp or assets
+
     def _resolve(self, query: ArtQuery) -> int | None:
         """The appid mapping when there is one, otherwise a title search."""
         if query.steam_appid:
@@ -304,8 +360,12 @@ class SteamGridDBSource(ArtworkSource):
         return data
 
     def fetch(self, art: Artwork, dest_dir: Path, stem: str) -> Path:
+        """Materialise the remote file as-is. Heroes are not resized."""
         ext = Path(urllib.parse.urlparse(art.locator).path).suffix.lower()
-        if ext not in {".ico", ".png", ".svg", ".xpm"}:
+        allowed = {".ico", ".png", ".svg", ".xpm"}
+        if art.kind == "hero":
+            allowed = allowed | {".jpg", ".jpeg", ".webp"}
+        if ext not in allowed:
             ext = ".png"
         dest = dest_dir / f"{stem}{ext}"
         dest.parent.mkdir(parents=True, exist_ok=True)

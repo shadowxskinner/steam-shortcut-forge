@@ -13,12 +13,21 @@ def test_defaults_when_xdg_is_unset(fake_home):
     assert paths.applications_dir() == fake_home / ".local" / "share" / "applications"
 
 
+def test_icon_store_defaults_under_data(fake_home):
+    assert paths.icon_store() == fake_home / ".local" / "share" / "kairo" / "icons"
+
+
+def test_hero_store_defaults_under_data(fake_home):
+    assert paths.hero_store() == fake_home / ".local" / "share" / "kairo" / "heroes"
+
+
 def test_xdg_data_home_is_honoured(fake_home, monkeypatch, tmp_path):
     """Writing entries where the desktop is not looking makes them silently
     never appear."""
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     assert paths.applications_dir() == tmp_path / "data" / "applications"
     assert paths.icon_store() == tmp_path / "data" / "kairo" / "icons"
+    assert paths.hero_store() == tmp_path / "data" / "kairo" / "heroes"
 
 
 def test_xdg_config_home_is_honoured(fake_home, monkeypatch, tmp_path):

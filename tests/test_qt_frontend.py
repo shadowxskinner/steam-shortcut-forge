@@ -646,14 +646,22 @@ def test_a_disabled_button_never_keeps_its_accent():
         assert "QPushButton#primary:disabled" in Q.stylesheet(preset), preset
 
 
-def test_only_one_primary_action_is_offered_at_a_time():
-    """Apply is the primary action; nothing else competes with it."""
+def test_only_one_primary_action_is_visible_at_a_time():
+    """Apply is the icon primary; Apply Hero is a separate hero primary.
+
+    Both are named primary so the accent attaches, but only the active mode
+    shows its button. Two live primaries on one row would compete.
+    """
     source = (Path(__file__).resolve().parent.parent
               / "kairo" / "qt" / "library.py").read_text()
     primaries = [line.strip() for line in source.splitlines()
                  if 'setObjectName("primary")' in line]
-    assert len(primaries) == 1, primaries
-    assert "apply_btn" in primaries[0]
+    assert len(primaries) == 2, primaries
+    joined = "\n".join(primaries)
+    assert "apply_btn" in joined and "apply_hero_btn" in joined
+    sync = source.split("def _sync_kind_chrome")[1].split("\n    def ")[0]
+    assert "apply_btn.setVisible(not hero)" in sync or "button.setVisible(not hero)" in sync
+    assert "apply_hero_btn.setVisible(hero)" in sync
 
 
 def test_a_cleared_widget_is_unparented_before_it_is_deleted():

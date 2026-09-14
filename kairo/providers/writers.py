@@ -16,7 +16,7 @@ from pathlib import Path
 from kairo import paths
 from kairo.desktop import entry as de
 from kairo.models import AppEntry
-from kairo.providers.base import VALID_ICON_EXTS, LauncherWriter
+from kairo.providers.base import VALID_HERO_EXTS, VALID_ICON_EXTS, LauncherWriter
 
 
 def store_icon(entry: AppEntry, icon_src: Path) -> Path:
@@ -44,6 +44,45 @@ def store_icon(entry: AppEntry, icon_src: Path) -> Path:
     dest = store / f"{paths.icon_stem(entry.provider_id, entry.local_id)}_{digest}{suffix}"
     shutil.copyfile(icon_src, dest)
     return dest
+
+
+def store_hero(entry: AppEntry, hero_src: Path) -> Path:
+    """Copy a landscape hero into Kairo's private store and return the copy.
+
+    The downloaded pixels are kept as they arrived. Nothing here resizes for
+    a particular monitor: Gamebar reads the file, and the original is the
+    one worth keeping.
+    """
+    suffix = hero_src.suffix.lower()
+    if suffix not in VALID_HERO_EXTS:
+        raise ValueError(f"Unsupported hero type: {hero_src.suffix}")
+
+    store = paths.hero_store()
+    store.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if hero_src.parent.resolve() == store.resolve():
+            return hero_src.resolve()
+    except OSError:
+        pass
+
+    digest = hashlib.md5(str(hero_src).encode()).hexdigest()[:8]
+    dest = store / f"{paths.icon_stem(entry.provider_id, entry.local_id)}_{digest}{suffix}"
+    shutil.copyfile(hero_src, dest)
+    return dest.resolve()
+
+
+def local_hero_value(path: Path) -> str:
+    """Absolute local path for ``X-KairoHero``. Never a URL."""
+    resolved = path if path.is_absolute() else path.resolve()
+    try:
+        resolved = resolved.resolve()
+    except OSError:
+        resolved = resolved.absolute()
+    value = str(resolved)
+    if not value.startswith("/") or "://" in value:
+        raise ValueError("Hero artwork must be stored as a local file.")
+    return value
 
 
 def has_custom_artwork(path: Path) -> bool:
@@ -75,6 +114,33 @@ def _discard_stored_icon(path: Path | None, keep: Path | None = None) -> None:
             path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def _discard_stored_hero(path: Path | None, keep: Path | None = None) -> None:
+    """Delete a superseded hero, but only if it is one of ours and unused."""
+    if path is None:
+        return
+    try:
+        store = paths.hero_store().resolve()
+        resolved = path.resolve()
+        if keep is not None and resolved == keep.resolve():
+            return
+        if not resolved.is_relative_to(store):
+            return
+        from kairo.housekeeping import is_referenced_hero
+        if is_referenced_hero(resolved):
+            return
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _existing_hero_value(path: Path | None) -> str:
+    """Absolute ``X-KairoHero`` already on a managed launcher, else ""."""
+    if path is None:
+        return ""
+    value = de.read_entry_value(path, de.HERO_KEY).strip()
+    return value if value.startswith("/") and "://" not in value else ""
 
 
 class GeneratedEntryWriter(LauncherWriter):
@@ -145,13 +211,17 @@ class GeneratedEntryWriter(LauncherWriter):
         previous_file = self.existing(entry)
         previous_icon = None
         previous_is_ours = False
+        existing_hero = ""
         if previous_file is not None:
             previous_is_ours = de.is_managed(previous_file)
             if previous_is_ours:
                 value = de.read_entry_icon(previous_file)
                 previous_icon = Path(value) if value else None
+                existing_hero = _existing_hero_value(previous_file)
 
         fields = self.build_fields(entry, stored)
+        if existing_hero:
+            fields[de.HERO_KEY] = existing_hero
         de.atomic_write_text(target, de.build_entry(fields))
 
         # An entry we wrote under a legacy prefix would otherwise linger and
@@ -224,10 +294,61 @@ class GeneratedEntryWriter(LauncherWriter):
             raise ValueError(reason)
 
         icon = de.read_entry_icon(target)
+        hero = _existing_hero_value(target)
         target.unlink(missing_ok=True)
         _discard_stored_icon(Path(icon) if icon.startswith("/") else None)
+        _discard_stored_hero(Path(hero) if hero else None)
         entry.customized = False
         entry.current_icon = None
+
+    def _write_hero(self, target: Path, stored: Path, text: str) -> Path:
+        previous = _existing_hero_value(target) if target.is_file() else ""
+        value = local_hero_value(stored)
+        rewritten = de.set_entry_values(text, {de.HERO_KEY: value})
+        de.atomic_write_text(target, rewritten)
+        _discard_stored_hero(Path(previous) if previous else None, keep=stored)
+        return stored
+
+    def apply_hero(self, entry: AppEntry, hero_src: Path) -> Path:
+        """Write ``X-KairoHero`` on a launcher Kairo owns. Preserve ``Icon=``."""
+        target = self.target(entry)
+        existing = self.existing(entry)
+
+        if existing is not None and not de.is_managed(existing):
+            raise ValueError(
+                "There is already a launcher entry with this name that Kairo "
+                "did not create. Remove or rename it first.")
+
+        stored = store_hero(entry, hero_src)
+
+        if existing is not None:
+            text = de.read_text_exact(existing)
+            return self._write_hero(existing, stored, text)
+
+        paths.applications_dir().mkdir(parents=True, exist_ok=True)
+        fields = self.build_fields(entry, Path(self.default_icon))
+        fields["Icon"] = self.default_icon
+        fields[de.HERO_KEY] = local_hero_value(stored)
+        de.atomic_write_text(target, de.build_entry(fields))
+        return stored
+
+    def can_remove_hero(self, entry: AppEntry) -> tuple[bool, str]:
+        target, reason = self._owned(entry)
+        if target is None:
+            return False, reason
+        if not _existing_hero_value(target):
+            return False, "This shortcut has no hero artwork to remove."
+        return True, ""
+
+    def remove_hero(self, entry: AppEntry) -> None:
+        """Drop only the hero. The shortcut and ``Icon=`` stay."""
+        target, reason = self._owned(entry)
+        if target is None:
+            raise ValueError(reason)
+        text = de.read_text_exact(target)
+        previous = _existing_hero_value(target)
+        de.atomic_write_text(target, de.remove_entry_keys(text, de.HERO_KEY))
+        _discard_stored_hero(Path(previous) if previous else None)
 
 
 class OverrideWriter(LauncherWriter):
@@ -325,9 +446,11 @@ class OverrideWriter(LauncherWriter):
         value = de.read_entry_icon(target)
         if value:
             previous_icon = Path(value)
+        previous_hero = _existing_hero_value(target)
 
         target.unlink()
         _discard_stored_icon(previous_icon)
+        _discard_stored_hero(Path(previous_hero) if previous_hero else None)
 
         entry.customized = False
         source = self.source(entry)
@@ -336,3 +459,58 @@ class OverrideWriter(LauncherWriter):
             from kairo.desktop.lookup import resolve_icon
             entry.icon_hint = de.read_entry_icon(source)
             entry.current_icon = resolve_icon(entry.icon_hint)
+
+    def apply_hero(self, entry: AppEntry, hero_src: Path) -> Path:
+        """Add a hero to a user-level override. Never edit the vendor file."""
+        source = self.source(entry)
+        if source is None or not source.is_file():
+            raise ValueError("Missing source .desktop file")
+
+        target = self.target(entry)
+        if target.parent.resolve() != paths.applications_dir().resolve():
+            raise ValueError(
+                "Overrides must be written under ~/.local/share/applications")
+        if target.exists() and not de.is_managed(target):
+            raise ValueError(
+                "Refusing to overwrite a .desktop file this application "
+                "did not create.")
+
+        stored = store_hero(entry, hero_src)
+        read_from = target if (target.exists() and de.is_managed(target)) else source
+        text = de.read_text_exact(read_from)
+        original = de.entry_value_from_text(text, de.ORIGINAL_ICON_KEYS)
+        if not original:
+            original = de.read_entry_icon(source)
+        previous = _existing_hero_value(target) if target.exists() else ""
+        rewritten = de.set_entry_values(text, {
+            de.MANAGED_KEYS[0]: "true",
+            de.ORIGINAL_ICON_KEYS[0]: original,
+            de.HERO_KEY: local_hero_value(stored),
+        })
+        de.atomic_write_text(target, rewritten)
+        _discard_stored_hero(Path(previous) if previous else None, keep=stored)
+        entry.payload["local"] = str(target)
+        return stored
+
+    def can_remove_hero(self, entry: AppEntry) -> tuple[bool, str]:
+        target = self.target(entry)
+        if not target.exists():
+            return False, "This application has no hero artwork to remove."
+        if not de.is_managed(target):
+            return False, ("There is a .desktop file for this application in "
+                           "your applications folder that Kairo did not "
+                           "create. Remove it yourself if you want the "
+                           "hero taken off.")
+        if not _existing_hero_value(target):
+            return False, "This application has no hero artwork to remove."
+        return True, ""
+
+    def remove_hero(self, entry: AppEntry) -> None:
+        allowed, reason = self.can_remove_hero(entry)
+        if not allowed:
+            raise ValueError(reason)
+        target = self.target(entry)
+        text = de.read_text_exact(target)
+        previous = _existing_hero_value(target)
+        de.atomic_write_text(target, de.remove_entry_keys(text, de.HERO_KEY))
+        _discard_stored_hero(Path(previous) if previous else None)

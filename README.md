@@ -80,7 +80,9 @@ Kairo changes how your launcher looks. That has to be reversible.
   if the application is updated afterwards.
 - **Desktop integration survives.** `MimeType`, `StartupWMClass`, `Actions`,
   translated names and vendor keys are copied byte for byte. Only `Icon=` in
-  `[Desktop Entry]` changes — never an icon inside a `[Desktop Action]` group.
+  `[Desktop Entry]` and the optional `X-KairoHero` path change — never an icon
+  inside a `[Desktop Action]` group. `X-KairoHero` is a local file path, never
+  a URL, and is not an ownership marker.
 
 ### Changes
 
@@ -147,6 +149,7 @@ so every icon override you made before the rename stays restorable.
 - Config: `~/.config/kairo/config.json`
 - Cache: `~/.config/kairo/cache/` (safe to delete; it rebuilds)
 - Icons: `~/.local/share/kairo/icons/`
+- Heroes: `~/.local/share/kairo/heroes/`
 - Launcher entries: `~/.local/share/applications/`
 
 ## Architecture
@@ -159,7 +162,9 @@ is an added file rather than a rewrite:
   user overrides for existing entries. Those ownership models remain isolated
   behind their writers.
 - **`ArtworkSource`** — where icons come from. SteamGridDB, icon themes,
-  Iconify and local files.
+  Iconify and local files. Steam and configured emulator games can also
+  browse SteamGridDB landscape heroes; those are stored separately and
+  written as `X-KairoHero=/absolute/local/path`.
 
 A dedicated Flatpak or AppImage provider would add richer metadata, not new
 coverage — both are already found by `DesktopEntryProvider`.

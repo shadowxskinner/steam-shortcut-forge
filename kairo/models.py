@@ -73,7 +73,7 @@ class Artwork:
     score: float = 0.0
     locator: str = ""
     mime: str = ""
-    kind: str = ""          # "icon" | "logo" | "" — drives the tile pill
+    kind: str = ""          # "icon" | "logo" | "grid" | "hero" | ""
     official: bool = False
 
     @property

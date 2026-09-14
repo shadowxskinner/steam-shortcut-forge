@@ -286,6 +286,24 @@ def test_set_entry_values_ignores_action_groups():
     assert "Icon=/x.png" in lines(out)
 
 
+def test_remove_entry_keys_drops_only_the_named_key():
+    text = BASIC + "X-KairoHero=/tmp/hero.png\nX-Custom=keep\n"
+    out = de.remove_entry_keys(text, de.HERO_KEY)
+    body = lines(out)
+    assert "X-KairoHero=/tmp/hero.png" not in body
+    assert "Icon=org.kde.dolphin" in body
+    assert "X-Custom=keep" in body
+    assert "MimeType=inode/directory;" in body
+
+
+def test_remove_entry_keys_leaves_action_groups_alone():
+    text = ACTIONS.replace("Icon=firefox\n",
+                           "Icon=firefox\nX-KairoHero=/h.png\n")
+    out = de.remove_entry_keys(text, de.HERO_KEY)
+    assert "X-KairoHero=/h.png" not in lines(out)
+    assert "Icon=firefox-window" in lines(out)
+
+
 # -- Atomic write -----------------------------------------------------------
 
 def test_atomic_write_leaves_no_temp_files(tmp_path):

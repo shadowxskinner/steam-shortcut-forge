@@ -85,6 +85,31 @@ def orphan_icons() -> list[Path]:
     return orphans
 
 
+def referenced_heroes() -> set[Path]:
+    """Every path in the hero store that some launcher entry points at."""
+    referenced: set[Path] = set()
+    applications = paths.applications_dir()
+    if not applications.is_dir():
+        return referenced
+
+    for path in applications.glob("*.desktop"):
+        value = de.read_entry_value(path, de.HERO_KEY)
+        if not value.startswith("/") or "://" in value:
+            continue
+        try:
+            referenced.add(Path(value).resolve())
+        except OSError:
+            continue
+    return referenced
+
+
+def is_referenced_hero(hero: Path) -> bool:
+    try:
+        return hero.resolve() in referenced_heroes()
+    except OSError:
+        return False
+
+
 @dataclass
 class SweepResult:
     removed: int = 0

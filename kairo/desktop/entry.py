@@ -33,6 +33,10 @@ DESKTOP_ENTRY_GROUP = "[Desktop Entry]"
 MANAGED_KEYS: tuple[str, ...] = ("X-Kairo-Managed", "X-ShortcutForge-Managed")
 ORIGINAL_ICON_KEYS: tuple[str, ...] = ("X-Kairo-OriginalIcon",
                                        "X-ShortcutForge-OriginalIcon")
+#: Landscape hero path. Data, not an ownership marker — Gamebar reads it,
+#: and the managed keys above remain the only authority to edit the file.
+#: Heroes did not exist before the rename, so there is no legacy key.
+HERO_KEY = "X-KairoHero"
 
 
 class DesktopEntryError(ValueError):
@@ -295,6 +299,44 @@ def set_entry_values(text: str, values: dict[str, str]) -> str:
 
     if in_entry:
         flush(out)
+
+    return "".join(out)
+
+
+def remove_entry_keys(text: str, keys: tuple[str, ...] | str) -> str:
+    """Drop keys from the first ``[Desktop Entry]`` group, preserving all else.
+
+    Used to take ``X-KairoHero`` off a launcher without touching ``Icon=`` or
+    rewriting the rest of the file. Action groups are left alone.
+    """
+    if isinstance(keys, str):
+        keys = (keys,)
+    wanted = set(keys)
+    lines = text.splitlines(keepends=True)
+
+    if not any(_group_header(ln) == DESKTOP_ENTRY_GROUP for ln in lines):
+        raise DesktopEntryError("no [Desktop Entry] group")
+
+    out: list[str] = []
+    in_entry = False
+    entry_seen = False
+
+    for raw in lines:
+        header = _group_header(raw)
+        if header is not None:
+            if in_entry:
+                in_entry = False
+            if header == DESKTOP_ENTRY_GROUP and not entry_seen:
+                in_entry = True
+                entry_seen = True
+            out.append(raw)
+            continue
+
+        if in_entry:
+            pair = _split_key(raw)
+            if pair is not None and pair[0] in wanted:
+                continue
+        out.append(raw)
 
     return "".join(out)
 

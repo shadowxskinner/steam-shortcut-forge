@@ -145,6 +145,11 @@ WELL_ROW = 44                # icon inside an entry row
 WELL_TITLE = 64              # the current icon, beside the title
 WELL_COMPARE = 64            # current / proposed — deliberately secondary
 TILE = 116                   # artwork tile
+#: SteamGridDB heroes are ~1920x620. The well is that ratio, not a square.
+HERO_TILE = 232
+HERO_TILE_H = 76
+HERO_WELL = 192              # proposed-hero well, still secondary to the grid
+HERO_WELL_H = 62
 
 PAD_PANE = 28                # outer margin of a pane
 PAD_COLUMN = 18              # inside the nav and entry columns

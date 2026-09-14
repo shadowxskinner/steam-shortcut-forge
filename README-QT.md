@@ -42,6 +42,10 @@ diagnostics and preferences, not an editor for KWin.
 - Scan, search and filter Steam, application and emulator libraries.
 - Search artwork from the sources available for the selected entry, including
   SteamGridDB, installed themes, Iconify and local files.
+- For Steam and emulator games, switch the artwork browser between Icon and
+  Hero. Icon is the existing flow. Hero shows landscape SteamGridDB banners,
+  selects the automatic proposal, and applies or removes it through separate
+  actions without changing `Icon=`.
 - Preview a proposal, Apply it through `kairo.actions`, and reset artwork where
   the provider supports that operation.
 - Save the SteamGridDB key and add, edit or remove emulator configurations.
