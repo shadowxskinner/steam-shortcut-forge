@@ -1,8 +1,9 @@
 """Static SteamGridDB landscape heroes as a second artwork type.
 
 Gamebar will read ``X-KairoHero`` later. This suite is the contract: the
-endpoint and filters, landscape ranking, dedicated storage, ownership, and
-the four regressions that must stay red if the implementation slips.
+endpoint and filters, landscape ranking, dedicated storage, ownership, the
+four regressions that must stay red if the implementation slips, and the
+distinction between a downed SteamGridDB and an empty hero catalog.
 """
 
 from pathlib import Path
@@ -398,23 +399,117 @@ def test_a_manual_alternative_is_what_gets_written(steam_entry, png, tmp_path):
     assert Path(de.read_entry_value(target, de.HERO_KEY)).read_bytes() == b"\x89PNG\r\n\x1a\n" + b"B" * 32
 
 
-def test_network_failure_does_not_mutate_the_launcher(steam_entry, png, monkeypatch):
+SECRET_KEY = "secret-key-do-not-leak"
+
+
+def _title_query():
+    return ArtQuery(entry=_entry(), text="metroid prime",
+                    fallback_text="metroid prime gamecube")
+
+
+def _http_error(code: int):
+    import io
+    import urllib.error
+
+    return urllib.error.HTTPError(
+        "https://www.steamgriddb.com/api/v2/x", code, "error",
+        None, io.BytesIO(b""))
+
+
+@pytest.mark.parametrize("query", [
+    ArtQuery(entry=_entry(), steam_appid="440"),
+    ArtQuery(entry=_entry(), text="metroid prime",
+             fallback_text="metroid prime gamecube"),
+], ids=["steam-appid", "title-search"])
+@pytest.mark.parametrize("error, needle", [
+    ("url", "Network error"),
+    (401, "Invalid API key"),
+    (429, "Rate-limited"),
+    (500, "HTTP 500"),
+], ids=["offline", "http-401", "http-429", "http-500"])
+def test_hero_network_errors_are_failures_not_an_empty_catalog(
+        query, error, needle, monkeypatch, fake_home):
+    import urllib.error
+
+    from kairo.artwork import steamgriddb as sgdb
+
+    source = sgdb.SteamGridDBSource(api_key=SECRET_KEY)
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+
+    if error == "url":
+        exc = urllib.error.URLError("timed out")
+    else:
+        exc = _http_error(error)
+
+    def fake_get(url, headers=None, timeout=15):
+        raise exc
+
+    monkeypatch.setattr(sgdb.net, "get", fake_get)
+    with pytest.raises(net.NetworkError) as caught:
+        source.find_heroes(query)
+    message = str(caught.value)
+    assert needle in message
+    assert SECRET_KEY not in message
+    assert "Bearer" not in message
+    store = paths.hero_store()
+    assert not store.exists() or list(store.iterdir()) == []
+
+
+def test_hero_network_failure_does_not_mutate_the_launcher(
+        steam_entry, png, monkeypatch):
     from kairo.artwork import steamgriddb as sgdb
 
     provider = SteamProvider()
     actions.apply_icon(steam_entry, provider, png)
     target = provider.writer().target(steam_entry)
     before = target.read_bytes()
+    icon = de.read_entry_icon(target)
 
-    source = sgdb.SteamGridDBSource(api_key="k")
+    source = sgdb.SteamGridDBSource(api_key=SECRET_KEY)
     monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
     monkeypatch.setattr(source, "_api_get", lambda path: (_ for _ in ()).throw(
         net.NetworkError("down")))
 
-    assert source.find_heroes(ArtQuery(entry=steam_entry, steam_appid="440")) == []
+    with pytest.raises(net.NetworkError, match="down"):
+        source.find_heroes(ArtQuery(entry=steam_entry, steam_appid="440"))
     assert target.read_bytes() == before
-    assert de.read_entry_icon(target)
+    assert de.read_entry_icon(target) == icon
     assert de.HERO_KEY not in target.read_text()
+    store = paths.hero_store()
+    assert not store.exists() or list(store.iterdir()) == []
+
+
+def test_title_search_network_failure_is_not_a_missing_game(monkeypatch):
+    """Icon lookup still swallows this; hero lookup must not."""
+    from kairo.artwork import steamgriddb as sgdb
+
+    source = sgdb.SteamGridDBSource(api_key=SECRET_KEY)
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+    monkeypatch.setattr(source, "_api_get", lambda path: (_ for _ in ()).throw(
+        net.NetworkError("down")))
+    query = _title_query()
+    assert source.find(query) == []
+    with pytest.raises(net.NetworkError, match="down"):
+        source.find_heroes(query)
+
+
+def test_hero_retrieval_failure_is_not_an_empty_catalog(monkeypatch, fake_home):
+    from kairo.artwork import steamgriddb as sgdb
+
+    source = sgdb.SteamGridDBSource(api_key=SECRET_KEY)
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+    monkeypatch.setattr(source, "_api_get", lambda path: (_ for _ in ()).throw(
+        net.NetworkError("down")))
+
+    monkeypatch.setattr(source, "game_id", lambda appid: 7)
+    with pytest.raises(net.NetworkError, match="down"):
+        source.find_heroes(ArtQuery(entry=_entry(), steam_appid="440"))
+
+    monkeypatch.setattr(source, "search_id", lambda term: 4242)
+    with pytest.raises(net.NetworkError, match="down"):
+        source.find_heroes(_title_query())
+    store = paths.hero_store()
+    assert not store.exists() or list(store.iterdir()) == []
 
 
 def test_no_results_does_not_mutate_the_launcher(steam_entry, png, monkeypatch):
@@ -541,6 +636,75 @@ def test_hero_mode_auto_selects_the_proposal_and_fits_landscape(qt_app, fake_hom
     finally:
         pane.close()
         from kairo.qt import work
+        work.drain()
+
+
+def _empty_grid_note(pane) -> str:
+    from PySide6.QtWidgets import QLabel
+
+    notes = []
+    for i in range(pane.grid.count()):
+        item = pane.grid.itemAt(i)
+        widget = item.widget() if item is not None else None
+        if isinstance(widget, QLabel) and widget.objectName() == "empty":
+            notes.append(widget.text())
+    assert notes, "the artwork grid has no status note"
+    return notes[-1]
+
+
+def _hero_pane(qt_app, source):
+    from kairo.artwork.registry import ArtworkRegistry
+    from kairo.ledger import Ledger
+    from kairo.qt.library import LibraryPane
+    from kairo.qt.shell import Context
+    from kairo.tasks import ActivityTokens
+    from tests.conftest import settle
+
+    ctx = Context(providers=None, sources=ArtworkRegistry([source]),
+                  config={"steamgriddb_api_key": SECRET_KEY},
+                  ledger=Ledger().load(), tokens=ActivityTokens())
+    pane = LibraryPane(SteamProvider(), ctx)
+    pane.show()
+    qt_app.processEvents()
+    settle(qt_app)
+    pane.kind_pills.set_value("Hero")
+    qt_app.processEvents()
+    settle(qt_app)
+    return pane
+
+
+def test_hero_failure_message_is_not_the_empty_catalog_message(
+        qt_app, fake_home, steam_library, monkeypatch):
+    from kairo.artwork import steamgriddb as sgdb
+    from kairo.qt import work
+
+    source = sgdb.SteamGridDBSource(api_key=SECRET_KEY)
+    monkeypatch.setattr(sgdb.paths, "cache_dir", lambda: Path("/nonexistent"))
+    monkeypatch.setattr(source, "_api_get", lambda path: (_ for _ in ()).throw(
+        net.NetworkError("Invalid API key - check Settings.")))
+
+    pane = _hero_pane(qt_app, source)
+    try:
+        note = _empty_grid_note(pane)
+        name = pane.selected.entry.name
+        assert "Could not reach SteamGridDB." in note
+        assert f"No landscape heroes for {name}." not in note
+        assert SECRET_KEY not in note
+    finally:
+        pane.close()
+        work.drain()
+
+    monkeypatch.setattr(source, "game_id", lambda appid: 7)
+    monkeypatch.setattr(source, "_api_get", lambda path: {"data": [], "total": 0})
+    pane = _hero_pane(qt_app, source)
+    try:
+        note = _empty_grid_note(pane)
+        name = pane.selected.entry.name
+        assert f"No landscape heroes for {name}." in note
+        assert "Could not reach SteamGridDB." not in note
+        assert SECRET_KEY not in note
+    finally:
+        pane.close()
         work.drain()
 
 

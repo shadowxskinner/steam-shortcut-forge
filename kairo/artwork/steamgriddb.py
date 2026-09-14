@@ -291,25 +291,27 @@ class SteamGridDBSource(ArtworkSource):
         ``/heroes/game/<id>`` with static and non-NSFW filters. Square and
         portrait assets are dropped: a banner slot cannot use them. The first
         result is the automatic proposal; writing it is the Apply Hero action.
-        A network failure is an empty list, never a write.
+        An empty catalog is ``[]``. A network or auth failure raises
+        ``net.NetworkError`` so the UI can tell the two apart. Nothing here
+        writes a launcher or copies a file.
         """
-        try:
-            game_id = self._resolve(query)
-        except net.NetworkError:
-            return []
+        game_id = self._resolve(query, swallow_network=False)
         if game_id is None:
             return []
-        try:
-            assets = self._assets("heroes", game_id, "hero")
-        except net.NetworkError:
-            return []
+        assets = self._assets("heroes", game_id, "hero")
         assets = [a for a in assets if _is_landscape(a.width, a.height)]
         assets.sort(key=_rank_hero)
         sharp = [a for a in assets if _sharp(a)]
         return sharp or assets
 
-    def _resolve(self, query: ArtQuery) -> int | None:
-        """The appid mapping when there is one, otherwise a title search."""
+    def _resolve(self, query: ArtQuery, *, swallow_network: bool = True) -> int | None:
+        """The appid mapping when there is one, otherwise a title search.
+
+        Icon lookup still treats a downed title search as no match, because
+        several sources share that browser and one of them being unreachable
+        is not an empty library. Hero lookup has only SteamGridDB, so it
+        passes ``swallow_network=False`` and lets the failure through.
+        """
         if query.steam_appid:
             return self.game_id(query.steam_appid)
         for term in (query.text, query.fallback_text):
@@ -318,7 +320,9 @@ class SteamGridDBSource(ArtworkSource):
             try:
                 found = self.search_id(term)
             except net.NetworkError:
-                return None
+                if swallow_network:
+                    return None
+                raise
             if found is not None:
                 return found
         return None
